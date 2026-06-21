@@ -21,6 +21,7 @@ const NAV = [
   { href: '/admin/dashboard/catalog',  label: 'Plex Catalog',    icon: '🎞️' },
   { href: '/admin/dashboard/shows',    label: 'Show Progress',   icon: '🎬' },
   { href: '/admin/dashboard/vhs',      label: 'VHS / CRT Effects', icon: '📼' },
+  { href: '/admin/dashboard/security', label: 'Admin Security',  icon: '🔑' },
   { href: '/admin/dashboard/audit',    label: 'Audit Log',       icon: '📋' },
 ]
 
