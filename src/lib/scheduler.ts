@@ -1636,11 +1636,3 @@ export function startScheduler(): void {
   // Then every 6 hours
   schedulerTimer = setInterval(run, 6 * 60 * 60 * 1000)
 }
-
-export function stopScheduler(): void {
-  if (schedulerTimer) {
-    clearInterval(schedulerTimer)
-    schedulerTimer = null
-    console.log('[Scheduler] Auto-scheduler stopped.')
-  }
-}

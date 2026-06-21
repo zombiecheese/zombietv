@@ -10,14 +10,13 @@
 //
 // Pattern: this is a "headless" sync component that lives in the layout tree.
 
-import { createContext, useContext, useState, useEffect } from 'react'
+import { createContext, useState, useEffect } from 'react'
 import { DEFAULT_VHS_SETTINGS, type VHSSettings } from '@/lib/vhs-defaults'
 import VHSOverlay from './VHSOverlay'
 
 // ─── Context ─────────────────────────────────────────────────────────────────
 
 export const VHSContext = createContext<VHSSettings>(DEFAULT_VHS_SETTINGS)
-export const useVHSContext = () => useContext(VHSContext)
 
 // ─── Sync component ──────────────────────────────────────────────────────────
 

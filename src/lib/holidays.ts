@@ -181,26 +181,6 @@ export function getHolidayForDate(date: Date, settings: HolidaySetting[] = DEFAU
   return null
 }
 
-/** Returns the Easter Sunday date for a given year. */
-export function getEasterDate(year: number): Date {
-  return calculateEaster(year)
-}
-
-/** Returns all holidays in a given year as { date, name } pairs. */
-export function getHolidaysForYear(year: number, settings: HolidaySetting[] = DEFAULT_HOLIDAY_SETTINGS): Array<{ date: Date; name: string }> {
-  const easter    = calculateEaster(year)
-  const goodFriday = new Date(easter)
-  goodFriday.setDate(easter.getDate() - 2)
-
-  return settings
-    .filter((holiday) => holiday.enabled)
-    .map((holiday) => {
-      if (holiday.name === 'good_friday') return { date: goodFriday, name: holiday.name }
-      if (holiday.name === 'easter') return { date: easter, name: holiday.name }
-      return { date: new Date(year, holiday.startMonth - 1, holiday.startDay), name: holiday.name }
-    })
-}
-
 // ─── Private ─────────────────────────────────────────────────────────────────
 
 function isSameDay(a: Date, b: Date): boolean {
