@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireAdmin } from '@/lib/admin-guard'
-import { ensureSqlitePragmas, prisma } from '@/lib/db'
+import { ensureDatabaseReady, prisma } from '@/lib/db'
 import { fromJsonObject } from '@/lib/json'
 import { getCatalogStatus, isCatalogSyncRunning, triggerCatalogSync } from '@/lib/plex-catalog'
 import { PlexClient } from '@/lib/plex-client'
@@ -8,7 +8,7 @@ import { PlexClient } from '@/lib/plex-client'
 export const dynamic = 'force-dynamic'
 
 export async function GET(req: NextRequest) {
-  await ensureSqlitePragmas()
+  await ensureDatabaseReady()
   const guard = await requireAdmin(req)
   if (!guard.ok) return guard.response
 
@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  await ensureSqlitePragmas()
+  await ensureDatabaseReady()
   const guard = await requireAdmin(req)
   if (!guard.ok) return guard.response
 

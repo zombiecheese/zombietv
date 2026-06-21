@@ -1,6 +1,7 @@
 // Database Schema for Zombie TV - 1990s Australian Broadcast Simulator
-// SQLite via Prisma. Note: SQLite does not support native arrays;
-// comma-separated strings are used for genres/ratings and parsed at the app layer.
+// PostgreSQL via Prisma.
+// Some structured fields are still stored as JSON-encoded strings to avoid
+// widening the migration scope during the database engine transition.
 
 generator client {
   provider      = "prisma-client-js"
@@ -10,7 +11,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -99,7 +100,7 @@ model MediaItem {
   year           Int
   durationMins   Int
 
-  // Stored as comma-separated strings (SQLite has no array type)
+  // Stored as comma-separated strings and parsed at the app layer.
   genres         String   // e.g. "horror,comedy"
   languages      String?  // e.g. "english,japanese"
   ratings        String   // e.g. "PG"
@@ -118,6 +119,12 @@ model MediaItem {
   createdAt      DateTime @default(now())
 
   slots          SlotMediaItem[]
+
+  @@index([type])
+  @@index([ratings])
+  @@index([durationMins])
+  @@index([year])
+  @@index([showTitle, seasonNumber, episodeNumber])
 }
 
 // Join table: which media items are used in a slot (supports multi-part blocks)

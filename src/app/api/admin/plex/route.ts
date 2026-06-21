@@ -4,7 +4,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createHmac } from 'crypto'
 import { requireAdmin } from '@/lib/admin-guard'
-import { ensureSqlitePragmas, prisma } from '@/lib/db'
+import { ensureDatabaseReady, prisma } from '@/lib/db'
 import { fromJsonObject } from '@/lib/json'
 import {
   getCatalogAutoSyncMaxAgeHours,
@@ -29,7 +29,7 @@ function sessionSecret() {
 }
 
 export async function GET(req: NextRequest) {
-  await ensureSqlitePragmas()
+  await ensureDatabaseReady()
   const guard = await requireAdmin(req)
   if (!guard.ok) return guard.response
 
@@ -77,7 +77,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  await ensureSqlitePragmas()
+  await ensureDatabaseReady()
   const guard = await requireAdmin(req)
   if (!guard.ok) return guard.response
 

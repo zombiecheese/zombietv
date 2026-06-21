@@ -8,7 +8,7 @@ Complacency is earned
 ## What It Does
 
 - Simulates multi-station linear TV where all viewers share one server-authoritative timeline.
-- Schedules content in rolling 14-day windows with station-specific rules.
+- Schedules content in rolling windows with station-specific rules.
 - Streams Plex content through a local proxy and injects ad/filler segments from YouTube.
 - Provides an admin portal for schedule, station rules, events, catalog, security, and visual effects.
 
@@ -17,7 +17,7 @@ Complacency is earned
 | Layer | Choice |
 |---|---|
 | App | Next.js 14 (App Router, TypeScript, React 18) |
-| Database | SQLite via Prisma |
+| Database | PostgreSQL via Prisma |
 | Viewer auth | Plex OAuth |
 | Admin auth | Email/password login (bcrypt hash in admin user preferences) |
 | Media | Plex for primary programming, YouTube for filler/ad content |
@@ -42,9 +42,12 @@ npm install
 Create `.env` in the repo root:
 
 ```env
-DATABASE_URL="file:./prisma/dev.db"
+DATABASE_URL="postgresql://zombietv:zombietv_dev_password@localhost:5432/zombietv?schema=public"
 SESSION_SECRET="replace-with-a-random-32+-char-secret"
 PLEX_CLIENT_ID="your-plex-client-id"
+POSTGRES_DB="zombietv"
+POSTGRES_USER="zombietv"
+POSTGRES_PASSWORD="zombietv_dev_password"
 ```
 
 ### 3. Initialize database
@@ -77,7 +80,7 @@ npm run dev
 docker compose up --build
 ```
 
-Container startup runs schema push and seed against `/data/dev.db` when needed.
+Docker compose starts both PostgreSQL and the app. Container startup runs `prisma db push`, then the idempotent seed script, then starts the app.
 
 ## Authentication Model
 
@@ -102,7 +105,8 @@ Container startup runs schema push and seed against `/data/dev.db` when needed.
 
 ## Scheduling and Playback Behavior
 
-- 14-day rolling schedule generation with periodic extension.
+- Default 7-day rolling schedule generation with periodic extension.
+- Scheduler horizon and auto-run interval are configurable from the Overview page.
 - Hour/half-hour alignment remains enforced.
 - Per-slot station rules include:
     - filler-only windows
@@ -132,7 +136,7 @@ Settings persisted in `AdminPreference` and polled by clients include:
 
 - Station and filler behavior is DB-driven at runtime.
 - `config/stations.json` and `config/youtube-fillers.json` are legacy seed/reference artifacts, not runtime source of truth.
-- SQLite pragmas (`busy_timeout`, `WAL`, `synchronous=NORMAL`) are initialized in the Prisma layer for lock resilience.
+- PostgreSQL is now the primary runtime database to support better concurrency for admin operations and catalog sync.
 
 ## Project Layout
 

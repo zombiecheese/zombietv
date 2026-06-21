@@ -41,4 +41,4 @@ RUN npx prisma generate
 
 EXPOSE 3000
 
-CMD ["sh", "-c", "set -e; if [ ! -f /data/dev.db ]; then npx prisma db push && node scripts/init-db.js; else npx prisma db push; fi; npm run start"]
+CMD ["sh", "-c", "set -e; npx prisma db push; node scripts/init-db.js; npm run start"]

@@ -49,16 +49,6 @@ function classGuidanceScore(classification: LibraryClass | undefined, type: 'mov
   }
 }
 
-const SQLITE_MEDIAITEM_TABLE = '"MediaItem"'
-
-const INDEX_STATEMENTS = [
-  `CREATE INDEX IF NOT EXISTS idx_mediaitem_type ON ${SQLITE_MEDIAITEM_TABLE} (type)`,
-  `CREATE INDEX IF NOT EXISTS idx_mediaitem_ratings ON ${SQLITE_MEDIAITEM_TABLE} (ratings)`,
-  `CREATE INDEX IF NOT EXISTS idx_mediaitem_duration ON ${SQLITE_MEDIAITEM_TABLE} (durationMins)`,
-  `CREATE INDEX IF NOT EXISTS idx_mediaitem_year ON ${SQLITE_MEDIAITEM_TABLE} (year)`,
-  `CREATE INDEX IF NOT EXISTS idx_mediaitem_show_slot ON ${SQLITE_MEDIAITEM_TABLE} (showTitle, seasonNumber, episodeNumber)`,
-]
-
 export interface CatalogSyncSummary {
   movies: number
   shows: number
@@ -115,9 +105,7 @@ async function saveSyncProgress(progress: CatalogSyncProgress): Promise<void> {
 }
 
 export async function ensureMediaCatalogIndexes(): Promise<void> {
-  for (const stmt of INDEX_STATEMENTS) {
-    await prisma.$executeRawUnsafe(stmt)
-  }
+  // Prisma-managed indexes are declared in schema.prisma.
 }
 
 async function saveCatalogSyncState(summary: CatalogSyncSummary): Promise<void> {

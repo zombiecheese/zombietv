@@ -17,7 +17,7 @@ Simulate a shared, always-on 1990s-style TV broadcast where:
 ### Core Runtime
 
 - Next.js App Router app with API routes for auth, schedule, playback, and admin operations.
-- SQLite with Prisma for all runtime state.
+- PostgreSQL with Prisma for all runtime state.
 - Rolling schedule generation and server-authoritative playback model.
 
 ### Auth Model
@@ -38,7 +38,7 @@ Simulate a shared, always-on 1990s-style TV broadcast where:
 
 ### Scheduling
 
-- 14-day rolling schedule generation and extension.
+- Default 7-day rolling schedule generation and extension (admin-configurable).
 - DB-backed weekday/weekend slot config with per-slot controls:
   - enable/disable
   - filler-only mode
@@ -103,14 +103,14 @@ Simulate a shared, always-on 1990s-style TV broadcast where:
 
 ## 6. Constraints and Risks
 
-- SQLite write contention still requires careful route behavior under heavy admin operations.
+- PostgreSQL runtime still requires query/index monitoring during large catalog sync operations.
 - Complex schedule precedence (event/holiday/slot rules) needs strong automated regression tests.
 - Real Plex and YouTube variability can impact deterministic manual testing.
 - [x] Episode pacing (7-day throttle per show)
 - [x] Holiday-tagged content exclusion (only scheduled on matching holiday)
 - [x] YouTube background audio fix (iframe unmounted on station switch)
 - [x] Environment config (`.env` for DATABASE_URL, Plex client ID, session secret)
-- [x] Docker compose setup (multi-container, named volume for SQLite)
+- [x] Docker compose setup (multi-container with PostgreSQL service)
 - [ ] Australian rating board image assets (placeholder text only currently)
 - [ ] Station idents/bumpers between programs
 - [ ] Mobile-responsive EPG
@@ -120,7 +120,7 @@ Simulate a shared, always-on 1990s-style TV broadcast where:
 
 ## 📝 Notes
 
-- **SQLite arrays:** SQLite has no native array type. Genres and ratings are stored as comma-separated strings and split at the application layer.
+- **Storage format:** Genres and ratings remain stored as comma-separated strings in current JSON/application-layer handling.
 - **Plex stream auth:** All Plex video URLs require the user's Plex token. The player must attach `?X-Plex-Token=` to every stream request.
 - **YouTube filler ordering (ZBC Sunday):** Rage opener (`Lzk0sygecu4`) → random from `PLVWLfb1wlwNRF3Y33ygrsdXDcq7osC1Uv` → Rage closer (`wx7-Hr-iVJ4`) → one episode of Monkey.
 - **ZBC music cutoff:** Music video blocks on ZBC must not include content released after 2005.

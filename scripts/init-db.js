@@ -151,8 +151,8 @@ async function main() {
   ]
 
   for (const h of holidays) {
-    // Prisma does not support null in compound-unique where clauses (SQLite limitation).
-    // Use findFirst + create instead of upsert.
+    // Prisma does not support null in compound-unique where clauses in this path,
+    // so we use findFirst + create instead of upsert.
     const existing = await prisma.holidayOverride.findFirst({
       where: { holidayName: h.name, year: currentYear, stationId: null }
     })
@@ -178,19 +178,21 @@ async function main() {
   const bcrypt = require('bcryptjs')
   const hash = await bcrypt.hash('admin123', 10)
 
-  await prisma.user.upsert({
-    where: { email: 'admin@zombietv.com' },
-    update: {
-      // Re-hash on every seed run so a fresh dev environment always has a known password.
-      preferences: JSON.stringify({ passwordHash: hash, vhs_intensity: 0.5, noise_intensity: 0.3, crt_curvature: 0.4 }),
-    },
-    create: {
-      email: 'admin@zombietv.com',
-      isAdmin: true,
-      // passwordHash is stored inside preferences (SQLite has no dedicated column).
-      preferences: JSON.stringify({ passwordHash: hash, vhs_intensity: 0.5, noise_intensity: 0.3, crt_curvature: 0.4 }),
-    }
-  })
+  const existingAdmin = await prisma.user.findUnique({ where: { email: 'admin@zombietv.com' } })
+  if (existingAdmin) {
+    await prisma.user.update({
+      where: { id: existingAdmin.id },
+      data: { isAdmin: true },
+    })
+  } else {
+    await prisma.user.create({
+      data: {
+        email: 'admin@zombietv.com',
+        isAdmin: true,
+        preferences: JSON.stringify({ passwordHash: hash, vhs_intensity: 0.5, noise_intensity: 0.3, crt_curvature: 0.4 }),
+      },
+    })
+  }
 
   console.log('✅ Admin user seeded')
 

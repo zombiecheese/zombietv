@@ -1,6 +1,6 @@
-// SQLite JSON helpers
-// Prisma + SQLite cannot use the Json field type, so all structured data is
-// stored as serialised JSON strings. These helpers make that transparent.
+// JSON string helpers
+// This codebase still stores several structured values as serialised JSON
+// strings. These helpers keep parsing and serialisation consistent.
 
 /** Serialise any value to a JSON string for DB storage. */
 export function toJson(value: unknown): string {

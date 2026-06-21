@@ -13,6 +13,7 @@ Last reset: 2026-06-22 after major scheduler/playback/admin changes.
 ## 1. Environment and Startup
 
 - [ ] 1.1 `.env` values required for startup are present and loaded (`DATABASE_URL`, `SESSION_SECRET`, `PLEX_CLIENT_ID`)
+- [ ] 1.1a Local PostgreSQL connection is reachable with configured `DATABASE_URL`
 - [ ] 1.2 `npx prisma db push` runs cleanly
 - [ ] 1.3 `node scripts/init-db.js` seeds stations, holidays, and admin user
 - [ ] 1.4 App starts in dev mode without runtime init errors
@@ -41,7 +42,7 @@ Last reset: 2026-06-22 after major scheduler/playback/admin changes.
 
 ## 5. Scheduling Engine
 
-- [ ] 5.1 `POST /api/scheduler/run` creates/extends a 14-day window
+- [ ] 5.1 `POST /api/scheduler/run` creates/extends the configured horizon window (default 7 days)
 - [ ] 5.2 Weekday/weekend slot config from Station Rules is honored
 - [ ] 5.3 Per-slot `fillerOnly` behavior works as expected
 - [ ] 5.4 Per-slot `libraryWeights` influence selection pool
@@ -96,6 +97,6 @@ Last reset: 2026-06-22 after major scheduler/playback/admin changes.
 
 ## 12. Known Open Risks
 
-- [ ] 12.1 SQLite contention under heavy concurrent admin operations
+- [ ] 12.1 PostgreSQL operational tuning under heavy concurrent admin/catalog operations
 - [ ] 12.2 Scheduler regressions around complex precedence combinations
 - [ ] 12.3 Responsive behavior on narrow/mobile layouts

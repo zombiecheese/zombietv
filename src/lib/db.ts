@@ -5,35 +5,28 @@
 import { PrismaClient } from '@prisma/client'
 
 const globalForPrisma = globalThis as unknown as { prisma: PrismaClient }
-const SQLITE_BUSY_TIMEOUT_MS = 15_000
 
 export const prisma: PrismaClient =
   globalForPrisma.prisma ?? new PrismaClient({ log: ['warn', 'error'] })
 
-let sqliteInitPromise: Promise<void> | null = null
+let dbInitPromise: Promise<void> | null = null
 
-export async function ensureSqlitePragmas(): Promise<void> {
-  if (!String(process.env.DATABASE_URL ?? '').toLowerCase().startsWith('file:')) {
-    return
-  }
-  if (sqliteInitPromise) return sqliteInitPromise
+export async function ensureDatabaseReady(): Promise<void> {
+  if (dbInitPromise) return dbInitPromise
 
-  sqliteInitPromise = (async () => {
+  dbInitPromise = (async () => {
     await prisma.$connect()
-    await prisma.$queryRawUnsafe(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`)
-    await prisma.$queryRawUnsafe('PRAGMA journal_mode = WAL')
-    await prisma.$queryRawUnsafe('PRAGMA synchronous = NORMAL')
   })().catch((err) => {
-    sqliteInitPromise = null
+    dbInitPromise = null
     throw err
   })
 
-  return sqliteInitPromise
+  return dbInitPromise
 }
 
-// Initialize lock-friendly SQLite pragmas as early as possible.
-void ensureSqlitePragmas().catch((err) => {
-  console.error('[DB] Failed to initialize SQLite pragmas:', err)
+// Initialize the database connection as early as possible.
+void ensureDatabaseReady().catch((err) => {
+  console.error('[DB] Failed to initialize database connection:', err)
 })
 
 if (process.env.NODE_ENV !== 'production') {

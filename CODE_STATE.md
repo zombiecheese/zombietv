@@ -7,7 +7,7 @@ This file is a concise implementation snapshot for active development.
 ## Runtime Overview
 
 - Next.js 14 App Router project with API routes and client admin pages.
-- SQLite + Prisma storage.
+- PostgreSQL + Prisma storage.
 - Viewer authentication through Plex OAuth.
 - Admin authentication through email/password (bcrypt hash stored in admin user preferences).
 - Shared server-authoritative playback clock and timeline.
@@ -38,7 +38,8 @@ This file is a concise implementation snapshot for active development.
 
 ### Scheduler
 
-- 14-day rolling generation with periodic extension.
+- Default 7-day rolling generation with periodic extension.
+- Scheduler horizon days and auto-run interval hours are configurable from admin overview.
 - Scheduler reads station slot configuration (weekday/weekend) from DB rules.
 - Per-slot controls currently implemented:
 	- `fillerOnly`
@@ -86,8 +87,8 @@ This file is a concise implementation snapshot for active development.
 
 ## Operational Notes
 
-- SQLite pragmas (`busy_timeout`, `journal_mode=WAL`, `synchronous=NORMAL`) are initialized in `src/lib/db.ts`.
-- Recent lock-timeout hardening expects routes performing heavier admin writes to call pragma initialization early.
+- Database initialization in `src/lib/db.ts` establishes the Prisma connection early for stable startup behavior.
+- PostgreSQL is the intended runtime database for concurrent admin operations and catalog sync.
 - If behavior appears stale after major API changes, clear build artifacts and restart the server process.
 
 ## Known Gaps
