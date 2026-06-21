@@ -47,11 +47,13 @@ export default function VHSOverlay({ settings }: Props) {
 
   useEffect(() => {
     if (noise <= 0) return
-    const canvasEl = canvasRef.current
-    if (!canvasEl) return
+    const canvasRefValue = canvasRef.current
+    if (!canvasRefValue) return
+    const canvasEl: HTMLCanvasElement = canvasRefValue
 
-    const ctx = canvasEl.getContext('2d', { alpha: true, willReadFrequently: false })
-    if (!ctx) return
+    const ctxRefValue = canvasEl.getContext('2d', { alpha: true, willReadFrequently: false })
+    if (!ctxRefValue) return
+    const ctx: CanvasRenderingContext2D = ctxRefValue
 
     function resize() {
       canvasEl.width = Math.max(1, Math.floor(window.innerWidth / 3))
