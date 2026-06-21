@@ -20,9 +20,9 @@ export async function ensureSqlitePragmas(): Promise<void> {
 
   sqliteInitPromise = (async () => {
     await prisma.$connect()
-    await prisma.$executeRawUnsafe(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`)
-    await prisma.$executeRawUnsafe('PRAGMA journal_mode = WAL')
-    await prisma.$executeRawUnsafe('PRAGMA synchronous = NORMAL')
+    await prisma.$queryRawUnsafe(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`)
+    await prisma.$queryRawUnsafe('PRAGMA journal_mode = WAL')
+    await prisma.$queryRawUnsafe('PRAGMA synchronous = NORMAL')
   })().catch((err) => {
     sqliteInitPromise = null
     throw err
