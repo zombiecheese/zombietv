@@ -47,20 +47,20 @@ export default function VHSOverlay({ settings }: Props) {
 
   useEffect(() => {
     if (noise <= 0) return
-    const canvas = canvasRef.current
-    if (!canvas) return
+    const canvasEl = canvasRef.current
+    if (!canvasEl) return
 
-    const ctx = canvas.getContext('2d', { alpha: true, willReadFrequently: false })
+    const ctx = canvasEl.getContext('2d', { alpha: true, willReadFrequently: false })
     if (!ctx) return
 
     function resize() {
-      canvas.width = Math.max(1, Math.floor(window.innerWidth / 3))
-      canvas.height = Math.max(1, Math.floor(window.innerHeight / 3))
+      canvasEl.width = Math.max(1, Math.floor(window.innerWidth / 3))
+      canvasEl.height = Math.max(1, Math.floor(window.innerHeight / 3))
     }
 
     function drawNoise() {
-      const w = canvas.width
-      const h = canvas.height
+      const w = canvasEl.width
+      const h = canvasEl.height
       const imageData = ctx.createImageData(w, h)
       const d = imageData.data
       const alpha = Math.floor(noise * 24)
@@ -84,7 +84,7 @@ export default function VHSOverlay({ settings }: Props) {
     return () => {
       clearInterval(timer)
       window.removeEventListener('resize', resize)
-      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.clearRect(0, 0, canvasEl.width, canvasEl.height)
     }
   }, [noise])
 
