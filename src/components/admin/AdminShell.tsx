@@ -13,13 +13,13 @@ import { usePathname, useRouter } from 'next/navigation'
 
 const NAV = [
   { href: '/admin/dashboard',          label: 'Overview',        icon: '📊' },
-  { href: '/admin/dashboard/schedule', label: 'Schedule Editor', icon: '📅' },
-  { href: '/admin/dashboard/stations', label: 'Station Rules',   icon: '📡' },
   { href: '/admin/dashboard/youtube',  label: 'YouTube Pool',    icon: '▶️'  },
   { href: '/admin/dashboard/holidays', label: 'Holiday Overrides', icon: '🎄' },
   { href: '/admin/dashboard/events',   label: 'Special Events',  icon: '⚡' },
   { href: '/admin/dashboard/catalog',  label: 'Plex Catalog',    icon: '🎞️' },
   { href: '/admin/dashboard/shows',    label: 'Show Progress',   icon: '🎬' },
+  { href: '/admin/dashboard/stations', label: 'Station Rules',   icon: '📡' },
+  { href: '/admin/dashboard/schedule', label: 'Schedule Editor', icon: '📅' },
   { href: '/admin/dashboard/vhs',      label: 'VHS / CRT Effects', icon: '📼' },
   { href: '/admin/dashboard/security', label: 'Admin Security',  icon: '🔑' },
   { href: '/admin/dashboard/audit',    label: 'Audit Log',       icon: '📋' },
@@ -48,7 +48,7 @@ export default function AdminShell({ children }: Props) {
   }, [router])
 
   const handleLogout = useCallback(async () => {
-    await fetch('/api/auth/logout', { method: 'POST' })
+    await fetch('/api/admin/logout', { method: 'POST' })
     router.replace('/admin')
   }, [router])
 

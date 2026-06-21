@@ -22,7 +22,11 @@ async function main() {
         deny_genres: 'japanese,anime',
         allow_languages: 'chinese,indonesian,tagalog,french,spanish',
         deny_languages: 'japanese,korean',
-        ad_policy: { enabled: true, break_interval_tv: 15, break_interval_movie: 30 }
+        ad_policy: { enabled: true, break_interval_tv: 15, break_interval_movie: 30 },
+        time_blocks: [
+          { name: 'Late Night Movies', day: '*', start: '00:00', end: '02:00', content_source: 'plex' },
+          { name: 'Multicultural Drama', day: '*', start: '09:00', end: '11:00', content_source: 'plex' },
+        ],
       },
       holidayOverrides: {},
       fillerPools: { ads: null, music: null, bumpers: null }
@@ -36,7 +40,13 @@ async function main() {
         deny_genres: 'horror,violence',
         allow_languages: 'english',
         deny_languages: '',
-        ad_policy: { enabled: false, break_interval_tv: 0, break_interval_movie: 0 }
+        ad_policy: { enabled: false, break_interval_tv: 0, break_interval_movie: 0 },
+        time_blocks: [
+          { name: "Children's Programming", day: '*', start: '06:00', end: '09:00', content_source: 'plex' },
+          { name: 'UK Dramas', day: '*', start: '11:00', end: '13:00', content_source: 'plex' },
+          { name: 'Afternoon Show', day: '*', start: '14:00', end: '16:00', content_source: 'plex' },
+          { name: 'Play School', day: '*', start: '08:30', end: '09:00', content_source: 'youtube' },
+        ],
       },
       holidayOverrides: { christmas: { replace_schedule: true, ad_free: true } },
       fillerPools: { ads: null, music: 'RDLzk0sygecu4', bumpers: null }
@@ -50,7 +60,10 @@ async function main() {
         deny_genres: '',
         allow_languages: 'japanese,korean',
         deny_languages: '',
-        ad_policy: { enabled: true, break_interval_tv: 15, break_interval_movie: 30 }
+        ad_policy: { enabled: true, break_interval_tv: 15, break_interval_movie: 30 },
+        time_blocks: [
+          { name: 'Japanese Drama', day: '*', start: '20:00', end: '23:00', content_source: 'plex' },
+        ],
       },
       holidayOverrides: {},
       fillerPools: { ads: null, music: null, bumpers: null }
@@ -64,7 +77,11 @@ async function main() {
         deny_genres: '',
         allow_languages: 'english',
         deny_languages: '',
-        ad_policy: { enabled: true, break_interval_tv: 15, break_interval_movie: 30 }
+        ad_policy: { enabled: true, break_interval_tv: 15, break_interval_movie: 30 },
+        time_blocks: [
+          { name: 'Documentary', day: '*', start: '21:00', end: '23:00', content_source: 'plex' },
+          { name: 'Saturday Blockbuster', day: 'saturday', start: '20:00', end: '23:30', content_source: 'plex' },
+        ],
       },
       holidayOverrides: {},
       fillerPools: { ads: null, music: null, bumpers: null }
@@ -78,7 +95,11 @@ async function main() {
         deny_genres: '',
         allow_languages: 'english',
         deny_languages: '',
-        ad_policy: { enabled: true, break_interval_tv: 15, break_interval_movie: 30 }
+        ad_policy: { enabled: true, break_interval_tv: 15, break_interval_movie: 30 },
+        time_blocks: [
+          { name: 'US Sitcoms', day: '*', start: '20:00', end: '23:00', content_source: 'plex' },
+          { name: 'Sunday Blockbuster', day: 'sunday', start: '20:00', end: '23:30', content_source: 'plex' },
+        ],
       },
       holidayOverrides: {},
       fillerPools: { ads: null, music: null, bumpers: null }
@@ -92,7 +113,11 @@ async function main() {
         deny_genres: '',
         allow_languages: 'english',
         deny_languages: '',
-        ad_policy: { enabled: true, break_interval_tv: 15, break_interval_movie: 30 }
+        ad_policy: { enabled: true, break_interval_tv: 15, break_interval_movie: 30 },
+        time_blocks: [
+          { name: 'Youth Programming', day: '*', start: '19:00', end: '22:00', content_source: 'plex' },
+          { name: 'Teen Movies', day: '*', start: '22:00', end: '01:00', content_source: 'plex' },
+        ],
       },
       holidayOverrides: { halloween: { replace_schedule: true, ad_free: false } },
       fillerPools: { ads: null, music: null, bumpers: null }

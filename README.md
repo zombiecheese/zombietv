@@ -85,7 +85,7 @@ node scripts/init-db.js
 
 ### 4. Add your YouTube filler content
 
-Edit `config/youtube-fillers.json` and replace the placeholder IDs with real YouTube video or playlist IDs. See the file for instructions.
+Use Admin Portal -> YouTube Pool to add video IDs or import playlist IDs.
 
 ### 5. Start the development server
 
@@ -149,9 +149,6 @@ Admin features:
 
 ```
 zombietv/
-├── config/
-│   ├── stations.json          # Station rules, branding, filler pool IDs
-│   └── youtube-fillers.json   # Manually curated YouTube IDs
 ├── prisma/
 │   └── schema.prisma          # SQLite schema (Prisma ORM)
 ├── public/assets/             # Logos, rating boards, static files
@@ -195,6 +192,7 @@ zombietv/
 - **Plex dashboard visibility:** Playback is reported to the Plex server every 10s so it appears in the Plex dashboard with accurate progress.
 - **EPG overlay:** The program guide floats on top of the video and scales font/row size based on screen resolution.
 - **Station expansion:** New stations created in admin automatically appear across all management views.
+- **DB-backed config:** Station rules/time blocks and YouTube filler pools are persisted in SQLite via admin APIs and survive container restarts.
 
 ---
 

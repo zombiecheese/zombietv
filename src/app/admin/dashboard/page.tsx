@@ -3,20 +3,6 @@
 import { useEffect, useState } from 'react'
 
 import AdminShell from '@/components/admin/AdminShell'
-import Link from 'next/link'
-
-const QUICK_LINKS = [
-  { href: '/admin/dashboard/schedule', label: 'Schedule Editor',    desc: 'View and override any station’s daily programme grid.',  icon: '📅' },
-  { href: '/admin/dashboard/stations', label: 'Station Rules',      desc: 'Edit genres, ad policy, filler pools per station.',       icon: '📡' },
-  { href: '/admin/dashboard/youtube',  label: 'YouTube Pool',       desc: 'Add or remove YouTube video / playlist IDs.',             icon: '▶️'  },
-  { href: '/admin/dashboard/holidays', label: 'Holiday Overrides',  desc: 'Configure genre priorities and ad-free days.',            icon: '🎄' },
-  { href: '/admin/dashboard/events',   label: 'Special Events',     desc: 'Inject one-off breaking news, marathons, sports.',        icon: '⚡' },
-  { href: '/admin/dashboard/catalog',  label: 'Plex Catalog',       desc: 'Browse synced Plex media and block titles from scheduling.', icon: '🎞️' },
-  { href: '/admin/dashboard/shows',    label: 'Show Progress',      desc: 'Reset or advance episode pointers for pinned shows.',     icon: '🎬' },
-  { href: '/admin/dashboard/vhs',      label: 'VHS / CRT Effects',  desc: 'Tune scanlines, noise, chromatic aberration and flicker.', icon: '📼' },
-  { href: '/admin/dashboard/security', label: 'Admin Security',     desc: 'Change admin password for dashboard login.',               icon: '🔑' },
-  { href: '/admin/dashboard/audit',    label: 'Audit Log',          desc: 'Review every manual schedule change.',                    icon: '📋' },
-]
 
 export default function AdminDashboard() {
   const [mounted, setMounted] = useState(false)
@@ -396,15 +382,6 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
-        {QUICK_LINKS.map((l) => (
-          <Link key={l.href} href={l.href} style={card}>
-            <div style={{ fontSize: '1.4rem', marginBottom: 8 }}>{l.icon}</div>
-            <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#e8f0fe', marginBottom: 6 }}>{l.label}</div>
-            <div style={{ fontSize: '0.72rem', color: '#4a7fb5', lineHeight: 1.5 }}>{l.desc}</div>
-          </Link>
-        ))}
-      </div>
     </AdminShell>
   )
 }

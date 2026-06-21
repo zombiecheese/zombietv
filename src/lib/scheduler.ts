@@ -16,8 +16,6 @@ import { PlexClient, type PlexMediaItem }                    from './plex-client
 import { syncPlexCatalog, shouldSyncCatalog, getCatalogAutoSyncMaxAgeHours, getCatalogCandidates, getCatalogEpisode, getCatalogEpisodeList, applyRatingCeiling, getBlockedPlexKeys, getHolidayTagMap } from './plex-catalog'
 import { toJson, fromJsonObject }        from './json'
 import { addDays, startOfDay, getDay, differenceInMinutes, addMinutes, differenceInCalendarDays } from 'date-fns'
-import { readFile } from 'fs/promises'
-import path from 'path'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -61,11 +59,6 @@ interface EffectiveStationBlock {
   contentType: TimeBlock['contentType']
 }
 
-interface OriginalStationProfile {
-  rules?: {
-    time_blocks?: StationTimeBlockSpec[]
-  }
-}
 
 interface EpisodeSnapshotItem {
   season: number
@@ -83,8 +76,6 @@ interface EpisodeSnapshotItem {
   showPlexKey?: string
   chapters?: Array<{ title: string; startOffsetMs: number }>
 }
-
-let originalStationProfileCache: Record<string, OriginalStationProfile> | null = null
 
 interface ResolvedHolidayConfig {
   replace_schedule: boolean
@@ -122,21 +113,6 @@ function normalizeStationRules(raw: unknown): StationRules {
       break_interval_movie: Number(ad.break_interval_movie ?? 30),
     },
   }
-}
-
-async function getOriginalStationProfiles(): Promise<Record<string, OriginalStationProfile>> {
-  if (originalStationProfileCache) return originalStationProfileCache
-
-  try {
-    const configPath = path.join(process.cwd(), 'config', 'stations.json')
-    const raw = await readFile(configPath, 'utf8')
-    const parsed = JSON.parse(raw) as { stations?: Record<string, OriginalStationProfile> }
-    originalStationProfileCache = parsed?.stations ?? {}
-  } catch {
-    originalStationProfileCache = {}
-  }
-
-  return originalStationProfileCache
 }
 
 function parseEpisodeSnapshot(value: unknown): EpisodeSnapshotItem[] {
@@ -241,16 +217,11 @@ function mapStationContentType(spec: StationTimeBlockSpec): TimeBlock['contentTy
 function resolveStationTimeBlocks(
   stationDate: Date,
   rawRules: Record<string, unknown>,
-  profile: OriginalStationProfile | undefined,
 ): EffectiveStationBlock[] {
   const inlineBlocks = Array.isArray(rawRules.time_blocks)
     ? (rawRules.time_blocks as StationTimeBlockSpec[])
     : []
-  const profileBlocks = Array.isArray(profile?.rules?.time_blocks)
-    ? (profile?.rules?.time_blocks as StationTimeBlockSpec[])
-    : []
-
-  const source = inlineBlocks.length ? inlineBlocks : profileBlocks
+  const source = inlineBlocks
   if (!source.length) return []
 
   const todayName = dayNameForDate(stationDate)
@@ -719,7 +690,6 @@ export async function runScheduler(
   const holidayTagMap = await getHolidayTagMap()
   const holidaySettings = await loadHolidaySettings()
   const showOwnership = await buildShowOwnershipMap()
-  const originalProfiles = await getOriginalStationProfiles()
   const overrideYears = new Set<number>()
   for (let dayOffset = 0; dayOffset < horizonDays; dayOffset++) {
     overrideYears.add(startOfDay(addDays(today, dayOffset)).getFullYear())
@@ -740,8 +710,6 @@ export async function runScheduler(
     const rules = normalizeStationRules(rawRules)
     const fillerPools      = fromJsonObject<Record<string, string | null>>(station.fillerPools)
     const holidayOverrides = fromJsonObject<Record<string, any>>(station.holidayOverrides)
-    const profile = originalProfiles[station.id]
-
     for (let dayOffset = 0; dayOffset < horizonDays; dayOffset++) {
       const date = startOfDay(addDays(today, dayOffset))
 
@@ -775,7 +743,7 @@ export async function runScheduler(
 
       // Pick the template — holiday full-replace, else weekday/weekend
       let blocks = isWeekend ? WEEKEND_BLOCKS : WEEKDAY_BLOCKS
-      const stationBlocks = resolveStationTimeBlocks(date, rawRules, profile)
+      const stationBlocks = resolveStationTimeBlocks(date, rawRules)
 
       // Genre overrides for holidays
       const effectiveAllowGenres = holidayContentOverride && holidayConfig?.content_priority?.length

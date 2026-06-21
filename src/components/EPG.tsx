@@ -13,7 +13,7 @@
 import { useState, useEffect, useRef } from 'react'
 import type { EPGSlot } from '@/app/api/epg/[stationId]/route'
 
-// ─── Station metadata (mirrors config/stations.json branding) ────────────────
+// ─── Station metadata (mirrors DB-backed station branding defaults) ──────────
 
 const DEFAULT_STATIONS = [
   { id: 'stn',   name: 'STN',   colour: '#2c3e50', label: 'Subtitle TV Network'           },
