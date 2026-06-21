@@ -1,0 +1,266 @@
+// Database Schema for Zombie TV - 1990s Australian Broadcast Simulator
+// SQLite via Prisma. Note: SQLite does not support native arrays;
+// comma-separated strings are used for genres/ratings and parsed at the app layer.
+
+generator client {
+  provider      = "prisma-client-js"
+  // Runtime images are Debian bookworm (OpenSSL 3).
+  // Include native for local dev and explicit Debian OpenSSL 3 for containers.
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Stations ────────────────────────────────────────────────────────────────
+
+model Station {
+  id                String     @id // e.g. "zbc"
+  name              String     @unique // e.g. "Zombie Cheese Broadcasting Network"
+  branding          String     // JSON: { logo, ident_pack, colour_theme }
+  rules             String     // JSON: { allow_genres[], deny_genres[], ad_policy, time_blocks[] }
+  holidayOverrides  String?    // JSON: { christmas: { replace_schedule, ad_free, content_priority[] } ... }
+  fillerPools       String     // JSON: { ads, music, bumpers } — YouTube IDs
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  schedules         Schedule[]
+}
+
+// ─── Schedules ───────────────────────────────────────────────────────────────
+
+// One Schedule row = one day's schedule for one station.
+// A 2-week lock means 14 rows per station are generated ahead of time.
+model Schedule {
+  id          String   @id @default(cuid())
+  stationId   String
+  station     Station  @relation(fields: [stationId], references: [id])
+
+  date        DateTime // Midnight start of the broadcast day (UTC)
+  weekNumber  Int      // Rolling week number (1, 2, 3…)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  slots       Slot[]
+
+  @@unique([stationId, date])
+  @@index([stationId, date])
+}
+
+// ─── Slots ───────────────────────────────────────────────────────────────────
+
+// One Slot = one program block within a schedule day.
+// Always aligned to the hour or half-hour.
+model Slot {
+  id             String    @id @default(cuid())
+  scheduleId     String
+  schedule       Schedule  @relation(fields: [scheduleId], references: [id])
+
+  startTime      DateTime  // Absolute UTC timestamp
+  durationMins   Int       // Program duration in minutes
+
+  contentSource  String    // "plex" | "youtube" | "filler"
+  contentId      String?   // Plex ratingKey or YouTube video ID
+
+  // TV show episode tracking
+  showTitle      String?
+  seasonNumber   Int?
+  episodeNumber  Int?
+
+  // Ad breaks — serialised as JSON string: [{offsetMins:15,durationMins:5},…]
+  adBreaks       String?
+
+  // YouTube filler played after the main content to pad to the next hour/half-hour
+  fillerId       String?   // YouTube playlist or video ID
+  fillerDuration Int?      // Minutes of filler needed
+
+  // Override metadata
+  isOverride     Boolean   @default(false)
+  overrideReason String?   // "holiday" | "special_event" | "manual"
+
+  // Raw Plex/YouTube metadata snapshot (JSON string)
+  metadata       String?
+
+  mediaItems     SlotMediaItem[]
+}
+
+// ─── Media Items ─────────────────────────────────────────────────────────────
+
+// Lightweight cache of Plex items used in scheduling.
+// The authoritative data always lives in Plex; this is a scheduling index only.
+model MediaItem {
+  id             String   @id @default(cuid())
+  plexKey        String   @unique // Plex ratingKey
+
+  title          String
+  type           String   // "movie" | "episode" | "show"
+  year           Int
+  durationMins   Int
+
+  // Stored as comma-separated strings (SQLite has no array type)
+  genres         String   // e.g. "horror,comedy"
+  languages      String?  // e.g. "english,japanese"
+  ratings        String   // e.g. "PG"
+
+  // Episode info (null for movies)
+  parentPlexKey  String?  // Parent show ratingKey for episodes
+  showTitle      String?
+  seasonNumber   Int?
+  episodeNumber  Int?
+
+  chapters       String?  // JSON: Plex chapter markers [{title,startOffsetMs}]
+  youtubeId      String?  // Fallback YouTube ID if Plex stream unavailable
+
+  scheduledCount Int      @default(0)
+  lastScheduled  DateTime?
+  createdAt      DateTime @default(now())
+
+  slots          SlotMediaItem[]
+}
+
+// Join table: which media items are used in a slot (supports multi-part blocks)
+model SlotMediaItem {
+  id          String    @id @default(cuid())
+  slotId      String
+  slot        Slot      @relation(fields: [slotId], references: [id])
+  mediaItemId String
+  mediaItem   MediaItem @relation(fields: [mediaItemId], references: [id])
+  orderIndex  Int       @default(0) // Position within the slot
+
+  @@unique([slotId, mediaItemId])
+  @@index([slotId])
+}
+
+// ─── YouTube Content ─────────────────────────────────────────────────────────
+
+// Manually curated YouTube videos / playlists used as ads, bumpers, filler.
+model YoutubeContent {
+  id             String   @id @default(cuid())
+  title         String
+  videoId       String?  @unique // Individual video ID
+  playlistId    String?  @unique // Playlist ID (mutually exclusive with videoId)
+  isPlaylist    Boolean  @default(false)
+
+  category      String   // "ads" | "music" | "bumpers" | "filler" | "special"
+  station       String?  // null = global; "zbc" = station-specific
+
+  durationMins  Int?     // Known duration (videos only; null for playlists)
+  scheduledCount Int     @default(0)
+  createdAt     DateTime @default(now())
+}
+
+// ─── Holiday Overrides ───────────────────────────────────────────────────────
+
+model HolidayOverride {
+  id              String   @id @default(cuid())
+  holidayName     String   // "christmas" | "good_friday" | "easter" | "halloween"
+  year            Int
+  stationId       String?  // null = applies to all stations
+
+  replaceSchedule Boolean  @default(true)
+  adFree          Boolean  @default(false)
+  contentPriority String   // Comma-separated genres e.g. "family,religious"
+
+  createdAt       DateTime @default(now())
+
+  @@unique([holidayName, year, stationId])
+}
+
+// ─── Special Events ──────────────────────────────────────────────────────────
+
+model SpecialEvent {
+  id              String   @id @default(cuid())
+  name            String
+  type            String   // "breaking_news" | "sports_overrun" | "marathon" | "custom"
+  stationId       String?  // null = all stations
+
+  startTime       DateTime
+  durationMins    Int
+  priority        String   @default("medium") // "high" | "medium" | "low"
+  replaceSchedule Boolean  @default(false)
+  content         String   // JSON: { source: "plex|youtube", id: "...", description: "..." }
+
+  createdAt       DateTime @default(now())
+}
+
+// ─── Users ───────────────────────────────────────────────────────────────────
+
+model User {
+  id          String   @id @default(cuid())
+  plexId      String?  @unique // Plex user ID from OAuth
+  email       String   @unique
+  username    String?
+  isAdmin     Boolean  @default(false)
+
+  // VHS + UI preferences stored as JSON string
+  preferences String   @default("{}")
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  scheduleChanges ScheduleChange[]
+}
+
+// ─── Audit Log ───────────────────────────────────────────────────────────────
+
+// Every manual schedule change made via the admin portal is logged here.
+model ScheduleChange {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+
+  scheduleId String
+  slotId     String
+
+  oldContent String?  // JSON snapshot
+  newContent String?  // JSON snapshot
+  reason     String
+
+  createdAt  DateTime @default(now())
+}
+
+// ─── Admin Preferences ───────────────────────────────────────────────────────
+
+// Global or per-station admin settings (VHS intensity, EPG theme, etc.)
+model AdminPreference {
+  id           String   @id @default(cuid())
+  stationId    String?  // null = global
+  settingKey   String   // e.g. "vhs_intensity"
+  settingValue String  // JSON-encoded value (number, string, or boolean)
+  updatedAt    DateTime @updatedAt
+
+  @@unique([stationId, settingKey])
+}
+
+// ─── Show Progress ────────────────────────────────────────────────────────────
+
+// Tracks which episode is next for a given show on a given station timeslot.
+// When a schedule slot fires for a pinned show, the scheduler reads this,
+// books the episode, then increments nextSeason/nextEpisode.
+model ShowProgress {
+  id            String    @id @default(cuid())
+  stationId     String    // e.g. "nine"
+  plexShowKey   String    // Plex ratingKey for the parent show
+  showTitle     String    // Human-readable, for admin display
+  episodeOrderJson String? // JSON snapshot of the app-owned episode order
+
+  nextSeason    Int       @default(1)
+  nextEpisode   Int       @default(1)
+  totalSeasons  Int       @default(1)
+  totalEpisodes Int       @default(1)
+
+  // The locked broadcast slot — weekday (0=Sun…6=Sat) and wall-clock time
+  airedWeekday  Int       // 0–6
+  airedTime     String    // "HH:MM" 24h e.g. "19:30"
+
+  isCompleted   Boolean   @default(false) // true when all episodes have aired
+  lastAiredAt   DateTime?
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([stationId, plexShowKey])
+  @@index([stationId])
+}

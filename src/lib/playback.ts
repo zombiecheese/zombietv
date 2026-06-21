@@ -1,0 +1,413 @@
+// Real-Time Playback Engine
+// Given a stationId + the current UTC timestamp, returns exactly what
+// that station is broadcasting right now, how far through it we are,
+// and when the next transition happens.
+//
+// This is the server's single source of truth for all clients.
+// Clients call GET /api/now/[stationId] and receive a PlaybackState.
+
+import { prisma }                         from './db'
+import { fromJsonArray, fromJsonObject }  from './json'
+import { createHash }                    from 'crypto'
+
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+export interface AdBreakDef {
+  offsetMins:  number
+  durationMins: number
+}
+
+export interface PlaybackState {
+  stationId:       string
+  serverTimeMs:    number          // Server's current UTC epoch ms — clients use this to sync
+
+  // What is on air right now
+  contentSource:   'plex' | 'youtube' | 'filler' | 'ad' | 'offline'
+  contentId:       string | null   // Plex ratingKey or YouTube video/playlist ID
+  title:           string | null
+  showTitle:       string | null
+  seasonNumber:    number | null
+  episodeNumber:   number | null
+  contentRating:   string | null
+
+  // Where in the content we are
+  startOffsetMs:   number          // How many ms into contentId the client should seek to
+  slotStartMs:     number          // Absolute UTC ms when the current slot began
+  slotEndMs:       number          // Absolute UTC ms when the current slot ends
+
+  // If we're currently in an ad break
+  inAdBreak:       boolean
+  adFillerId:      string | null   // YouTube playlist/video ID for ads
+  adBreakEndsMs:   number | null   // Absolute UTC ms when the ad break ends
+  youtubeQueue:    string[] | null  // Ordered YouTube video IDs selected for this segment
+
+  // When the next thing starts (either end of ad break or end of slot)
+  nextTransitionMs: number
+
+  // All ad breaks remaining in this slot (so client can pre-plan)
+  upcomingAdBreaks: Array<{ startsAtMs: number; durationMins: number }>
+
+  // Filler info (content that runs after main program to fill to hour/half-hour)
+  inFiller:        boolean
+  fillerStartMs:   number | null
+  fillerId:        string | null
+}
+
+interface YoutubePoolItem {
+  videoId: string
+  title: string
+  durationMins: number | null
+  category: string
+  station: string | null
+}
+
+interface YoutubeSelection {
+  currentVideoId: string
+  queue: string[]
+  startOffsetMs: number
+}
+
+// ─── Main function ────────────────────────────────────────────────────────────
+
+export async function getPlaybackState(stationId: string, nowMs?: number): Promise<PlaybackState> {
+  const now = nowMs ?? Date.now()
+  const nowDate = new Date(now)
+
+  const offline: PlaybackState = {
+    stationId,
+    serverTimeMs:     now,
+    contentSource:    'offline',
+    contentId:        null,
+    title:            null,
+    showTitle:        null,
+    seasonNumber:     null,
+    episodeNumber:    null,
+    contentRating:    null,
+    startOffsetMs:    0,
+    slotStartMs:      now,
+    slotEndMs:        now,
+    inAdBreak:        false,
+    adFillerId:       null,
+    adBreakEndsMs:    null,
+    youtubeQueue:     null,
+    nextTransitionMs: now + 60_000,
+    upcomingAdBreaks: [],
+    inFiller:         false,
+    fillerStartMs:    null,
+    fillerId:         null,
+  }
+
+  // ── Find the active schedule for today ──────────────────────────────────
+  // Schedules are stored by local calendar day, not UTC date-only midnight.
+  // Match the admin schedule route so after-midnight local playback still
+  // resolves the active schedule row created for that broadcast day.
+  const todayMidnight = new Date(
+    nowDate.getFullYear(),
+    nowDate.getMonth(),
+    nowDate.getDate(),
+    0,
+    0,
+    0,
+    0,
+  )
+  const yesterdayMidnight = new Date(todayMidnight)
+  yesterdayMidnight.setDate(yesterdayMidnight.getDate() - 1)
+  const tomorrowMidnight = new Date(todayMidnight)
+  tomorrowMidnight.setDate(tomorrowMidnight.getDate() + 1)
+
+  const schedules = await prisma.schedule.findMany({
+    where: {
+      stationId,
+      isActive: true,
+      date: {
+        // Include previous day so slots that started before midnight
+        // can still be active after midnight.
+        gte: yesterdayMidnight,
+        lt: tomorrowMidnight,
+      },
+    },
+    include: {
+      slots: {
+        orderBy: { startTime: 'asc' },
+        include: {
+          mediaItems: {
+            orderBy: { orderIndex: 'asc' },
+            include: {
+              mediaItem: {
+                select: { ratings: true },
+              },
+            },
+          },
+        },
+      },
+    },
+    orderBy: { date: 'asc' },
+  })
+
+  if (!schedules.length) return offline
+
+  const allSlots = schedules
+    .flatMap((schedule) => schedule.slots)
+    .sort((a, b) => a.startTime.getTime() - b.startTime.getTime())
+
+  if (!allSlots.length) return offline
+
+  // ── Find the active slot ────────────────────────────────────────────────
+  const activeSlot = allSlots.reduce<typeof allSlots[number] | null>((latest, slot) => {
+    const slotStart = slot.startTime.getTime()
+    const slotEnd = slotStart + slot.durationMins * 60_000
+
+    // Also account for filler that extends the slot
+    const effectiveEnd = slot.fillerDuration
+      ? slotEnd + slot.fillerDuration * 60_000
+      : slotEnd
+
+    if (!(now >= slotStart && now < effectiveEnd)) return latest
+    if (!latest) return slot
+    return slotStart > latest.startTime.getTime() ? slot : latest
+  }, null)
+
+  if (!activeSlot) return offline
+
+  const slotStartMs    = activeSlot.startTime.getTime()
+  const contentEndMs   = slotStartMs + activeSlot.durationMins * 60_000
+  const fillerEndMs    = activeSlot.fillerDuration
+    ? contentEndMs + activeSlot.fillerDuration * 60_000
+    : contentEndMs
+  const slotEndMs      = fillerEndMs
+  const elapsedMs      = now - slotStartMs
+
+  // ── Are we in the filler zone? ──────────────────────────────────────────
+  const inFiller = now >= contentEndMs && now < fillerEndMs
+
+  // ── Calculate ad breaks ──────────────────────────────────────────────────
+  const adBreakDefs: AdBreakDef[] = fromJsonArray<AdBreakDef>(activeSlot.adBreaks)
+
+  // Absolute UTC timestamps for each ad break
+  const adBreaksAbsolute = adBreakDefs.map((ab) => ({
+    startsAtMs:   slotStartMs + ab.offsetMins * 60_000,
+    endsAtMs:     slotStartMs + ab.offsetMins * 60_000 + ab.durationMins * 60_000,
+    durationMins: ab.durationMins,
+  }))
+
+  // Current ad break
+  const currentAdBreak = adBreaksAbsolute.find(
+    (ab) => now >= ab.startsAtMs && now < ab.endsAtMs,
+  )
+
+  const inAdBreak    = !inFiller && currentAdBreak !== undefined
+  const adBreakEndsMs = inAdBreak ? currentAdBreak!.endsAtMs : null
+
+  // ── Fetch station filler pool for ads ────────────────────────────────────
+  const station = await prisma.station.findUnique({
+    where: { id: stationId },
+    select: { fillerPools: true },
+  })
+  const fillerPools = fromJsonObject<Record<string, string | null>>(station?.fillerPools)
+
+  const youtubeSelection = await selectYoutubeSelection({
+    stationId,
+    now,
+    slotStartMs,
+    contentEndMs,
+    fillerDurationMins: activeSlot.fillerDuration ?? 0,
+    inAdBreak,
+    currentAdBreak,
+    inFiller,
+    fallbackId: inAdBreak ? (fillerPools.ads ?? fillerPools.music ?? null) : (activeSlot.fillerId ?? fillerPools.music ?? null),
+  })
+
+  // ── Start offset into the content ────────────────────────────────────────
+  // Subtract total ad-break time that has already elapsed
+  let totalAdMsElapsed = 0
+  if (!inFiller && !inAdBreak) {
+    for (const ab of adBreaksAbsolute) {
+      if (ab.endsAtMs <= now) {
+        totalAdMsElapsed += ab.durationMins * 60_000
+      } else if (ab.startsAtMs <= now) {
+        // We're past the start but not yet at the end (shouldn't happen due to inAdBreak check)
+        totalAdMsElapsed += now - ab.startsAtMs
+      }
+    }
+  }
+
+  const startOffsetMs = inFiller
+    ? now - contentEndMs                          // Offset into filler
+    : inAdBreak
+      ? 0                                          // Ads play from start
+      : Math.max(0, elapsedMs - totalAdMsElapsed) // Offset into main content
+
+  const youtubeStartOffsetMs = youtubeSelection?.startOffsetMs ?? startOffsetMs
+
+  // ── Upcoming ad breaks (for client pre-planning) ─────────────────────────
+  const upcomingAdBreaks = adBreaksAbsolute
+    .filter((ab) => ab.startsAtMs > now)
+    .map((ab) => ({ startsAtMs: ab.startsAtMs, durationMins: ab.durationMins }))
+
+  // ── Next transition ───────────────────────────────────────────────────────
+  let nextTransitionMs: number
+  if (inAdBreak) {
+    nextTransitionMs = currentAdBreak!.endsAtMs
+  } else if (upcomingAdBreaks.length) {
+    nextTransitionMs = upcomingAdBreaks[0].startsAtMs
+  } else {
+    nextTransitionMs = slotEndMs
+  }
+
+  const activeContentRating = activeSlot.mediaItems[0]?.mediaItem?.ratings ?? null
+
+  return {
+    stationId,
+    serverTimeMs: now,
+
+    contentSource: inFiller
+      ? 'filler'
+      : inAdBreak
+        ? 'ad'
+        : (activeSlot.contentSource as PlaybackState['contentSource']),
+
+    contentId: inFiller
+      ? (youtubeSelection?.currentVideoId ?? activeSlot.fillerId ?? fillerPools.music ?? null)
+      : inAdBreak
+        ? (youtubeSelection?.currentVideoId ?? fillerPools.ads ?? fillerPools.music ?? null)
+        : activeSlot.contentId,
+
+    title: inFiller || inAdBreak ? null : (fromJsonObject<Record<string,unknown>>(activeSlot.metadata)?.title as string ?? activeSlot.showTitle ?? null),
+    showTitle:     activeSlot.showTitle,
+    seasonNumber:  activeSlot.seasonNumber,
+    episodeNumber: activeSlot.episodeNumber,
+    contentRating: inFiller || inAdBreak ? null : activeContentRating,
+
+    startOffsetMs: inAdBreak || inFiller ? youtubeStartOffsetMs : startOffsetMs,
+    slotStartMs,
+    slotEndMs,
+
+    inAdBreak,
+    adFillerId:   inAdBreak ? (fillerPools.ads ?? null) : null,
+    adBreakEndsMs,
+    youtubeQueue:  youtubeSelection?.queue ?? null,
+
+    nextTransitionMs,
+    upcomingAdBreaks,
+
+    inFiller,
+    fillerStartMs: inFiller ? contentEndMs : null,
+    fillerId:      activeSlot.fillerId ?? fillerPools.music ?? null,
+  }
+}
+
+async function selectYoutubeSelection(params: {
+  stationId: string
+  now: number
+  slotStartMs: number
+  contentEndMs: number
+  fillerDurationMins: number
+  inAdBreak: boolean
+  currentAdBreak: { startsAtMs: number; endsAtMs: number; durationMins: number } | undefined
+  inFiller: boolean
+  fallbackId: string | null
+}): Promise<YoutubeSelection | null> {
+  const { stationId, now, slotStartMs, contentEndMs, fillerDurationMins, inAdBreak, currentAdBreak, inFiller, fallbackId } = params
+  const segmentStartMs = inAdBreak
+    ? (currentAdBreak?.startsAtMs ?? slotStartMs)
+    : contentEndMs
+  const segmentDurationMins = inAdBreak
+    ? (currentAdBreak?.durationMins ?? 0)
+    : fillerDurationMins
+
+  if (segmentDurationMins <= 0) return null
+
+  const seed = `${stationId}:${slotStartMs}:${segmentStartMs}:${inAdBreak ? 'ad' : inFiller ? 'filler' : 'youtube'}`
+  const selectorCategories = inAdBreak
+    ? ['ads', 'bumpers', 'music']
+    : ['music', 'bumpers', 'ads']
+
+  const candidates = await prisma.youtubeContent.findMany({
+    where: {
+      category: { in: selectorCategories },
+      OR: [
+        { station: null },
+        { station: stationId },
+      ],
+    },
+    select: {
+      videoId: true,
+      title: true,
+      durationMins: true,
+      category: true,
+      station: true,
+    },
+    orderBy: [
+      { station: 'asc' },
+      { createdAt: 'asc' },
+    ],
+  })
+
+  const seeded = seededShuffle(
+    candidates.filter((item): item is YoutubePoolItem & { videoId: string } => Boolean(item.videoId)),
+    seed,
+  )
+
+  const selected: YoutubePoolItem[] = []
+  let totalMins = 0
+  for (const item of seeded) {
+    selected.push(item)
+    totalMins += Math.max(1, item.durationMins ?? 3)
+    if (totalMins >= segmentDurationMins) break
+  }
+
+  if (!selected.length) {
+    if (!fallbackId) return null
+    return { currentVideoId: fallbackId, queue: [fallbackId], startOffsetMs: Math.max(0, now - segmentStartMs) }
+  }
+
+  const elapsedMins = Math.max(0, (now - segmentStartMs) / 60_000)
+  let currentIndex = 0
+  let cursorMins = 0
+
+  for (let i = 0; i < selected.length; i++) {
+    const itemDuration = Math.max(1, selected[i].durationMins ?? 3)
+    if (elapsedMins < cursorMins + itemDuration) {
+      currentIndex = i
+      break
+    }
+    cursorMins += itemDuration
+    currentIndex = Math.min(i + 1, selected.length - 1)
+  }
+
+  const current = selected[currentIndex] ?? selected[selected.length - 1]
+  const currentOffsetMs = Math.max(0, Math.floor((elapsedMins - cursorMins) * 60_000))
+  const queue = selected.slice(currentIndex).map((item) => item.videoId)
+
+  return {
+    currentVideoId: current.videoId,
+    queue,
+    startOffsetMs: currentOffsetMs,
+  }
+}
+
+function seededShuffle<T>(items: T[], seed: string): T[] {
+  const result = [...items]
+  const rand = mulberry32(seedToUInt32(seed))
+
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1))
+    ;[result[i], result[j]] = [result[j], result[i]]
+  }
+
+  return result
+}
+
+function seedToUInt32(seed: string): number {
+  const hash = createHash('sha256').update(seed).digest()
+  return hash.readUInt32LE(0)
+}
+
+function mulberry32(a: number): () => number {
+  return () => {
+    let t = a += 0x6D2B79F5
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}

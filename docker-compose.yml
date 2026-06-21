@@ -1,0 +1,21 @@
+services:
+  zombietv:
+    image: ghcr.io/zombiecheese/zombietv:latest
+    pull_policy: always
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/vhs-settings').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: file:/data/dev.db
+    volumes:
+      - zombietv-data:/data
+
+volumes:
+  zombietv-data:

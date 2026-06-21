@@ -1,0 +1,300 @@
+{
+  "stations": {
+    "stn": {
+      "id": "stn",
+      "name": "Subtitle Television Network",
+      "branding": {
+        "logo": "/assets/stn-logo.png",
+        "ident_pack": "stn-idents",
+        "colour_theme": "#2c3e50"
+      },
+      "rules": {
+        "allow_genres": ["foreign", "drama", "art-house", "multicultural"],
+        "deny_genres": ["japanese", "anime"],
+        "allow_languages": ["chinese", "indonesian", "tagalog", "french", "spanish"],
+        "deny_languages": ["japanese", "korean"],
+        "ad_policy": {
+          "enabled": true,
+          "break_interval_tv": 15,
+          "break_interval_movie": 30
+        },
+        "time_blocks": [
+          {
+            "name": "Late Night Movies",
+            "day": "*",
+            "start": "00:00",
+            "end": "02:00",
+            "content_source": "plex"
+          },
+          {
+            "name": "Multicultural Drama",
+            "day": "*",
+            "start": "09:00",
+            "end": "11:00",
+            "content_source": "plex"
+          }
+        ]
+      },
+      "holiday_overrides": {
+        "christmas": {
+          "replace_schedule": true,
+          "ad_free": false,
+          "content_priority": ["family", "multicultural"]
+        },
+        "easter": {
+          "replace_schedule": true,
+          "ad_free": false,
+          "content_priority": ["religious", "drama"]
+        }
+      },
+      "filler_pools": {
+        "ads": "youtube_playlist_ads_stn",
+        "music": "youtube_playlist_multicultural",
+        "bumpers": "youtube_playlist_bumpers_stn"
+      }
+    },
+    "zbc": {
+      "id": "zbc",
+      "name": "Zombie Cheese Broadcasting Network",
+      "branding": {
+        "logo": "/assets/zbc-logo.png",
+        "ident_pack": "zbc-idents",
+        "colour_theme": "#8b0000"
+      },
+      "rules": {
+        "allow_genres": ["documentary", "uk-drama", "children", "comedy"],
+        "deny_genres": ["horror", "violence"],
+        "ad_policy": {
+          "enabled": false,
+          "break_interval_tv": 0,
+          "break_interval_movie": 0
+        },
+        "time_blocks": [
+          {
+            "name": "Children's Programming",
+            "day": "*",
+            "start": "06:00",
+            "end": "09:00",
+            "content_source": "plex"
+          },
+          {
+            "name": "UK Dramas",
+            "day": "*",
+            "start": "11:00",
+            "end": "13:00",
+            "content_source": "plex"
+          },
+          {
+            "name": "Afternoon Show",
+            "day": "*",
+            "start": "14:00",
+            "end": "16:00",
+            "content_source": "plex"
+          },
+          {
+            "name": "Play School",
+            "day": "*",
+            "start": "08:30",
+            "end": "09:00",
+            "content_source": "youtube"
+          }
+        ]
+      },
+      "holiday_overrides": {
+        "christmas": {
+          "replace_schedule": true,
+          "ad_free": true,
+          "content_priority": ["family", "children"]
+        },
+        "good_friday": {
+          "replace_schedule": true,
+          "ad_free": true,
+          "content_priority": ["religious", "drama"]
+        }
+      },
+      "filler_pools": {
+        "ads": null,
+        "music": "RDLzk0sygecu4",
+        "bumpers": "youtube_playlist_bumpers_zbc"
+      },
+      "special_schedule": {
+        "sunday_morning": {
+          "music_videos": "RDLzk0sygecu4",
+          "random_videos": "PLVWLfb1wlwNRF3Y33ygrsdXDcq7osC1Uv",
+          "monkey_show": true
+        }
+      }
+    },
+    "nnwk": {
+      "id": "nnwk",
+      "name": "Nippon Network",
+      "branding": {
+        "logo": "/assets/nnwk-logo.png",
+        "ident_pack": "nnwk-idents",
+        "colour_theme": "#003366"
+      },
+      "rules": {
+        "allow_genres": ["japanese-drama", "korean-drama", "anime"],
+        "deny_genres": [],
+        "ad_policy": {
+          "enabled": true,
+          "break_interval_tv": 15,
+          "break_interval_movie": 30
+        },
+        "time_blocks": [
+          {
+            "name": "Japanese Drama",
+            "day": "*",
+            "start": "20:00",
+            "end": "23:00",
+            "content_source": "plex"
+          }
+        ]
+      },
+      "holiday_overrides": {},
+      "filler_pools": {
+        "ads": "youtube_playlist_japanese_ads",
+        "music": "youtube_playlist_japanese_music",
+        "bumpers": "youtube_playlist_bumpers_nnwk"
+      }
+    },
+    "seven": {
+      "id": "seven",
+      "name": "Seven",
+      "branding": {
+        "logo": "/assets/seven-logo.png",
+        "ident_pack": "seven-idents",
+        "colour_theme": "#ff6600"
+      },
+      "rules": {
+        "allow_genres": ["documentary", "drama", "sitcom"],
+        "deny_genres": [],
+        "ad_policy": {
+          "enabled": true,
+          "break_interval_tv": 15,
+          "break_interval_movie": 30
+        },
+        "time_blocks": [
+          {
+            "name": "Documentary",
+            "day": "*",
+            "start": "21:00",
+            "end": "23:00",
+            "content_source": "plex"
+          },
+          {
+            "name": "Saturday Blockbuster",
+            "day": "saturday",
+            "start": "20:00",
+            "end": "23:30",
+            "content_source": "plex"
+          }
+        ]
+      },
+      "holiday_overrides": {
+        "christmas": {
+          "replace_schedule": true,
+          "ad_free": false,
+          "content_priority": ["family", "documentary"]
+        }
+      },
+      "filler_pools": {
+        "ads": "youtube_playlist_ads_seven",
+        "music": "youtube_playlist_music_seven",
+        "bumpers": "youtube_playlist_bumpers_seven"
+      }
+    },
+    "nine": {
+      "id": "nine",
+      "name": "Nine",
+      "branding": {
+        "logo": "/assets/nine-logo.png",
+        "ident_pack": "nine-idents",
+        "colour_theme": "#cc0000"
+      },
+      "rules": {
+        "allow_genres": ["sitcom", "drama", "reality"],
+        "deny_genres": [],
+        "ad_policy": {
+          "enabled": true,
+          "break_interval_tv": 15,
+          "break_interval_movie": 30
+        },
+        "time_blocks": [
+          {
+            "name": "US Sitcoms",
+            "day": "*",
+            "start": "20:00",
+            "end": "23:00",
+            "content_source": "plex"
+          },
+          {
+            "name": "Sunday Blockbuster",
+            "day": "sunday",
+            "start": "20:00",
+            "end": "23:30",
+            "content_source": "plex"
+          }
+        ]
+      },
+      "holiday_overrides": {
+        "christmas": {
+          "replace_schedule": true,
+          "ad_free": false,
+          "content_priority": ["family", "sitcom"]
+        }
+      },
+      "filler_pools": {
+        "ads": "youtube_playlist_ads_nine",
+        "music": "youtube_playlist_music_nine",
+        "bumpers": "youtube_playlist_bumpers_nine"
+      }
+    },
+    "ten": {
+      "id": "ten",
+      "name": "Ten",
+      "branding": {
+        "logo": "/assets/ten-logo.png",
+        "ident_pack": "ten-idents",
+        "colour_theme": "#0066cc"
+      },
+      "rules": {
+        "allow_genres": ["teen", "comedy", "action"],
+        "deny_genres": [],
+        "ad_policy": {
+          "enabled": true,
+          "break_interval_tv": 15,
+          "break_interval_movie": 30
+        },
+        "time_blocks": [
+          {
+            "name": "Youth Programming",
+            "day": "*",
+            "start": "19:00",
+            "end": "22:00",
+            "content_source": "plex"
+          },
+          {
+            "name": "Teen Movies",
+            "day": "*",
+            "start": "22:00",
+            "end": "01:00",
+            "content_source": "plex"
+          }
+        ]
+      },
+      "holiday_overrides": {
+        "halloween": {
+          "replace_schedule": true,
+          "ad_free": false,
+          "content_priority": ["horror", "teen"]
+        }
+      },
+      "filler_pools": {
+        "ads": "youtube_playlist_ads_ten",
+        "music": "RDLzk0sygecu4",
+        "bumpers": "youtube_playlist_bumpers_ten"
+      }
+    }
+  }
+}
