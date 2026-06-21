@@ -13,10 +13,12 @@ import { getIronSession }            from 'iron-session'
 export const dynamic = 'force-dynamic'
 import { sessionOptions, SessionData, defaultSession } from '@/lib/session'
 import { checkPlexPin, getPlexUser, getPlexServerUrl } from '@/lib/plex-auth'
+import { getPlexAuthRedirectBaseUrl } from '@/lib/plex-auth-redirect'
 import { prisma }   from '@/lib/db'
 import { toJson }   from '@/lib/json'
 
 export async function GET(req: NextRequest) {
+  const redirectBaseUrl = (await getPlexAuthRedirectBaseUrl()) ?? req.url
   const url = new URL(req.url)
 
   // Pin ID comes from cookie (preferred) or query string (Plex appends ?pinID=)
@@ -31,7 +33,7 @@ export async function GET(req: NextRequest) {
 
   if (!pinId || isNaN(pinId)) {
     console.log('[Auth/Callback] Missing or invalid pin ID')
-    return NextResponse.redirect(new URL('/?auth=error&reason=missing_pin', req.url))
+    return NextResponse.redirect(new URL('/?auth=error&reason=missing_pin', redirectBaseUrl))
   }
 
   try {
@@ -41,7 +43,7 @@ export async function GET(req: NextRequest) {
     if (!authToken) {
       // User hasn't authenticated yet (e.g. navigated back too quickly)
       console.log('[Auth/Callback] Pin not yet authenticated')
-      return NextResponse.redirect(new URL('/?auth=error&reason=pin_not_authed', req.url))
+      return NextResponse.redirect(new URL('/?auth=error&reason=pin_not_authed', redirectBaseUrl))
     }
     console.log('[Auth/Callback] Got auth token from Plex')
 
@@ -115,7 +117,7 @@ export async function GET(req: NextRequest) {
 
     // Create the redirect response with all necessary headers
     const redirectHeaders = new Headers({
-      'Location': new URL('/', req.url).toString(),
+      'Location': new URL('/', redirectBaseUrl).toString(),
     })
     
     // Add the session cookie if present
@@ -147,6 +149,6 @@ export async function GET(req: NextRequest) {
     return finalResponse
   } catch (err: any) {
     console.error('[Auth] Plex callback error:', err)
-    return NextResponse.redirect(new URL(`/?auth=error&reason=${encodeURIComponent(err.message)}`, req.url))
+    return NextResponse.redirect(new URL(`/?auth=error&reason=${encodeURIComponent(err.message)}`, redirectBaseUrl))
   }
 }

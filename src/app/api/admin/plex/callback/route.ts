@@ -7,6 +7,7 @@ import { getIronSession } from 'iron-session'
 import { prisma } from '@/lib/db'
 import { fromJsonObject, toJson } from '@/lib/json'
 import { checkPlexPin, getPlexServerUrl } from '@/lib/plex-auth'
+import { getPlexAuthRedirectBaseUrl } from '@/lib/plex-auth-redirect'
 import { sessionOptions, SessionData } from '@/lib/session'
 
 export const dynamic = 'force-dynamic'
@@ -28,7 +29,8 @@ function isValidAdminState(userId: string, state: string) {
 }
 
 export async function GET(req: NextRequest) {
-  const redirect = (reason: string) => NextResponse.redirect(new URL(`/admin/dashboard?plex=${encodeURIComponent(reason)}`, req.url))
+  const redirectBaseUrl = (await getPlexAuthRedirectBaseUrl()) ?? req.url
+  const redirect = (reason: string) => NextResponse.redirect(new URL(`/admin/dashboard?plex=${encodeURIComponent(reason)}`, redirectBaseUrl))
   const url = new URL(req.url)
   const baseResponse = new Response()
   const session = await getIronSession<SessionData>(req, baseResponse, sessionOptions)
@@ -90,7 +92,7 @@ export async function GET(req: NextRequest) {
 
     // Create the redirect response with all necessary headers
     const redirectHeaders = new Headers({
-      'Location': new URL('/admin/dashboard?plex=connected', req.url).toString(),
+      'Location': new URL('/admin/dashboard?plex=connected', redirectBaseUrl).toString(),
     })
     
     // Get the session cookie from response headers and propagate it
