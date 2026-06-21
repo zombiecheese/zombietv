@@ -14,6 +14,7 @@ const QUICK_LINKS = [
   { href: '/admin/dashboard/catalog',  label: 'Plex Catalog',       desc: 'Browse synced Plex media and block titles from scheduling.', icon: '🎞️' },
   { href: '/admin/dashboard/shows',    label: 'Show Progress',      desc: 'Reset or advance episode pointers for pinned shows.',     icon: '🎬' },
   { href: '/admin/dashboard/vhs',      label: 'VHS / CRT Effects',  desc: 'Tune scanlines, noise, chromatic aberration and flicker.', icon: '📼' },
+  { href: '/admin/dashboard/security', label: 'Admin Security',     desc: 'Change admin password for dashboard login.',               icon: '🔑' },
   { href: '/admin/dashboard/audit',    label: 'Audit Log',          desc: 'Review every manual schedule change.',                    icon: '📋' },
 ]
 
@@ -22,6 +23,7 @@ export default function AdminDashboard() {
   const [isCatalogSyncing, setIsCatalogSyncing] = useState(false)
   const [isSavingCatalogSettings, setIsSavingCatalogSettings] = useState(false)
   const [isSavingLibrarySelection, setIsSavingLibrarySelection] = useState(false)
+  const [isSavingAuthRedirect, setIsSavingAuthRedirect] = useState(false)
   const [isClearingCatalog, setIsClearingCatalog] = useState(false)
   const [selectedLibraryKeys, setSelectedLibraryKeys] = useState<string[]>([])
   const [selectedLibraryClasses, setSelectedLibraryClasses] = useState<Record<string, string>>({})
@@ -31,6 +33,7 @@ export default function AdminDashboard() {
     hasServer: boolean
     plexServerName: string | null
     plexServerUrl: string | null
+    authRedirectBaseUrl?: string | null
     catalogSyncRunning?: boolean
     catalog?: {
       itemCount: number
@@ -63,6 +66,7 @@ export default function AdminDashboard() {
   } | null>(null)
   const [plexMsg, setPlexMsg] = useState('')
   const [catalogAutoSyncHours, setCatalogAutoSyncHours] = useState('72')
+  const [authRedirectBaseUrl, setAuthRedirectBaseUrl] = useState('')
 
   const refreshPlexStatus = async () => {
     const data = await fetch('/api/admin/plex').then((r) => (r.ok ? r.json() : null)).catch(() => null)
@@ -72,6 +76,7 @@ export default function AdminDashboard() {
     if (typeof data.catalog?.autoSyncMaxAgeHours === 'number') {
       setCatalogAutoSyncHours(String(data.catalog.autoSyncMaxAgeHours))
     }
+    setAuthRedirectBaseUrl(String(data.authRedirectBaseUrl ?? ''))
     if (Array.isArray(data.catalog?.selectedLibraryKeys)) {
       setSelectedLibraryKeys(data.catalog.selectedLibraryKeys.map((key: unknown) => String(key)))
     }
@@ -154,6 +159,28 @@ export default function AdminDashboard() {
 
     setCatalogAutoSyncHours(String(data.autoSyncMaxAgeHours))
     setPlexMsg(`Catalog auto-resync threshold saved to ${data.autoSyncMaxAgeHours} hours.`)
+    await refreshPlexStatus()
+  }
+
+  const saveAuthRedirectBaseUrl = async () => {
+    setIsSavingAuthRedirect(true)
+    const r = await fetch('/api/admin/plex/catalog-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ authRedirectBaseUrl }),
+    })
+    const data = await r.json().catch(() => ({}))
+    setIsSavingAuthRedirect(false)
+
+    if (!r.ok) {
+      setPlexMsg(data?.error || 'Could not save Plex auth redirect URL.')
+      return
+    }
+
+    setAuthRedirectBaseUrl(String(data.authRedirectBaseUrl ?? ''))
+    setPlexMsg(data.authRedirectBaseUrl
+      ? `Plex auth redirect URL saved: ${data.authRedirectBaseUrl}`
+      : 'Plex auth redirect URL cleared. Default request origin will be used.')
     await refreshPlexStatus()
   }
 
@@ -341,6 +368,21 @@ export default function AdminDashboard() {
           </label>
           <button onClick={saveCatalogSettings} style={secondaryBtn} disabled={isSavingCatalogSettings}>
             {isSavingCatalogSettings ? 'SAVING...' : 'SAVE AUTO-RESYNC'}
+          </button>
+        </div>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 10 }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.72rem', color: '#a8c4e0', minWidth: 340, flex: 1 }}>
+            Plex auth redirect base URL (optional)
+            <input
+              type="url"
+              placeholder="https://your-hosted-site.example"
+              value={authRedirectBaseUrl}
+              onChange={(e) => setAuthRedirectBaseUrl(e.target.value)}
+              style={numberInput}
+            />
+          </label>
+          <button onClick={saveAuthRedirectBaseUrl} style={secondaryBtn} disabled={isSavingAuthRedirect}>
+            {isSavingAuthRedirect ? 'SAVING...' : 'SAVE REDIRECT URL'}
           </button>
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>

@@ -8,6 +8,11 @@ import {
   saveCatalogAutoSyncMaxAgeHours,
   saveCatalogSelectedLibraryKeys,
 } from '@/lib/plex-catalog'
+import {
+  getPlexAuthRedirectBaseUrl,
+  isValidPlexAuthRedirectBaseUrl,
+  savePlexAuthRedirectBaseUrl,
+} from '@/lib/plex-auth-redirect'
 
 export const dynamic = 'force-dynamic'
 
@@ -18,7 +23,8 @@ export async function GET(req: NextRequest) {
   const autoSyncMaxAgeHours = await getCatalogAutoSyncMaxAgeHours()
   const selectedLibraryKeys = await getCatalogSelectedLibraryKeys()
   const libraryClassifications = await getCatalogLibraryClassifications()
-  return NextResponse.json({ autoSyncMaxAgeHours, selectedLibraryKeys, libraryClassifications })
+  const authRedirectBaseUrl = await getPlexAuthRedirectBaseUrl()
+  return NextResponse.json({ autoSyncMaxAgeHours, selectedLibraryKeys, libraryClassifications, authRedirectBaseUrl })
 }
 
 export async function POST(req: NextRequest) {
@@ -29,8 +35,9 @@ export async function POST(req: NextRequest) {
   const hasAutoSync = body?.autoSyncMaxAgeHours !== undefined
   const hasLibraries = body?.selectedLibraryKeys !== undefined
   const hasLibraryClasses = body?.libraryClassifications !== undefined
+  const hasAuthRedirectBaseUrl = body?.authRedirectBaseUrl !== undefined
 
-  if (!hasAutoSync && !hasLibraries && !hasLibraryClasses) {
+  if (!hasAutoSync && !hasLibraries && !hasLibraryClasses && !hasAuthRedirectBaseUrl) {
     return NextResponse.json({ error: 'No settings provided.' }, { status: 400 })
   }
 
@@ -59,5 +66,13 @@ export async function POST(req: NextRequest) {
     libraryClassifications = await saveCatalogLibraryClassifications(body.libraryClassifications)
   }
 
-  return NextResponse.json({ ok: true, autoSyncMaxAgeHours, selectedLibraryKeys, libraryClassifications })
+  let authRedirectBaseUrl = await getPlexAuthRedirectBaseUrl()
+  if (hasAuthRedirectBaseUrl) {
+    if (!isValidPlexAuthRedirectBaseUrl(body?.authRedirectBaseUrl)) {
+      return NextResponse.json({ error: 'authRedirectBaseUrl must be an absolute http(s) URL.' }, { status: 400 })
+    }
+    authRedirectBaseUrl = await savePlexAuthRedirectBaseUrl(body?.authRedirectBaseUrl)
+  }
+
+  return NextResponse.json({ ok: true, autoSyncMaxAgeHours, selectedLibraryKeys, libraryClassifications, authRedirectBaseUrl })
 }

@@ -16,6 +16,7 @@ import {
 } from '@/lib/plex-catalog'
 import { PlexClient } from '@/lib/plex-client'
 import { createPlexPin, buildPlexAuthUrl, getPlexServerDetails } from '@/lib/plex-auth'
+import { getPlexAuthRedirectBaseUrl } from '@/lib/plex-auth-redirect'
 
 export const dynamic = 'force-dynamic'
 
@@ -43,6 +44,7 @@ export async function GET(req: NextRequest) {
   const autoSyncMaxAgeHours = await getCatalogAutoSyncMaxAgeHours()
   const selectedLibraryKeys = await getCatalogSelectedLibraryKeys()
   const libraryClassifications = await getCatalogLibraryClassifications()
+  const authRedirectBaseUrl = await getPlexAuthRedirectBaseUrl()
   const mediaCatalogCount = await prisma.mediaItem.count()
   const plexServerName = plexToken && plexServerUrl
     ? await getPlexServerDetails(plexToken).then((details) => details.name).catch(() => null)
@@ -57,6 +59,7 @@ export async function GET(req: NextRequest) {
     hasServer: !!plexServerUrl,
     plexServerName,
     plexServerUrl: plexServerUrl || null,
+    authRedirectBaseUrl,
     catalogSyncRunning: isCatalogSyncRunning() || catalogStatus.syncProgress.isRunning,
     catalog: {
       itemCount: mediaCatalogCount,
@@ -78,7 +81,8 @@ export async function POST(req: NextRequest) {
 
   try {
     const pin = await createPlexPin()
-    const origin = req.headers.get('origin') ?? process.env.NEXTAUTH_URL ?? 'http://localhost:3000'
+    const overrideBaseUrl = await getPlexAuthRedirectBaseUrl()
+    const origin = overrideBaseUrl ?? req.headers.get('origin') ?? process.env.NEXTAUTH_URL ?? 'http://localhost:3000'
     const callback = new URL('/api/admin/plex/callback', origin)
     callback.searchParams.set('adminUserId', guard.session.userId)
     callback.searchParams.set('state', signAdminState(guard.session.userId))
