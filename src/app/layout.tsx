@@ -52,14 +52,14 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             <filter id="crt-barrel">
               <feTurbulence
                 type="fractalNoise"
-                baseFrequency={`${0.0005 * curvature}`}
+                baseFrequency={`${0.0007 * curvature}`}
                 numOctaves="1"
                 result="noise"
               />
               <feDisplacementMap
                 in="SourceGraphic"
                 in2="noise"
-                scale={`${curvature * 8}`}
+                scale={`${curvature * 12}`}
                 xChannelSelector="R"
                 yChannelSelector="G"
               />

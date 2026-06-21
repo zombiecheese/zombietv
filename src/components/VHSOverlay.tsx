@@ -11,9 +11,12 @@
 //   4. Chromatic fringes  — thin red/blue offset divs (mix-blend: screen)
 //   5. CRT curvature      — applied via SVG filter on the parent in layout.tsx
 
-import { useEffect, useRef } from 'react'
-import type { VHSSettings }  from '@/hooks/useVHSSettings'
+//   4. Tracking noise      — rolling horizontal bars and line shimmer
+//   5. Chromatic fringes   — thin red/blue offset divs (mix-blend)
+//   6. Ghosting            — subtle multi-pass analogue smear
+//   7. CRT curvature       — applied via SVG filter on the parent in layout.tsx
 
+import { useState } from 'react'
 interface Props {
   settings: VHSSettings
 }
@@ -27,9 +30,28 @@ export default function VHSOverlay({ settings }: Props) {
     flicker,
   } = settings
 
+    ghosting,
+    trackingNoise,
+    horizontalJitter,
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   // Draw random noise onto the canvas every 80ms (≈12fps — authentic VHS speed)
+  const [jitterPx, setJitterPx] = useState(0)
+
+  useEffect(() => {
+    if (horizontalJitter <= 0) {
+      setJitterPx(0)
+      return
+    }
+
+    const id = setInterval(() => {
+      const maxPx = Math.max(0.2, horizontalJitter * 2.2)
+      const next = (Math.random() * 2 - 1) * maxPx
+      setJitterPx(next)
+    }, 70)
+
+    return () => clearInterval(id)
+  }, [horizontalJitter])
   useEffect(() => {
     if (noise <= 0) return
     const canvas = canvasRef.current
@@ -90,13 +112,18 @@ export default function VHSOverlay({ settings }: Props) {
       overflow:      'hidden',
       animation:     flicker > 0 ? `vhs-flicker ${0.15 + (1 - flicker) * 0.15}s infinite` : 'none',
     }}>
+      transform:     horizontalJitter > 0 ? `translateX(${jitterPx.toFixed(2)}px)` : 'none',
       <style>{`
         @keyframes vhs-flicker {
           0%, 19%, 21%, 23%, 25%, 54%, 56%, 100% { opacity: 1; }
           20%, 24%, 55% { opacity: ${Math.max(0.8, 1 - flicker * 0.5)}; }
-        }
-      `}</style>
+          0%, 8%, 12%, 20%, 56%, 100% { opacity: 1; }
+          9%, 21%, 57% { opacity: ${Math.max(0.78, 1 - flicker * 0.55)}; }
 
+        @keyframes vhs-tracking-roll {
+          0% { transform: translateY(-130%); }
+          100% { transform: translateY(130%); }
+        }
       {/* 1. Scanlines */}
       {scanlines > 0 && (
         <div style={{

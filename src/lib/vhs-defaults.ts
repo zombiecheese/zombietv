@@ -8,6 +8,9 @@ export interface VHSSettings {
   vignette:            number
   crtCurvature:        number
   flicker:             number
+  ghosting:            number
+  trackingNoise:       number
+  horizontalJitter:    number
   debugOverlayEnabled: boolean
 }
 
@@ -18,5 +21,8 @@ export const DEFAULT_VHS_SETTINGS: VHSSettings = {
   vignette:            0.5,
   crtCurvature:        0.4,
   flicker:             0.3,
+  ghosting:            0.35,
+  trackingNoise:       0.25,
+  horizontalJitter:    0.2,
   debugOverlayEnabled: false,
 }

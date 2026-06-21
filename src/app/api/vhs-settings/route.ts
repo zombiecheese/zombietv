@@ -17,6 +17,9 @@ const NUMBER_VHS_KEYS = [
   'vignette',
   'crtCurvature',
   'flicker',
+  'ghosting',
+  'trackingNoise',
+  'horizontalJitter',
 ] as const
 
 const BOOLEAN_VHS_KEYS = ['debugOverlayEnabled'] as const
