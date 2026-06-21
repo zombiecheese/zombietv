@@ -1,8 +1,8 @@
 ﻿# ZombieTV
 
-> 1990s Australian Broadcast Simulator — web-based, Plex-powered, VHS-styled.
+> 1990s Broadcast Simulator — web-based, Plex-powered, Retro Stylings
 
-A multi-station broadcast simulator that recreates the feel of watching Australian free-to-air TV in the early-to-mid 1990s. All users share a single global timeline — tune in late and you join the show already in progress, just like real TV.
+A multi-station broadcast simulator that recreates the feel of watching free-to-air TV in the early-to-mid 1990s. All users share a single global timeline — tune in late and you join the show already in progress, just like real TV.
 
 See [plan.md](./plan.md) for the full project specification, architecture, and progress tracker.
 
