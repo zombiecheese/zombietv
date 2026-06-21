@@ -617,11 +617,15 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
                   {stationSlots.map((slot) => {
                     const slotStartMs  = new Date(slot.startTime).getTime()
                     const slotEndMs    = new Date(slot.endTime).getTime()
-                    const leftPx       = ((slotStartMs - startMs) / 3_600_000) * SLOT_HOUR_PX
-                    const widthPx      = Math.max(
+                    const rawLeftPx    = ((slotStartMs - startMs) / 3_600_000) * SLOT_HOUR_PX
+                    const rawWidthPx   = Math.max(
                       4,
                       ((slotEndMs - slotStartMs) / 3_600_000) * SLOT_HOUR_PX - 2,
                     )
+                    const clippedLeftPx = rawLeftPx + 1
+                    const hiddenLeftPx = Math.max(0, -clippedLeftPx)
+                    const leftPx = Math.max(0, clippedLeftPx)
+                    const widthPx = Math.max(4, rawWidthPx - hiddenLeftPx)
                     const isNow        = slotStartMs <= nowMs && slotEndMs > nowMs
                     const isPast       = slotEndMs <= nowMs
                     const isAdBreak    = slot.inAdBreak && isNow
