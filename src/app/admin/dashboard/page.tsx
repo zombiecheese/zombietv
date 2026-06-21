@@ -53,6 +53,48 @@ export default function AdminDashboard() {
   const [plexMsg, setPlexMsg] = useState('')
   const [catalogAutoSyncHours, setCatalogAutoSyncHours] = useState('72')
   const [authRedirectBaseUrl, setAuthRedirectBaseUrl] = useState('')
+  const [appName, setAppName] = useState('')
+  const [isSavingAppName, setIsSavingAppName] = useState(false)
+  const [appNameMsg, setAppNameMsg] = useState('')
+  const [schedulerHorizonDays, setSchedulerHorizonDays]       = useState('7')
+  const [schedulerIntervalHours, setSchedulerIntervalHours]   = useState('24')
+  const [isSavingSchedulerSettings, setIsSavingSchedulerSettings] = useState(false)
+  const [schedulerSettingsMsg, setSchedulerSettingsMsg]       = useState('')
+
+  const saveAppName = async () => {
+    setIsSavingAppName(true)
+    const r = await fetch('/api/app-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appName }),
+    })
+    const data = await r.json().catch(() => ({}))
+    setIsSavingAppName(false)
+    if (!r.ok) { setAppNameMsg(data?.error || 'Could not save app name.'); return }
+    setAppName(data.appName ?? appName)
+    setAppNameMsg(`App name saved: ${data.appName}`)
+  }
+
+  const saveSchedulerSettings = async () => {
+    const horizonDays     = Number(schedulerHorizonDays)
+    const intervalHours   = Number(schedulerIntervalHours)
+    if (!Number.isFinite(horizonDays) || !Number.isFinite(intervalHours)) {
+      setSchedulerSettingsMsg('Both fields must be numbers.')
+      return
+    }
+    setIsSavingSchedulerSettings(true)
+    const r = await fetch('/api/app-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ schedulerHorizonDays: horizonDays, schedulerIntervalHours: intervalHours }),
+    })
+    const data = await r.json().catch(() => ({}))
+    setIsSavingSchedulerSettings(false)
+    if (!r.ok) { setSchedulerSettingsMsg(data?.error || 'Could not save scheduler settings.'); return }
+    setSchedulerHorizonDays(String(data.schedulerHorizonDays ?? horizonDays))
+    setSchedulerIntervalHours(String(data.schedulerIntervalHours ?? intervalHours))
+    setSchedulerSettingsMsg('Scheduler settings saved. Next auto-run rescheduled.')
+  }
 
   const refreshPlexStatus = async () => {
     const data = await fetch('/api/admin/plex').then((r) => (r.ok ? r.json() : null)).catch(() => null)
@@ -80,7 +122,16 @@ export default function AdminDashboard() {
   }, [])
 
   useEffect(() => {
+    fetch('/api/app-settings').then((r) => r.ok ? r.json() : null).then((d) => { if (d?.appName) setAppName(d.appName) }).catch(() => {})
     refreshPlexStatus().catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    fetch('/api/app-settings').then((r) => r.ok ? r.json() : null).then((d) => {
+      if (!d) return
+      if (d.schedulerHorizonDays  != null) setSchedulerHorizonDays(String(d.schedulerHorizonDays))
+      if (d.schedulerIntervalHours != null) setSchedulerIntervalHours(String(d.schedulerIntervalHours))
+    }).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -240,6 +291,57 @@ export default function AdminDashboard() {
       <p style={{ color: '#4a7fb5', fontSize: '0.8rem', margin: '0 0 24px' }}>
         Select a section below to manage the broadcast system.
       </p>
+
+      {/* ── Site Identity ──────────────────────────────────────────────────── */}
+      <div style={{ ...card, marginBottom: 18 }}>
+        <div style={{ fontSize: '1.2rem', marginBottom: 8 }}>🏷️</div>
+        <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#e8f0fe', marginBottom: 6 }}>Site Identity</div>
+        <div style={{ fontSize: '0.72rem', color: '#4a7fb5', lineHeight: 1.5, marginBottom: 10 }}>
+          The app name is shown in the browser title, admin sidebar, admin login, and viewer sign-in screen.
+        </div>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 6 }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.72rem', color: '#a8c4e0', minWidth: 260, flex: 1 }}>
+            App name
+            <input
+              type="text"
+              maxLength={80}
+              placeholder="Zombie TV"
+              value={appName}
+              onChange={(e) => setAppName(e.target.value)}
+              style={numberInput}
+            />
+          </label>
+          <button onClick={saveAppName} style={secondaryBtn} disabled={isSavingAppName}>
+            {isSavingAppName ? 'SAVING...' : 'SAVE NAME'}
+          </button>
+        </div>
+        {appNameMsg && <div style={{ fontSize: '0.72rem', color: '#4caf50', marginTop: 4 }}>{appNameMsg}</div>}
+      </div>
+
+      {/* ── Scheduler Settings ──────────────────────────────────────────────── */}
+      <div style={{ ...card, marginBottom: 18 }}>
+        <div style={{ fontSize: '1.2rem', marginBottom: 8 }}>⏱️</div>
+        <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#e8f0fe', marginBottom: 6 }}>Scheduler Settings</div>
+        <div style={{ fontSize: '0.72rem', color: '#4a7fb5', lineHeight: 1.5, marginBottom: 10 }}>
+          Schedule horizon: how many days ahead to generate. Auto-run interval: how often the scheduler checks for missing days.
+        </div>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 6 }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.72rem', color: '#a8c4e0' }}>
+            Horizon (days)
+            <input type="number" min={1} max={60} step={1} value={schedulerHorizonDays}
+              onChange={(e) => setSchedulerHorizonDays(e.target.value)} style={numberInput} />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.72rem', color: '#a8c4e0' }}>
+            Auto-run interval (hours)
+            <input type="number" min={1} max={168} step={1} value={schedulerIntervalHours}
+              onChange={(e) => setSchedulerIntervalHours(e.target.value)} style={numberInput} />
+          </label>
+          <button onClick={saveSchedulerSettings} style={secondaryBtn} disabled={isSavingSchedulerSettings}>
+            {isSavingSchedulerSettings ? 'SAVING...' : 'SAVE SCHEDULER'}
+          </button>
+        </div>
+        {schedulerSettingsMsg && <div style={{ fontSize: '0.72rem', color: '#4caf50', marginTop: 4 }}>{schedulerSettingsMsg}</div>}
+      </div>
 
       <div style={{ ...card, marginBottom: 18 }}>
         <div style={{ fontSize: '1.2rem', marginBottom: 8 }}>🔐</div>

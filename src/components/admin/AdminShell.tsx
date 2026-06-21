@@ -32,6 +32,11 @@ export default function AdminShell({ children }: Props) {
   const path    = usePathname()
   const [user, setUser]       = useState<{ username: string; email: string } | null>(null)
   const [checking, setCheck]  = useState(true)
+  const [appName, setAppName] = useState('Zombie TV')
+
+  useEffect(() => {
+    fetch('/api/app-settings').then((r) => r.ok ? r.json() : null).then((d) => { if (d?.appName) setAppName(d.appName) }).catch(() => {})
+  }, [])
 
   useEffect(() => {
     fetch('/api/auth/session')
@@ -68,7 +73,7 @@ export default function AdminShell({ children }: Props) {
       <aside style={shell.sidebar}>
         <div style={shell.logo}>
           <span style={{ color: '#ff6600', fontWeight: 900, fontSize: '1.1rem', letterSpacing: '0.1em' }}>
-            ZOMBIE TV
+            {appName.toUpperCase()}
           </span>
           <span style={{ color: '#4a7fb5', fontSize: '0.55rem', letterSpacing: '0.15em', marginTop: 2 }}>
             BROADCAST MANAGEMENT

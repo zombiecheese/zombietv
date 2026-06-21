@@ -14,6 +14,11 @@ export default function Admin() {
   const [error, setError]     = useState('')
   const [loading, setLoading] = useState(false)
   const [checking, setCheck]  = useState(true)
+  const [appName, setAppName] = useState('Zombie TV')
+
+  useEffect(() => {
+    fetch('/api/app-settings').then((r) => r.ok ? r.json() : null).then((d) => { if (d?.appName) setAppName(d.appName) }).catch(() => {})
+  }, [])
 
   // If already logged in as admin, skip straight to dashboard
   useEffect(() => {
@@ -65,7 +70,7 @@ export default function Admin() {
     }}>
       <div style={{ textAlign: 'center', marginBottom: 8 }}>
         <div style={{ color: '#ff6600', fontWeight: 900, fontSize: '1.4rem', letterSpacing: '0.15em' }}>
-          ZOMBIE TV
+          {appName.toUpperCase()}
         </div>
         <div style={{ color: '#4a7fb5', fontSize: '0.65rem', letterSpacing: '0.2em', marginTop: 4 }}>
           BROADCAST MANAGEMENT PORTAL

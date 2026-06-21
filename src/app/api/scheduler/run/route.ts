@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getIronSession }            from 'iron-session'
 import { prisma } from '@/lib/db'
 import { isSchedulerRunning } from '@/lib/scheduler'
+import { getSchedulerHorizonDays } from '@/lib/app-settings'
 
 export const dynamic = 'force-dynamic'
 import { sessionOptions, SessionData } from '@/lib/session'
@@ -40,7 +41,8 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json().catch(() => ({}))
-  const horizonDays = Number(body?.horizonDays) || 14
+  const defaultHorizon = await getSchedulerHorizonDays()
+  const horizonDays = Number(body?.horizonDays) || defaultHorizon
   const stationId = String(body?.stationId ?? '').trim().toLowerCase() || null
   const forceRegenerate = body?.forceRegenerate !== false
 
@@ -75,7 +77,8 @@ export async function GET(req: NextRequest) {
   }
 
   const requestedStationId = String(req.nextUrl.searchParams.get('stationId') ?? '').trim().toLowerCase() || null
-  const requestedHorizon = Number(req.nextUrl.searchParams.get('horizonDays')) || 14
+  const defaultHorizonGet = await getSchedulerHorizonDays()
+  const requestedHorizon = Number(req.nextUrl.searchParams.get('horizonDays')) || defaultHorizonGet
   const horizonDays = Math.max(1, Math.min(365, requestedHorizon))
 
   const scopeStationId = requestedStationId

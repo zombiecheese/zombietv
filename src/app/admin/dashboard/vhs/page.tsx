@@ -22,8 +22,10 @@ export default function VHSPage() {
   const [settings, setSettings] = useState<VHSSettings>(DEFAULT_VHS_SETTINGS)
   const [saved,    setSaved]    = useState(false)
   const [msg,      setMsg]      = useState('')
+  const [appName,  setAppName]  = useState('Zombie TV')
 
   useEffect(() => {
+    fetch('/api/app-settings').then((r) => r.ok ? r.json() : null).then((d) => { if (d?.appName) setAppName(d.appName) }).catch(() => {})
     fetch('/api/vhs-settings').then(r => r.json()).then(d => setSettings({ ...DEFAULT_VHS_SETTINGS, ...d }))
   }, [])
 
@@ -87,7 +89,7 @@ export default function VHSPage() {
             letterSpacing: '0.05em',
             opacity: 0.95,
           }}>
-            ZOMBIE TV BROADCAST
+            {appName.toUpperCase()} BROADCAST
           </div>
           <div style={{
             position: 'absolute',

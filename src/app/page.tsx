@@ -28,6 +28,7 @@ export default function Home() {
   const [pendingStation, setPending]      = useState<string | null>(null)
   const [staticActive, setStaticActive]   = useState(false)
   const [checkingSession, setCheckingSession] = useState(true)
+  const [appName, setAppName] = useState('Zombie TV')
   const [session, setSession]             = useState<{
     isLoggedIn: boolean
     plexToken: string | null
@@ -39,6 +40,11 @@ export default function Home() {
   // ── Set mounted flag on client ────────────────────────────────────────────
   useEffect(() => {
     setMounted(true)
+  }, [])
+
+  // ── Fetch app name ────────────────────────────────────────────────────────
+  useEffect(() => {
+    fetch('/api/app-settings').then((r) => r.ok ? r.json() : null).then((d) => { if (d?.appName) setAppName(d.appName) }).catch(() => {})
   }, [])
 
   // ── Sync URL params to station state ──────────────────────────────────────
@@ -155,7 +161,7 @@ export default function Home() {
             boxShadow: '0 0 0 1px rgba(30,58,95,0.2), 0 20px 60px rgba(0,0,0,0.5)',
           }}>
             <div style={{ color: '#ff6600', fontWeight: 900, letterSpacing: '0.12em', fontSize: '1.5rem', marginBottom: 10 }}>
-              ZOMBIE TV
+              {appName.toUpperCase()}
             </div>
             <div style={{ color: '#4a7fb5', letterSpacing: '0.12em', fontSize: '0.72rem', marginBottom: 22 }}>
               1990s AUSTRALIAN BROADCAST SIMULATOR

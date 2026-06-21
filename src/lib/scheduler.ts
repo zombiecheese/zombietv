@@ -755,7 +755,7 @@ async function clearSchedulesForRange(params: { startDate: Date; endDate: Date; 
 }
 
 export async function runScheduler(
-  horizonDays = 14,
+  horizonDays = 7,
   stationId?: string | null,
   options?: { forceRegenerate?: boolean },
 ): Promise<void> {
@@ -1616,23 +1616,49 @@ function weightForItem(item: { year: number; genres: string[]; scheduledCount?: 
 
 // ─── Auto-scheduler via setInterval ──────────────────────────────────────────
 // Called from instrumentation.ts on server startup.
-// Runs once immediately then every 6 hours.
+// Runs once immediately, then reschedules itself after each run using the
+// current DB interval setting so changes take effect without a restart.
 
-let schedulerTimer: ReturnType<typeof setInterval> | null = null
+import {
+  getSchedulerHorizonDays,
+  getSchedulerIntervalHours,
+  DEFAULT_SCHEDULER_HORIZON_DAYS,
+  DEFAULT_SCHEDULER_INTERVAL_HOURS,
+} from './app-settings'
 
-export function startScheduler(): void {
-  if (schedulerTimer) return // already running
-  console.log('[Scheduler] Auto-scheduler started (runs every 6 hours).')
+let schedulerTimer: ReturnType<typeof setTimeout> | null = null
+let schedulerStarted = false
 
-  const run = () => {
-    runScheduler(14).catch((err) => {
+async function scheduleNextRun(): Promise<void> {
+  const intervalHours = await getSchedulerIntervalHours().catch(() => DEFAULT_SCHEDULER_INTERVAL_HOURS)
+  const intervalMs    = Math.max(60_000, intervalHours * 60 * 60 * 1000)
+  schedulerTimer = setTimeout(async () => {
+    const horizonDays = await getSchedulerHorizonDays().catch(() => DEFAULT_SCHEDULER_HORIZON_DAYS)
+    runScheduler(horizonDays).catch((err) => {
       console.error('[Scheduler] Error during auto-run:', err)
     })
-  }
+    scheduleNextRun()
+  }, intervalMs)
+  console.log(`[Scheduler] Next auto-run scheduled in ${intervalHours}h.`)
+}
 
-  // First run after a short delay to let the server fully initialise
-  setTimeout(run, 5_000)
+export function startScheduler(): void {
+  if (schedulerStarted) return
+  schedulerStarted = true
+  console.log('[Scheduler] Auto-scheduler starting.')
+  setTimeout(async () => {
+    const horizonDays = await getSchedulerHorizonDays().catch(() => DEFAULT_SCHEDULER_HORIZON_DAYS)
+    runScheduler(horizonDays).catch((err) => {
+      console.error('[Scheduler] Error during initial auto-run:', err)
+    })
+    scheduleNextRun()
+  }, 5_000)
+}
 
-  // Then every 6 hours
-  schedulerTimer = setInterval(run, 6 * 60 * 60 * 1000)
+/** Re-schedule the next auto-run immediately with current DB settings.
+ *  Call this after saving scheduler interval or horizon settings. */
+export function restartScheduler(): void {
+  if (!schedulerStarted) return
+  if (schedulerTimer) { clearTimeout(schedulerTimer); schedulerTimer = null }
+  scheduleNextRun()
 }

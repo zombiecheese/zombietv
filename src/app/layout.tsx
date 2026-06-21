@@ -3,6 +3,7 @@
 
 import { DEFAULT_VHS_SETTINGS, type VHSSettings } from '@/lib/vhs-defaults'
 import RouteVisualEffects from '@/components/RouteVisualEffects'
+import { getAppName } from '@/lib/app-settings'
 
 async function getVHSSettings(): Promise<VHSSettings> {
   try {
@@ -19,9 +20,12 @@ async function getVHSSettings(): Promise<VHSSettings> {
   }
 }
 
-export const metadata = {
-  title:       'Zombie TV — 1990s Australian Broadcast Simulator',
-  description: 'Watch 24/7 era-accurate 1990s Australian television.',
+export async function generateMetadata() {
+  const name = await getAppName()
+  return {
+    title:       `${name} — 1990s Broadcast Simulator`,
+    description: 'Watch 24/7 era-accurate 1990s television.',
+  }
 }
 
 export const viewport = {
