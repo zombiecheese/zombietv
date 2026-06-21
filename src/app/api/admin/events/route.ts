@@ -35,7 +35,9 @@ export async function POST(req: NextRequest) {
     priority, replaceSchedule, content,
   } = await req.json().catch(() => ({}))
 
-  if (!name || !type || !startTime || !durationMins) {
+  const untilContentFinished = Boolean(content?.untilContentFinished)
+
+  if (!name || !type || !startTime || (!untilContentFinished && !durationMins)) {
     return NextResponse.json(
       { error: 'name, type, startTime, and durationMins are required' },
       { status: 400 },
@@ -48,7 +50,7 @@ export async function POST(req: NextRequest) {
       type,
       stationId:      stationId      ?? null,
       startTime:      new Date(startTime),
-      durationMins:   Number(durationMins),
+      durationMins:   untilContentFinished ? 0 : Number(durationMins),
       priority:       priority        ?? 'medium',
       replaceSchedule: replaceSchedule ?? false,
       content:        toJson(content  ?? {}),

@@ -127,6 +127,17 @@ async function fetchVideoDurationMins(videoId: string, headers: Record<string, s
   return Math.max(1, Math.round(durationSeconds / 60))
 }
 
+// Public helper: resolve a single YouTube video's runtime in minutes.
+export async function getYouTubeVideoDurationMins(videoId: string): Promise<number | null> {
+  const id = String(videoId ?? '').trim()
+  if (!/^[A-Za-z0-9_-]{11}$/.test(id)) return null
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (compatible; ZombieTV/1.0)',
+    Accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
+  }
+  return fetchVideoDurationMins(id, headers).catch(() => null)
+}
+
 function mergePlaylistImports(
   feedParsed: Omit<YouTubePlaylistImport, 'playlistId'> | null,
   pageParsed: Omit<YouTubePlaylistImport, 'playlistId'> | null,

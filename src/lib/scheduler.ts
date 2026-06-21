@@ -13,7 +13,7 @@
 import { prisma }                        from './db'
 import { getHolidayForDate, loadHolidaySettings }             from './holidays'
 import { PlexClient, type PlexMediaItem }                    from './plex-client'
-import { syncPlexCatalog, shouldSyncCatalog, getCatalogAutoSyncMaxAgeHours, getCatalogCandidates, getCatalogEpisode, getCatalogEpisodeList, applyRatingCeiling, getBlockedPlexKeys, getHolidayTagMap } from './plex-catalog'
+import { syncPlexCatalog, shouldSyncCatalog, getCatalogAutoSyncMaxAgeHours, getCatalogCandidates, getCatalogEpisode, getCatalogEpisodeList, applyRatingCeiling, getBlockedPlexKeys, getHolidayTagMap, getActiveClassByPlexKey } from './plex-catalog'
 import { toJson, fromJsonObject }        from './json'
 import { addDays, startOfDay, getDay, differenceInMinutes, addMinutes, differenceInCalendarDays } from 'date-fns'
 
@@ -57,6 +57,26 @@ interface EffectiveStationBlock {
   startMins: number
   endMins: number
   contentType: TimeBlock['contentType']
+  allowGenres?: string[]
+  allowLanguages?: string[]
+  fillerOnly?: boolean
+  libraryWeights?: Record<string, number>
+  openVideoId?: string
+  closeVideoId?: string
+}
+
+interface SlotConfigSpec {
+  key: string
+  name: string
+  start: string
+  end: string
+  enabled?: boolean
+  fillerOnly?: boolean
+  libraryWeights?: { tv_shows?: number; movies?: number; animation?: number; fitness?: number }
+  allowGenres?: string[]
+  allowLanguages?: string[]
+  openVideo?: { enabled?: boolean; videoId?: string }
+  closeVideo?: { enabled?: boolean; videoId?: string }
 }
 
 
@@ -218,6 +238,35 @@ function resolveStationTimeBlocks(
   stationDate: Date,
   rawRules: Record<string, unknown>,
 ): EffectiveStationBlock[] {
+  // Preferred: DB-backed weekday/weekend slot_config from the Station Rules editor.
+  const slotConfig = (rawRules.slot_config ?? null) as { weekday?: SlotConfigSpec[]; weekend?: SlotConfigSpec[] } | null
+  if (slotConfig && (Array.isArray(slotConfig.weekday) || Array.isArray(slotConfig.weekend))) {
+    const isWeekend = [0, 6].includes(getDay(stationDate))
+    const list = isWeekend ? slotConfig.weekend : slotConfig.weekday
+    const slots = Array.isArray(list) ? list : []
+    const out: EffectiveStationBlock[] = []
+    for (const slot of slots) {
+      if (slot?.enabled === false) continue
+      const startMins = slot.start === 'first' ? 0 : (parseClockToMinutes(slot.start) ?? 0)
+      const endMins = slot.end === 'until_finished' ? 24 * 60 : (parseClockToMinutes(slot.end) ?? 24 * 60)
+      out.push({
+        name: slot.name,
+        day: '*',
+        startMins,
+        endMins,
+        contentType: slotContentType(slot),
+        allowGenres: Array.isArray(slot.allowGenres) && slot.allowGenres.length ? slot.allowGenres : undefined,
+        allowLanguages: Array.isArray(slot.allowLanguages) && slot.allowLanguages.length ? slot.allowLanguages : undefined,
+        fillerOnly: Boolean(slot.fillerOnly),
+        libraryWeights: slot.libraryWeights as Record<string, number> | undefined,
+        openVideoId: slot.openVideo?.enabled && slot.openVideo.videoId ? String(slot.openVideo.videoId).trim() : undefined,
+        closeVideoId: slot.closeVideo?.enabled && slot.closeVideo.videoId ? String(slot.closeVideo.videoId).trim() : undefined,
+      })
+    }
+    if (out.length) return out
+  }
+
+  // Legacy fallback: inline time_blocks on the station rules.
   const inlineBlocks = Array.isArray(rawRules.time_blocks)
     ? (rawRules.time_blocks as StationTimeBlockSpec[])
     : []
@@ -245,6 +294,19 @@ function resolveStationTimeBlocks(
   }
 
   return out
+}
+
+function slotContentType(slot: SlotConfigSpec): TimeBlock['contentType'] {
+  if (slot.fillerOnly) return 'filler'
+  const key = String(slot.key || '').toLowerCase()
+  if (key.includes('news')) return 'news'
+  const w = slot.libraryWeights ?? {}
+  const movies = Number(w.movies ?? 0)
+  const episodic = Number(w.tv_shows ?? 0) + Number(w.animation ?? 0) + Number(w.fitness ?? 0)
+  if (movies > 0 && movies >= episodic) return 'movie'
+  if (episodic > 0) return 'episode'
+  if (key.includes('movie')) return 'movie'
+  return 'mixed'
 }
 
 function timeIsInRange(minOfDay: number, startMins: number, endMins: number): boolean {
@@ -276,7 +338,88 @@ function getContentTypeForSlot(
   }
 
   matches.sort((a, b) => spanMins(a) - spanMins(b))
-  return normalizeType(matches[0]?.contentType ?? baseType)
+  const best = matches[0]
+  // A filler-only slot must broadcast filler content, so let 'filler' pass through.
+  if (best?.fillerOnly || best?.contentType === 'filler') return 'filler'
+  return normalizeType(best?.contentType ?? baseType)
+}
+
+// Returns the narrowest station slot whose window contains the given time, or null.
+function getMatchingStationBlock(
+  slotStart: Date,
+  stationBlocks: EffectiveStationBlock[],
+): EffectiveStationBlock | null {
+  if (!stationBlocks.length) return null
+  const mins = slotStart.getHours() * 60 + slotStart.getMinutes()
+  const matches = stationBlocks.filter((block) => timeIsInRange(mins, block.startMins, block.endMins))
+  if (!matches.length) return null
+  const spanMins = (block: EffectiveStationBlock) => {
+    if (block.startMins === block.endMins) return 24 * 60
+    if (block.startMins < block.endMins) return block.endMins - block.startMins
+    return 24 * 60 - block.startMins + block.endMins
+  }
+  matches.sort((a, b) => spanMins(a) - spanMins(b))
+  return matches[0] ?? null
+}
+
+// Apply a slot's per-slot allow-genres / allow-languages to a candidate pool.
+// Empty lists mean "any" (no filter). Falls back to the original pool when the
+// filter would leave nothing, so a strict slot never starves the whole day.
+function filterCandidatesBySlot(
+  items: PlexMediaItem[],
+  block: EffectiveStationBlock | null,
+  classByKey: Record<string, string>,
+): PlexMediaItem[] {
+  if (!block) return items
+  const allowGenres = (block.allowGenres ?? []).map((g) => g.toLowerCase()).filter(Boolean)
+  const allowLanguages = (block.allowLanguages ?? []).map((l) => l.toLowerCase()).filter(Boolean)
+  const weights = block.libraryWeights
+  const excludeZeroWeight = !!weights && Object.values(weights).some((w) => Number(w) > 0)
+  if (!allowGenres.length && !allowLanguages.length && !excludeZeroWeight) return items
+
+  const filtered = items.filter((item) => {
+    const genres = (item.genres ?? []).map((g) => String(g).toLowerCase())
+    const languages = (item.languages ?? []).map((l) => String(l).toLowerCase())
+    if (allowGenres.length && !allowGenres.some((g) => genres.includes(g))) return false
+    if (allowLanguages.length && !allowLanguages.some((l) => languages.includes(l))) return false
+    if (excludeZeroWeight) {
+      const cls = classByKey[item.ratingKey]
+      if (cls && Number((weights as Record<string, number>)[cls] ?? 1) <= 0) return false
+    }
+    return true
+  })
+  return filtered.length ? filtered : items
+}
+
+// Multiplier applied to a candidate's selection weight based on the slot's
+// per-library weights and the item's catalog library class.
+function slotLibraryMultiplier(
+  item: PlexMediaItem,
+  weights: Record<string, number> | undefined,
+  classByKey: Record<string, string>,
+): number {
+  if (!weights) return 1
+  const cls = classByKey[item.ratingKey]
+  if (!cls) return 1
+  const w = Number(weights[cls] ?? 1)
+  if (!Number.isFinite(w)) return 1
+  return Math.max(0, w)
+}
+
+// Returns once-per-window bumper metadata (opening/closing short idents).
+// Bumpers are never their own slot — they ride on the window's first program.
+function bumperMetaForWindow(
+  block: EffectiveStationBlock | null,
+  assigned: Set<string>,
+): Record<string, string> {
+  if (!block) return {}
+  const key = `${block.name}:${block.startMins}`
+  if (assigned.has(key)) return {}
+  const meta: Record<string, string> = {}
+  if (block.openVideoId) meta.openBumperId = block.openVideoId
+  if (block.closeVideoId) meta.closeBumperId = block.closeVideoId
+  if (Object.keys(meta).length) assigned.add(key)
+  return meta
 }
 
 function getGenreHintsForBlockName(blockName: string): string[] {
@@ -466,6 +609,7 @@ function pickMovieCandidate(
   block: TimeBlock,
   remainingMins: number,
   dayTitleCounts: Map<string, number>,
+  libMultiplier: (item: PlexMediaItem) => number = () => 1,
 ): PlexMediaItem | null {
   const tolerances = [15, 30, 45, 60]
   const pool = tolerances
@@ -481,7 +625,7 @@ function pickMovieCandidate(
 
       return {
         item: movie,
-        weight: Math.max(0.05, weightForItem(movie, block) * repeatPenalty * fitBonus),
+        weight: Math.max(0.05, weightForItem(movie, block) * repeatPenalty * fitBonus * libMultiplier(movie)),
       }
     }),
   )
@@ -491,6 +635,7 @@ function buildWeightedShowPool(
   shows: PlexMediaItem[],
   block: TimeBlock,
   daySeriesCounts: Map<string, number>,
+  libMultiplier: (item: PlexMediaItem) => number = () => 1,
 ) {
   return shows.map((show) => {
     const seriesKey = show.title.toLowerCase()
@@ -498,7 +643,7 @@ function buildWeightedShowPool(
 
     return {
       item: show,
-      weight: Math.max(0.05, weightForItem(show, block) * repeatPenalty),
+      weight: Math.max(0.05, weightForItem(show, block) * repeatPenalty * libMultiplier(show)),
     }
   })
 }
@@ -690,6 +835,7 @@ export async function runScheduler(
   const holidayTagMap = await getHolidayTagMap()
   const holidaySettings = await loadHolidaySettings()
   const showOwnership = await buildShowOwnershipMap()
+  const activeClassByPlexKey = await getActiveClassByPlexKey()
   const overrideYears = new Set<number>()
   for (let dayOffset = 0; dayOffset < horizonDays; dayOffset++) {
     overrideYears.add(startOfDay(addDays(today, dayOffset)).getFullYear())
@@ -817,6 +963,77 @@ export async function runScheduler(
       const dayTitleCounts = new Map<string, number>()
       const daySeriesCounts = new Map<string, number>()
       const dayEpisodeKeys = new Set<string>()
+      const windowBumperAssigned = new Set<string>()
+
+      // ── Special event injection (overrides normal + holiday scheduling) ──
+      // Priority: SpecialEvent (high → low) > Holiday override > normal blocks.
+      // Reserved windows are skipped by the normal block loop below, and the
+      // event slot's later start time also wins at playback time.
+      const reservedIntervals: Array<{ start: number; end: number }> = []
+      const dayStartMs = startOfDay(date).getTime()
+      const dayEndMs = addDays(startOfDay(date), 1).getTime()
+      const dayEvents = await prisma.specialEvent.findMany({
+        where: {
+          startTime: { gte: new Date(dayStartMs), lt: new Date(dayEndMs) },
+          OR: [{ stationId: null }, { stationId: station.id }],
+        },
+      })
+      const eventPriorityRank = (p: string) => (p === 'high' ? 0 : p === 'medium' ? 1 : 2)
+      dayEvents.sort((a, b) =>
+        eventPriorityRank(a.priority) - eventPriorityRank(b.priority)
+        || a.startTime.getTime() - b.startTime.getTime(),
+      )
+
+      for (const ev of dayEvents) {
+        let evContent: { source?: string; id?: string; untilContentFinished?: boolean } = {}
+        try { evContent = JSON.parse(ev.content) } catch { evContent = {} }
+        const evSource = String(evContent.source ?? '').toLowerCase()
+        const evContentId = String(evContent.id ?? '').trim()
+        if (!evContentId) continue
+
+        const startMs = ev.startTime.getTime()
+        if (startMs < dayStartMs || startMs >= dayEndMs) continue
+
+        let durationMins = ev.durationMins > 0 ? ev.durationMins : 0
+        let eventMediaItemId: string | null = null
+        if (evSource === 'plex') {
+          const mi = await prisma.mediaItem
+            .findUnique({ where: { plexKey: evContentId }, select: { id: true, durationMins: true } })
+            .catch(() => null)
+          if (mi) {
+            eventMediaItemId = mi.id
+            if (evContent.untilContentFinished || durationMins <= 0) durationMins = mi.durationMins
+          }
+        }
+        if (durationMins <= 0) durationMins = 60 // fallback for YouTube / unknown length
+
+        const endMs = startMs + durationMins * 60_000
+        // Skip if it overlaps an already-reserved (higher priority) window.
+        if (reservedIntervals.some((r) => startMs < r.end && endMs > r.start)) continue
+
+        const eventAdBreaks = buildAdBreaks(durationMins, evSource === 'plex' ? adIntervalMovie : adIntervalTv, adEnabled)
+        const eventSlot = await prisma.slot.create({
+          data: {
+            scheduleId:     schedule.id,
+            startTime:      new Date(startMs),
+            durationMins,
+            contentSource:  evSource === 'plex' ? 'plex' : 'youtube',
+            contentId:      evSource === 'plex' ? evContentId : null,
+            adBreaks:       eventAdBreaks.length ? toJson(eventAdBreaks) : null,
+            fillerId:       evSource === 'plex' ? null : evContentId,
+            fillerDuration: null,
+            isOverride:     true,
+            overrideReason: 'special_event',
+            metadata:       toJson({ blockName: ev.name, title: ev.name, reason: 'special_event', priority: ev.priority, untilContentFinished: Boolean(evContent.untilContentFinished) }),
+          },
+        })
+        if (eventMediaItemId) {
+          await prisma.slotMediaItem
+            .create({ data: { slotId: eventSlot.id, mediaItemId: eventMediaItemId, orderIndex: 0 } })
+            .catch(() => null)
+        }
+        reservedIntervals.push({ start: startMs, end: endMs })
+      }
 
       // Build slots for the day
       let cursor = new Date(date)
@@ -861,6 +1078,26 @@ export async function runScheduler(
         while (differenceInMinutes(blockEnd, slotStart) >= 30) {
           const remainingMins = differenceInMinutes(blockEnd, slotStart)
           const effectiveContentType = getContentTypeForSlot(slotStart, block.contentType, stationBlocks)
+
+          // Skip any window reserved by a special event — it is already booked.
+          const reservedHit = reservedIntervals.find((r) => {
+            const t = slotStart.getTime()
+            return t >= r.start && t < r.end
+          })
+          if (reservedHit) {
+            slotStart = new Date(reservedHit.end)
+            failedPlacementsAtCurrentStart = 0
+            continue
+          }
+
+          // Per-slot allow-genres / allow-languages from the Station Rules editor.
+          // Holiday content override takes precedence, so slot filtering is skipped then.
+          const activeStationSlot = getMatchingStationBlock(slotStart, stationBlocks)
+          const applySlotFilter = !holidayContentOverride && !!activeStationSlot
+          const slotMovies = applySlotFilter ? filterCandidatesBySlot(validMovies, activeStationSlot, activeClassByPlexKey) : validMovies
+          const slotShows  = applySlotFilter ? filterCandidatesBySlot(validShows, activeStationSlot, activeClassByPlexKey) : validShows
+          const slotLibWeights = applySlotFilter ? activeStationSlot?.libraryWeights : undefined
+          const libMultiplier = (item: PlexMediaItem) => slotLibraryMultiplier(item, slotLibWeights, activeClassByPlexKey)
 
           if (failedPlacementsAtCurrentStart >= 6) {
             const fallbackDuration = Math.min(30, remainingMins)
@@ -946,19 +1183,20 @@ export async function runScheduler(
           const tryMovieBlock = effectiveContentType === 'movie'
             || (effectiveContentType === 'mixed' && shouldTryMovieInMixedBlock({
               remainingMins,
-              validMovies: validMovies.length,
-              validShows: validShows.length,
+              validMovies: slotMovies.length,
+              validShows: slotShows.length,
               daySeriesCounts,
             }))
 
-          if (tryMovieBlock && validMovies.length) {
-            const chosen = pickMovieCandidate(validMovies, block, remainingMins, dayTitleCounts)
+          if (tryMovieBlock && slotMovies.length) {
+            const chosen = pickMovieCandidate(slotMovies, block, remainingMins, dayTitleCounts, libMultiplier)
             if (!chosen) {
               failedPlacementsAtCurrentStart += 1
               continue
             }
             const adBreaks = buildAdBreaks(chosen.durationMins, adIntervalMovie, adEnabled)
-            const slotEnd  = addMinutes(slotStart, chosen.durationMins)
+            const adMins   = adBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
+            const slotEnd  = addMinutes(slotStart, chosen.durationMins + adMins)
             const alignedEnd = alignEndTime(slotEnd)
             const fillerMins = differenceInMinutes(alignedEnd, slotEnd)
 
@@ -975,7 +1213,7 @@ export async function runScheduler(
                 adBreaks:      adBreaks.length ? toJson(adBreaks) : null,
                 fillerId:      fillerMins > 0 ? (fillerPools.ads ?? fillerPools.music ?? null) : null,
                 fillerDuration: fillerMins > 0 ? fillerMins : null,
-                metadata:      toJson({ blockName: block.name, title: chosen.title, year: chosen.year }),
+                metadata:      toJson({ blockName: block.name, title: chosen.title, year: chosen.year, ...bumperMetaForWindow(activeStationSlot, windowBumperAssigned) }),
               },
             })
             await prisma.slotMediaItem.create({
@@ -996,7 +1234,7 @@ export async function runScheduler(
           // ── EPISODE block ──
           if (
             (effectiveContentType === 'episode' || effectiveContentType === 'mixed') &&
-            validShows.length
+            slotShows.length
           ) {
             // Check ShowProgress for a pinned show at this weekday + time
             const weekday = getDay(slotStart)
@@ -1026,7 +1264,7 @@ export async function runScheduler(
 
             // If no pinned show, pick one from valid shows and create a progress record
             if (!progress) {
-              const weightedShows = buildWeightedShowPool(validShows, block, daySeriesCounts)
+              const weightedShows = buildWeightedShowPool(slotShows, block, daySeriesCounts, libMultiplier)
               const remainingShows = [...weightedShows]
 
               while (remainingShows.length && !progress) {
@@ -1105,7 +1343,8 @@ export async function runScheduler(
                 }
 
                 const adBreaks   = buildAdBreaks(episode.durationMins, adIntervalTv, adEnabled)
-                const slotEnd    = addMinutes(slotStart, episode.durationMins)
+                const adMins     = adBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
+                const slotEnd    = addMinutes(slotStart, episode.durationMins + adMins)
                 const alignedEnd = alignEndTime(slotEnd)
                 const fillerMins = differenceInMinutes(alignedEnd, slotEnd)
 
@@ -1128,6 +1367,7 @@ export async function runScheduler(
                           showTitle: episode.showTitle ?? progress.showTitle,
                           season:    episode.seasonNumber,
                           episode:   episode.episodeNumber,
+                          ...bumperMetaForWindow(activeStationSlot, windowBumperAssigned),
                         }),
                   },
                 })

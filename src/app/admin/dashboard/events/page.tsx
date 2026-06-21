@@ -13,7 +13,7 @@ interface Event { id: string; name: string; type: string; stationId: string | nu
 export default function EventsPage() {
   const [events, setEvents] = useState<Event[]>([])
   const [stations, setStations] = useState<StationOption[]>([{ id: 'stn', name: 'STN' }, { id: 'zbc', name: 'ZBC' }, { id: 'nnwk', name: 'NNWK' }, { id: 'seven', name: '7' }, { id: 'nine', name: '9' }, { id: 'ten', name: '10' }])
-  const [form,   setForm]   = useState({ name: '', type: 'custom', stationId: '', startTime: '', durationMins: 60, priority: 'medium', replaceSchedule: false, contentSource: 'youtube', contentId: '', description: '' })
+  const [form,   setForm]   = useState({ name: '', type: 'custom', stationId: '', startTime: '', durationMode: 'preset', durationMins: 60, priority: 'medium', replaceSchedule: false, contentSource: 'youtube', contentId: '', description: '' })
   const [msg,    setMsg]    = useState('')
 
   const load = () => fetch('/api/admin/events').then(r => r.json()).then(setEvents)
@@ -30,16 +30,17 @@ export default function EventsPage() {
 
   const save = async () => {
     if (!form.name || !form.startTime) { setMsg('Name and start time required.'); return }
+    const untilContentFinished = form.durationMode === 'until_finished'
     const r = await fetch('/api/admin/events', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         name: form.name, type: form.type,
         stationId: form.stationId || null,
         startTime: new Date(form.startTime).toISOString(),
-        durationMins: Number(form.durationMins),
+        durationMins: untilContentFinished ? 0 : Number(form.durationMins),
         priority: form.priority,
         replaceSchedule: form.replaceSchedule,
-        content: { source: form.contentSource, id: form.contentId, description: form.description },
+        content: { source: form.contentSource, id: form.contentId, description: form.description, untilContentFinished },
       }),
     })
     setMsg(r.ok ? '✓ Event created.' : '✗ Failed.')
@@ -64,7 +65,10 @@ export default function EventsPage() {
           <Fld label="Type"><select value={form.type} onChange={e => setForm({...form, type: e.target.value})} style={sel}>{TYPES.map(t => <option key={t} value={t}>{t}</option>)}</select></Fld>
           <Fld label="Station"><select value={form.stationId} onChange={e => setForm({...form, stationId: e.target.value})} style={sel}><option value="">(all)</option>{stations.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></Fld>
           <Fld label="Start time (local)"><input type="datetime-local" value={form.startTime} onChange={e => setForm({...form, startTime: e.target.value})} style={inp} /></Fld>
-          <Fld label="Duration (mins)"><input type="number" value={form.durationMins} onChange={e => setForm({...form, durationMins: Number(e.target.value)})} style={inp} /></Fld>
+          <Fld label="Duration mode"><select value={form.durationMode} onChange={e => setForm({...form, durationMode: e.target.value})} style={sel}><option value="preset">Preset duration</option><option value="until_finished">Until content finished</option></select></Fld>
+          {form.durationMode === 'preset' && (
+            <Fld label="Duration (mins)"><input type="number" value={form.durationMins} onChange={e => setForm({...form, durationMins: Number(e.target.value)})} style={inp} /></Fld>
+          )}
           <Fld label="Priority"><select value={form.priority} onChange={e => setForm({...form, priority: e.target.value})} style={sel}>{PRIOS.map(p => <option key={p} value={p}>{p}</option>)}</select></Fld>
           <Fld label="Content source"><select value={form.contentSource} onChange={e => setForm({...form, contentSource: e.target.value})} style={sel}><option value="youtube">YouTube</option><option value="plex">Plex</option></select></Fld>
           <Fld label="Content ID"><input value={form.contentId} onChange={e => setForm({...form, contentId: e.target.value})} style={inp} placeholder="Video/Playlist/Plex key" /></Fld>
@@ -91,7 +95,7 @@ export default function EventsPage() {
                 <td style={td}><span style={{ backgroundColor: '#1a3a6e', padding: '2px 6px', fontSize: '0.65rem' }}>{ev.type}</span></td>
                 <td style={td}>{ev.stationId ?? 'All'}</td>
                 <td style={td}>{new Date(ev.startTime).toLocaleString('en-AU',{dateStyle:'short',timeStyle:'short'})}</td>
-                <td style={td}>{ev.durationMins}m</td>
+                <td style={td}>{ev.content?.untilContentFinished ? 'Until finished' : `${ev.durationMins}m`}</td>
                 <td style={td}><span style={{ color: ev.priority === 'high' ? '#ff4444' : ev.priority === 'medium' ? '#ff6600' : '#4a7fb5' }}>{ev.priority}</span></td>
                 <td style={td}>{ev.replaceSchedule ? '✓' : '—'}</td>
                 <td style={td}><button onClick={() => remove(ev.id)} style={{ ...btn, padding: '3px 10px', fontSize: '0.65rem', backgroundColor: '#3d0000' }}>Delete</button></td>

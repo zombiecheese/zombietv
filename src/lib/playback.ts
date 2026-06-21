@@ -155,7 +155,9 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
   // ── Find the active slot ────────────────────────────────────────────────
   const activeSlot = allSlots.reduce<typeof allSlots[number] | null>((latest, slot) => {
     const slotStart = slot.startTime.getTime()
-    const slotEnd = slotStart + slot.durationMins * 60_000
+    // Ad breaks add to the programme's wall-clock runtime.
+    const slotAdMins = fromJsonArray<AdBreakDef>(slot.adBreaks).reduce((sum, ab) => sum + (ab.durationMins || 0), 0)
+    const slotEnd = slotStart + (slot.durationMins + slotAdMins) * 60_000
 
     // Also account for filler that extends the slot
     const effectiveEnd = slot.fillerDuration
@@ -170,25 +172,68 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
   if (!activeSlot) return offline
 
   const slotStartMs    = activeSlot.startTime.getTime()
-  const contentEndMs   = slotStartMs + activeSlot.durationMins * 60_000
+  const elapsedMs      = now - slotStartMs
+
+  // ── Calculate ad breaks (ads add to wall-clock runtime) ───────────────────
+  const adBreakDefs: AdBreakDef[] = fromJsonArray<AdBreakDef>(activeSlot.adBreaks)
+
+  // Pre-fetch the ad-eligible pool once so each ad break can extend its end to
+  // the completion of the last ad video — ads always play to the end before the
+  // main programme resumes.
+  const adPool = adBreakDefs.length
+    ? (await prisma.youtubeContent.findMany({
+        where: {
+          category: { in: ['ads', 'filler', 'music'] },
+          OR: [{ station: null }, { station: stationId }],
+        },
+        select: { videoId: true, durationMins: true },
+      })).filter((item): item is { videoId: string; durationMins: number | null } => Boolean(item.videoId))
+    : []
+
+  // For a given ad break, return the absolute time at which the last ad video
+  // that covers its nominal window finishes (>= the nominal end time).
+  function adBreakEffectiveEnd(startsAtMs: number, nominalDurationMins: number): number {
+    const nominalEnd = startsAtMs + nominalDurationMins * 60_000
+    if (!adPool.length) return nominalEnd
+    const ordered = seededShuffle(adPool, `${stationId}:${slotStartMs}:${startsAtMs}:ad`)
+    let cursorMs = startsAtMs
+    const nominalMs = nominalDurationMins * 60_000
+    let coveredMs = 0
+    for (const item of ordered) {
+      const durMs = Math.max(1, item.durationMins ?? 3) * 60_000
+      cursorMs += durMs
+      coveredMs += durMs
+      if (coveredMs >= nominalMs) break
+    }
+    return Math.max(nominalEnd, cursorMs)
+  }
+
+  // Ad breaks are positioned in wall-clock time: each break's content-relative
+  // offset is shifted by the total ad time that has already played before it.
+  // Ad time therefore LENGTHENS the programme rather than overwriting content.
+  let cumulativeAdMs = 0
+  const adBreaksAbsolute = adBreakDefs.map((ab) => {
+    const startsAtMs = slotStartMs + ab.offsetMins * 60_000 + cumulativeAdMs
+    const endsAtMs   = adBreakEffectiveEnd(startsAtMs, ab.durationMins)
+    const effDurMs   = endsAtMs - startsAtMs
+    cumulativeAdMs += effDurMs
+    return {
+      startsAtMs,
+      endsAtMs,
+      durationMins: effDurMs / 60_000,
+    }
+  })
+  const totalAdMs = cumulativeAdMs
+
+  // Content wall-end includes the ad time so the full programme plays out.
+  const contentEndMs   = slotStartMs + activeSlot.durationMins * 60_000 + totalAdMs
   const fillerEndMs    = activeSlot.fillerDuration
     ? contentEndMs + activeSlot.fillerDuration * 60_000
     : contentEndMs
   const slotEndMs      = fillerEndMs
-  const elapsedMs      = now - slotStartMs
 
   // ── Are we in the filler zone? ──────────────────────────────────────────
   const inFiller = now >= contentEndMs && now < fillerEndMs
-
-  // ── Calculate ad breaks ──────────────────────────────────────────────────
-  const adBreakDefs: AdBreakDef[] = fromJsonArray<AdBreakDef>(activeSlot.adBreaks)
-
-  // Absolute UTC timestamps for each ad break
-  const adBreaksAbsolute = adBreakDefs.map((ab) => ({
-    startsAtMs:   slotStartMs + ab.offsetMins * 60_000,
-    endsAtMs:     slotStartMs + ab.offsetMins * 60_000 + ab.durationMins * 60_000,
-    durationMins: ab.durationMins,
-  }))
 
   // Current ad break
   const currentAdBreak = adBreaksAbsolute.find(
@@ -319,8 +364,8 @@ async function selectYoutubeSelection(params: {
 
   const seed = `${stationId}:${slotStartMs}:${segmentStartMs}:${inAdBreak ? 'ad' : inFiller ? 'filler' : 'youtube'}`
   const selectorCategories = inAdBreak
-    ? ['ads', 'bumpers', 'music']
-    : ['music', 'bumpers', 'ads']
+    ? ['ads', 'filler', 'music']
+    : ['music', 'filler', 'ads']
 
   const candidates = await prisma.youtubeContent.findMany({
     where: {

@@ -1004,7 +1004,7 @@ export async function listHolidayTaggedItems(holidayName: string): Promise<Catal
   }))
 }
 
-async function getActiveClassByPlexKey(): Promise<Record<string, LibraryClass>> {
+export async function getActiveClassByPlexKey(): Promise<Record<string, LibraryClass>> {
   const pref = await prisma.adminPreference.findUnique({
     where: {
       stationId_settingKey: {

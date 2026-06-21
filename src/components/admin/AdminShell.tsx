@@ -13,7 +13,7 @@ import { usePathname, useRouter } from 'next/navigation'
 
 const NAV = [
   { href: '/admin/dashboard',          label: 'Overview',        icon: '📊' },
-  { href: '/admin/dashboard/youtube',  label: 'YouTube Pool',    icon: '▶️'  },
+  { href: '/admin/dashboard/youtube',  label: 'Filler Content',  icon: '▶️'  },
   { href: '/admin/dashboard/holidays', label: 'Holiday Overrides', icon: '🎄' },
   { href: '/admin/dashboard/events',   label: 'Special Events',  icon: '⚡' },
   { href: '/admin/dashboard/catalog',  label: 'Plex Catalog',    icon: '🎞️' },

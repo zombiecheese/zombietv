@@ -3,11 +3,34 @@
 import { useState, useEffect, useCallback } from 'react'
 import AdminShell from '@/components/admin/AdminShell'
 
+interface SlotVideo { enabled: boolean; videoId: string }
+interface SlotLibraryWeights { tv_shows: number; movies: number; animation: number; fitness: number }
+interface SlotConfig {
+  key: string
+  name: string
+  start: string   // 'HH:MM' or 'first'
+  end: string     // 'HH:MM' or 'until_finished'
+  enabled: boolean
+  fillerOnly: boolean
+  openVideo: SlotVideo
+  closeVideo: SlotVideo
+  libraryWeights: SlotLibraryWeights
+  allowGenres: string[]      // empty = any
+  allowLanguages: string[]   // empty = any
+}
+type DayType = 'weekday' | 'weekend'
+interface StationRules {
+  ad_policy: { enabled: boolean; break_interval_tv: number; break_interval_movie: number }
+  slot_config?: { weekday: SlotConfig[]; weekend: SlotConfig[] }
+  // legacy fields are preserved untouched by this editor
+  allow_genres?: string; deny_genres?: string; allow_languages?: string; deny_languages?: string
+  time_blocks?: unknown
+}
 interface StationData {
   id: string; name: string
-  rules: { allow_genres: string; deny_genres: string; allow_languages: string; deny_languages: string; ad_policy: { enabled: boolean; break_interval_tv: number; break_interval_movie: number } }
-  fillerPools: { ads: string | null; music: string | null; bumpers: string | null }
-  holidayOverrides: Record<string, { replace_schedule: boolean; ad_free: boolean; content_priority: string[] }>
+  rules: StationRules
+  fillerPools?: { ads: string | null; music: string | null; bumpers: string | null }
+  holidayOverrides?: Record<string, unknown>
   branding: { colour_theme: string; logo: string }
 }
 
@@ -23,10 +46,58 @@ interface CatalogOptionsResponse {
 
 const BASE_STATION_IDS = new Set(['stn', 'zbc', 'nnwk', 'seven', 'nine', 'ten'])
 
+const SLOT_TEMPLATE: Array<{ key: string; name: string; start: string; end: string }> = [
+  { key: 'overnight',    name: 'Overnight',        start: 'first', end: '07:00' },
+  { key: 'morning',      name: 'Morning',          start: '07:00', end: '09:00' },
+  { key: 'late_morning', name: 'Late Morning',     start: '09:00', end: '12:00' },
+  { key: 'midday',       name: 'Midday',           start: '12:00', end: '15:00' },
+  { key: 'afternoon',    name: 'Afternoon',        start: '15:00', end: '17:00' },
+  { key: 'evening_news', name: 'Evening News',     start: '17:00', end: '18:30' },
+  { key: 'event_tv',     name: 'Event TV',         start: '18:30', end: '20:30' },
+  { key: 'movie',        name: 'Movie',            start: '20:30', end: '23:00' },
+  { key: 'late_movie',   name: 'Late Night Movie', start: '23:00', end: 'until_finished' },
+]
+
+function defaultSlot(t: { key: string; name: string; start: string; end: string }): SlotConfig {
+  return {
+    key: t.key, name: t.name, start: t.start, end: t.end,
+    enabled: true, fillerOnly: false,
+    openVideo: { enabled: false, videoId: '' },
+    closeVideo: { enabled: false, videoId: '' },
+    libraryWeights: { tv_shows: 1, movies: 1, animation: 0, fitness: 0 },
+    allowGenres: [], allowLanguages: [],
+  }
+}
+
+function mergeSlots(saved: unknown): SlotConfig[] {
+  const arr = Array.isArray(saved) ? (saved as Partial<SlotConfig>[]) : []
+  return SLOT_TEMPLATE.map((t) => {
+    const found = arr.find((s) => s?.key === t.key)
+    const base = defaultSlot(t)
+    if (!found) return base
+    return {
+      ...base,
+      ...found,
+      key: t.key, name: t.name, start: t.start, end: t.end,
+      openVideo: { ...base.openVideo, ...(found.openVideo ?? {}) },
+      closeVideo: { ...base.closeVideo, ...(found.closeVideo ?? {}) },
+      libraryWeights: { ...base.libraryWeights, ...(found.libraryWeights ?? {}) },
+      allowGenres: Array.isArray(found.allowGenres) ? found.allowGenres : [],
+      allowLanguages: Array.isArray(found.allowLanguages) ? found.allowLanguages : [],
+    }
+  })
+}
+
+function ensureSlotConfig(rules: StationRules | undefined): { weekday: SlotConfig[]; weekend: SlotConfig[] } {
+  const sc = rules?.slot_config
+  return { weekday: mergeSlots(sc?.weekday), weekend: mergeSlots(sc?.weekend) }
+}
+
 export default function StationsPage() {
   const [stations, setStations] = useState<StationData[]>([])
   const [selected, setSelected] = useState<StationData | null>(null)
   const [form,     setForm]     = useState<StationData | null>(null)
+  const [dayType,  setDayType]  = useState<DayType>('weekday')
   const [catalogOptions, setCatalogOptions] = useState<CatalogOptionsResponse>({ genres: [], languages: [] })
   const [msg,      setMsg]      = useState('')
   const [newStationId, setNewStationId] = useState('')
@@ -55,13 +126,23 @@ export default function StationsPage() {
       .catch(() => {})
   }, [])
 
-  const select = (s: StationData) => { setSelected(s); setForm(JSON.parse(JSON.stringify(s))); setMsg('') }
+  const select = (s: StationData) => {
+    const clone: StationData = JSON.parse(JSON.stringify(s))
+    if (!clone.rules) clone.rules = { ad_policy: { enabled: true, break_interval_tv: 15, break_interval_movie: 30 } }
+    if (!clone.rules.ad_policy) clone.rules.ad_policy = { enabled: true, break_interval_tv: 15, break_interval_movie: 30 }
+    clone.rules.slot_config = ensureSlotConfig(clone.rules)
+    if (!clone.branding) clone.branding = { colour_theme: '#2c3e50', logo: '' }
+    setSelected(s)
+    setForm(clone)
+    setDayType('weekday')
+    setMsg('')
+  }
 
   const save = async () => {
     if (!form) return
     const r = await fetch(`/api/admin/stations/${form.id}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rules: form.rules, fillerPools: form.fillerPools, holidayOverrides: form.holidayOverrides, branding: form.branding }),
+      body: JSON.stringify({ rules: form.rules, branding: form.branding }),
     })
     setMsg(r.ok ? '✓ Saved successfully.' : '✗ Save failed.')
     if (r.ok) { const updated = stations.map(s => s.id === form.id ? form : s); setStations(updated) }
@@ -115,14 +196,26 @@ export default function StationsPage() {
     await loadStations()
   }
 
-  const setRule = (key: string, val: unknown) => setForm(f => f ? { ...f, rules: { ...f.rules, [key]: val } } : f)
   const setAdPolicy = (key: string, val: unknown) => setForm(f => f ? { ...f, rules: { ...f.rules, ad_policy: { ...f.rules.ad_policy, [key]: val } } } : f)
-  const setFiller = (key: string, val: string) => setForm(f => f ? { ...f, fillerPools: { ...f.fillerPools, [key]: val || null } } : f)
+
+  const updateSlot = (index: number, patch: Partial<SlotConfig>) => setForm(f => {
+    if (!f?.rules.slot_config) return f
+    const list = f.rules.slot_config[dayType].map((slot, i) => i === index ? { ...slot, ...patch } : slot)
+    return { ...f, rules: { ...f.rules, slot_config: { ...f.rules.slot_config, [dayType]: list } } }
+  })
+
+  const copyWeekdayToWeekend = () => setForm(f => {
+    if (!f?.rules.slot_config) return f
+    const cloned = JSON.parse(JSON.stringify(f.rules.slot_config.weekday)) as SlotConfig[]
+    return { ...f, rules: { ...f.rules, slot_config: { ...f.rules.slot_config, weekend: cloned } } }
+  })
+
+  const slots = form?.rules.slot_config?.[dayType] ?? []
 
   return (
     <AdminShell>
       <h2 style={h2}>Station Rules</h2>
-      <p style={sub}>Select a station to edit its genre filters, ad policy, filler pool IDs, and holiday behaviours.</p>
+      <p style={sub}>Configure each station&apos;s weekday and weekend programming slots, station-wide ad policy, and branding. Filler content is managed in Filler Content; holiday behaviour in Holiday Overrides.</p>
 
       <Section title="Add Channel">
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr auto', gap: 10, alignItems: 'end' }}>
@@ -162,42 +255,113 @@ export default function StationsPage() {
           <div style={{ flex: 1, overflowY: 'auto' }}>
             {msg && <p style={{ color: '#4CAF50', fontSize: '0.78rem', margin: '0 0 12px' }}>{msg}</p>}
 
-            <Section title="Content Genres">
-              <SearchableRulePicker
-                label="Allow genres"
-                description="Search synced Plex genres, then add them to this station's allowed list."
-                value={form.rules.allow_genres}
-                options={catalogOptions.genres}
-                emptyMessage="No synced genre options yet. Run a Plex catalog sync to populate this list."
-                onChange={(next) => setRule('allow_genres', next)}
-              />
-              <SearchableRulePicker
-                label="Deny genres"
-                description="Search synced Plex genres to block them from this station."
-                value={form.rules.deny_genres}
-                options={catalogOptions.genres}
-                emptyMessage="No synced genre options yet. Run a Plex catalog sync to populate this list."
-                onChange={(next) => setRule('deny_genres', next)}
-              />
-              <SearchableRulePicker
-                label="Allow languages"
-                description="Search derived Plex language metadata and add languages this station should prefer."
-                value={form.rules.allow_languages}
-                options={catalogOptions.languages}
-                emptyMessage="No synced language options yet. Run a Plex catalog sync to populate this list."
-                onChange={(next) => setRule('allow_languages', next)}
-              />
-              <SearchableRulePicker
-                label="Deny languages"
-                description="Search derived Plex language metadata and block languages for this station."
-                value={form.rules.deny_languages}
-                options={catalogOptions.languages}
-                emptyMessage="No synced language options yet. Run a Plex catalog sync to populate this list."
-                onChange={(next) => setRule('deny_languages', next)}
-              />
+            <Section title="Programming Slots">
+              <div style={{ display: 'flex', gap: 8, marginBottom: 14, alignItems: 'center' }}>
+                {(['weekday', 'weekend'] as DayType[]).map((dt) => (
+                  <button
+                    key={dt}
+                    type="button"
+                    onClick={() => setDayType(dt)}
+                    style={{
+                      ...btn,
+                      padding: '6px 16px',
+                      backgroundColor: dayType === dt ? '#ff6600' : '#1e3a5f',
+                    }}
+                  >
+                    {dt === 'weekday' ? 'WEEKDAY' : 'WEEKEND'}
+                  </button>
+                ))}
+                {dayType === 'weekend' && (
+                  <button type="button" onClick={copyWeekdayToWeekend} style={{ ...ghostBtn, padding: '6px 12px' }}>
+                    Copy weekday → weekend
+                  </button>
+                )}
+              </div>
+
+              {slots.map((slot, index) => (
+                <div key={slot.key} style={{ backgroundColor: '#060f1e', border: '1px solid #1e3a5f', padding: '12px 16px', marginBottom: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: slot.enabled ? 12 : 0 }}>
+                    <div>
+                      <span style={{ color: '#e8f0fe', fontWeight: 700, fontSize: '0.82rem' }}>{slot.name}</span>
+                      <span style={{ color: '#4a7fb5', fontSize: '0.68rem', marginLeft: 10 }}>
+                        {slot.start === 'first' ? 'First available' : slot.start} – {slot.end === 'until_finished' ? 'Until content finished' : slot.end}
+                      </span>
+                    </div>
+                    <label style={checkLabel}>
+                      <input type="checkbox" checked={slot.enabled} onChange={e => updateSlot(index, { enabled: e.target.checked })} />
+                      Enabled
+                    </label>
+                  </div>
+
+                  {slot.enabled && (
+                    <>
+                      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 12 }}>
+                        <label style={checkLabel}>
+                          <input type="checkbox" checked={slot.fillerOnly} onChange={e => updateSlot(index, { fillerOnly: e.target.checked })} />
+                          Filler content only
+                        </label>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+                        <div style={{ border: '1px solid #1e3a5f', padding: 10 }}>
+                          <label style={checkLabel}>
+                            <input type="checkbox" checked={slot.openVideo.enabled} onChange={e => updateSlot(index, { openVideo: { ...slot.openVideo, enabled: e.target.checked } })} />
+                            Opening video
+                          </label>
+                          {slot.openVideo.enabled && (
+                            <input value={slot.openVideo.videoId} onChange={e => updateSlot(index, { openVideo: { ...slot.openVideo, videoId: e.target.value } })} style={{ ...inp, marginTop: 8 }} placeholder="YouTube video ID / URL" />
+                          )}
+                        </div>
+                        <div style={{ border: '1px solid #1e3a5f', padding: 10 }}>
+                          <label style={checkLabel}>
+                            <input type="checkbox" checked={slot.closeVideo.enabled} onChange={e => updateSlot(index, { closeVideo: { ...slot.closeVideo, enabled: e.target.checked } })} />
+                            Closing video
+                          </label>
+                          {slot.closeVideo.enabled && (
+                            <input value={slot.closeVideo.videoId} onChange={e => updateSlot(index, { closeVideo: { ...slot.closeVideo, videoId: e.target.value } })} style={{ ...inp, marginTop: 8 }} placeholder="YouTube video ID / URL" />
+                          )}
+                        </div>
+                      </div>
+
+                      {!slot.fillerOnly && (
+                        <>
+                          <div style={{ marginBottom: 12 }}>
+                            <div style={{ color: '#4a7fb5', fontSize: '0.65rem', letterSpacing: '0.06em', marginBottom: 6 }}>LIBRARY WEIGHTS</div>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 10 }}>
+                              {(['tv_shows','movies','animation','fitness'] as const).map((lib) => (
+                                <label key={lib} style={{ display: 'flex', flexDirection: 'column', gap: 4, color: '#a8c4e0', fontSize: '0.68rem' }}>
+                                  {lib.replace('_', ' ')}
+                                  <input type="number" min={0} max={10} step={1} value={slot.libraryWeights[lib]}
+                                    onChange={e => updateSlot(index, { libraryWeights: { ...slot.libraryWeights, [lib]: Math.max(0, Number(e.target.value)) } })}
+                                    style={inp} />
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+
+                          <TokenPicker
+                            label="Allow genres"
+                            anyLabel="Any genre"
+                            options={catalogOptions.genres}
+                            value={slot.allowGenres}
+                            onChange={(next) => updateSlot(index, { allowGenres: next })}
+                          />
+                          <TokenPicker
+                            label="Allow languages"
+                            anyLabel="Any language"
+                            options={catalogOptions.languages}
+                            value={slot.allowLanguages}
+                            onChange={(next) => updateSlot(index, { allowLanguages: next })}
+                          />
+                        </>
+                      )}
+                    </>
+                  )}
+                </div>
+              ))}
             </Section>
 
-            <Section title="Ad Policy">
+            <Section title="Ad Policy (station-wide)">
               <label style={checkLabel}>
                 <input type="checkbox" checked={form.rules.ad_policy.enabled}
                   onChange={e => setAdPolicy('enabled', e.target.checked)} />
@@ -215,15 +379,6 @@ export default function StationsPage() {
               </div>
             </Section>
 
-            <Section title="YouTube Filler Pools">
-              {(['ads','music','bumpers'] as const).map(k => (
-                <Field key={k} label={`${k.charAt(0).toUpperCase() + k.slice(1)} playlist / video ID`}>
-                  <input value={form.fillerPools[k] ?? ''} onChange={e => setFiller(k, e.target.value)} style={inp}
-                    placeholder="e.g. PLxxxxx or videoId (leave blank to disable)" />
-                </Field>
-              ))}
-            </Section>
-
             <Section title="Branding">
               <Field label="Colour theme (hex)">
                 <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
@@ -233,31 +388,6 @@ export default function StationsPage() {
                   <span style={{ color: '#a8c4e0', fontSize: '0.75rem' }}>{form.branding.colour_theme}</span>
                 </div>
               </Field>
-            </Section>
-
-            <Section title="Holiday Overrides">
-              {(['christmas','christmas_eve','good_friday','easter','halloween'] as const).map(h => {
-                const ho = form.holidayOverrides[h] ?? { replace_schedule: true, ad_free: false, content_priority: [] }
-                const setPriority = (v: string) => setForm(f => f ? { ...f, holidayOverrides: { ...f.holidayOverrides, [h]: { ...ho, content_priority: parseRuleTokens(v) } } } : f)
-                const setHolidayFlag = (k: string, v: boolean) => setForm(f => f ? { ...f, holidayOverrides: { ...f.holidayOverrides, [h]: { ...ho, [k]: v } } } : f)
-                return (
-                  <div key={h} style={{ backgroundColor: '#060f1e', border: '1px solid #1e3a5f', padding: '12px 16px', marginBottom: 10 }}>
-                    <div style={{ color: '#e8f0fe', fontWeight: 700, fontSize: '0.78rem', marginBottom: 8, textTransform: 'uppercase' }}>{h.replace(/_/g,' ')}</div>
-                    <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 8 }}>
-                      <label style={checkLabel}><input type="checkbox" checked={ho.replace_schedule ?? true} onChange={e => setHolidayFlag('replace_schedule', e.target.checked)} /> Replace schedule</label>
-                      <label style={checkLabel}><input type="checkbox" checked={ho.ad_free ?? false} onChange={e => setHolidayFlag('ad_free', e.target.checked)} /> Ad-free</label>
-                    </div>
-                    <SearchableRulePicker
-                      label="Content priority genres"
-                      description="Search synced Plex genres and add the ones this holiday should prioritize during schedule replacement."
-                      value={(ho.content_priority ?? []).join(', ')}
-                      options={catalogOptions.genres}
-                      emptyMessage="No synced genre options yet. Run a Plex catalog sync to populate this list."
-                      onChange={setPriority}
-                    />
-                  </div>
-                )
-              })}
             </Section>
 
             <button onClick={save} style={{ ...btn, marginTop: 4 }}>Save Station Config</button>
@@ -295,35 +425,22 @@ function normalizeRuleToken(value: string): string {
   return value.trim().toLowerCase()
 }
 
-function parseRuleTokens(value: string): string[] {
-  return value
-    .split(',')
-    .map((item) => normalizeRuleToken(item))
-    .filter(Boolean)
-}
-
-function formatRuleTokens(values: string[]): string {
-  return values.join(', ')
-}
-
-function SearchableRulePicker({
+function TokenPicker({
   label,
-  description,
+  anyLabel,
   value,
   options,
-  emptyMessage,
   onChange,
 }: {
   label: string
-  description: string
-  value: string
+  anyLabel: string
+  value: string[]
   options: CatalogFilterOption[]
-  emptyMessage: string
-  onChange: (nextValue: string) => void
+  onChange: (next: string[]) => void
 }) {
   const [query, setQuery] = useState('')
-  const selected = parseRuleTokens(value)
-  const selectedSet = new Set(selected)
+  const isAny = value.length === 0
+  const selectedSet = new Set(value)
   const filtered = options
     .filter((option) => !selectedSet.has(option.value))
     .filter((option) => option.value.includes(normalizeRuleToken(query)))
@@ -332,24 +449,27 @@ function SearchableRulePicker({
   const addValue = (rawValue: string) => {
     const normalized = normalizeRuleToken(rawValue)
     if (!normalized || selectedSet.has(normalized)) return
-    onChange(formatRuleTokens([...selected, normalized]))
+    onChange([...value, normalized])
     setQuery('')
   }
 
   const removeValue = (token: string) => {
-    onChange(formatRuleTokens(selected.filter((item) => item !== token)))
+    onChange(value.filter((item) => item !== token))
   }
 
   return (
     <Field label={label}>
       <div style={pickerWrap}>
-        <div style={pickerDescription}>{description}</div>
+        <label style={{ ...checkLabel, marginBottom: 10 }}>
+          <input type="checkbox" checked={isAny} onChange={(e) => { if (e.target.checked) onChange([]) }} />
+          {anyLabel} (no filter)
+        </label>
         <div style={chipWrap}>
-          {selected.length > 0 ? selected.map((token) => (
+          {value.length > 0 ? value.map((token) => (
             <button key={token} type="button" style={chipBtn} onClick={() => removeValue(token)}>
               {token} ×
             </button>
-          )) : <div style={pickerEmpty}>No selections yet.</div>}
+          )) : <div style={pickerEmpty}>Any allowed.</div>}
         </div>
         <div style={pickerControls}>
           <input
@@ -366,9 +486,7 @@ function SearchableRulePicker({
           />
           <button type="button" style={ghostBtn} onClick={() => addValue(query)}>Add</button>
         </div>
-        {options.length === 0 ? (
-          <div style={pickerEmpty}>{emptyMessage}</div>
-        ) : (
+        {options.length > 0 && (
           <div style={suggestionsWrap}>
             {filtered.length > 0 ? filtered.map((option) => (
               <button key={option.value} type="button" style={suggestionBtn} onClick={() => addValue(option.value)}>
@@ -378,7 +496,6 @@ function SearchableRulePicker({
             )) : <div style={pickerEmpty}>No matching synced options.</div>}
           </div>
         )}
-        <div style={pickerHint}>Saved as comma-separated rule values for compatibility with the existing scheduler.</div>
       </div>
     </Field>
   )
@@ -390,7 +507,6 @@ const btn: React.CSSProperties = { backgroundColor: '#ff6600', color: '#fff', bo
 const inp: React.CSSProperties = { backgroundColor: '#060f1e', border: '1px solid #1e3a5f', color: '#fff', padding: '7px 10px', fontSize: '0.78rem', width: '100%', boxSizing: 'border-box' as const }
 const checkLabel: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 7, color: '#a8c4e0', fontSize: '0.75rem', cursor: 'pointer' }
 const pickerWrap: React.CSSProperties = { backgroundColor: '#07111f', border: '1px solid #1e3a5f', padding: 12 }
-const pickerDescription: React.CSSProperties = { color: '#89a9c7', fontSize: '0.72rem', marginBottom: 10, lineHeight: 1.45 }
 const chipWrap: React.CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }
 const chipBtn: React.CSSProperties = { backgroundColor: '#1a3a6e', border: '1px solid #4a7fb5', color: '#fff', padding: '5px 10px', fontSize: '0.72rem', cursor: 'pointer' }
 const pickerControls: React.CSSProperties = { display: 'grid', gridTemplateColumns: '1fr auto', gap: 10, marginBottom: 10 }
@@ -399,4 +515,3 @@ const suggestionsWrap: React.CSSProperties = { display: 'grid', gridTemplateColu
 const suggestionBtn: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, backgroundColor: '#0a1628', border: '1px solid #1e3a5f', color: '#e8f0fe', padding: '8px 10px', fontSize: '0.72rem', cursor: 'pointer', textAlign: 'left' as const }
 const suggestionCount: React.CSSProperties = { color: '#4a7fb5', fontSize: '0.68rem' }
 const pickerEmpty: React.CSSProperties = { color: '#4a7fb5', fontSize: '0.72rem' }
-const pickerHint: React.CSSProperties = { color: '#6388ad', fontSize: '0.68rem', marginTop: 10 }

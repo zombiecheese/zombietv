@@ -5,7 +5,11 @@ import AdminShell from '@/components/admin/AdminShell'
 
 interface StationOption { id: string; name: string }
 
-const CATEGORIES = ['ads','music','bumpers','filler','special']
+const CATEGORIES: Array<{ value: string; label: string }> = [
+  { value: 'ads',   label: 'Advertisements' },
+  { value: 'filler', label: 'Filler' },
+  { value: 'music', label: 'Music Videos' },
+]
 
 interface YTEntry { id: string; title: string; videoId: string | null; playlistId: string | null; isPlaylist: boolean; category: string; station: string | null; durationMins: number | null; scheduledCount: number; createdAt: string }
 
@@ -98,10 +102,19 @@ export default function YouTubePage() {
     setEditId(null); load()
   }
 
+  const backfillDurations = async () => {
+    setMsg('Backfilling runtimes…')
+    const r = await fetch('/api/admin/youtube/backfill-durations', { method: 'POST' })
+    const data = await r.json().catch(() => ({}))
+    if (!r.ok) { setMsg(`✗ ${data?.error ?? 'Backfill failed.'}`); return }
+    setMsg(`✓ Runtimes updated: ${data.updated ?? 0} of ${data.scanned ?? 0} scanned${data.failed ? ` (${data.failed} unresolved)` : ''}.`)
+    load()
+  }
+
   return (
     <AdminShell>
-      <h2 style={h2}>YouTube Pool Manager</h2>
-      <p style={sub}>Add YouTube videos used as ads, music, bumpers and filler. Playlist imports are expanded into individual video entries automatically.</p>
+      <h2 style={h2}>Filler Content</h2>
+      <p style={sub}>Add YouTube videos used as advertisements, filler, and music videos. Playlist imports are expanded into individual video entries automatically.</p>
 
       {msg && <p style={{ color: '#ff6600', fontSize: '0.78rem', margin: '12px 0' }}>{msg}</p>}
 
@@ -114,7 +127,7 @@ export default function YouTubePage() {
           <Fld label="Playlist ID (imports items)"><input value={form.playlistId} onChange={e => setForm({...form, playlistId: e.target.value})} style={inp} placeholder="PLxxxxx" /></Fld>
           <Fld label="Category">
             <select value={form.category} onChange={e => setForm({...form, category: e.target.value})} style={sel}>
-              {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+              {CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
             </select>
           </Fld>
           <Fld label="Station (optional)">
@@ -133,15 +146,18 @@ export default function YouTubePage() {
       </div>
 
       {/* Filter */}
-      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
         <select value={filter.category} onChange={e => setFilter({...filter, category: e.target.value})} style={sel}>
           <option value="">All categories</option>
-          {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+          {CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
         </select>
         <select value={filter.station} onChange={e => setFilter({...filter, station: e.target.value})} style={sel}>
           <option value="">(global)</option>
           {stations.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
+        <button onClick={backfillDurations} style={{ ...btn, backgroundColor: '#1a3a6e' }} title="Fetch missing runtimes for better filler fitting">
+          Backfill Runtimes
+        </button>
       </div>
 
       {/* Table */}
@@ -193,7 +209,7 @@ export default function YouTubePage() {
           <div style={modalS}>
             <h3 style={{ margin: '0 0 16px', color: '#ff6600', fontSize: '0.9rem' }}>Edit Entry</h3>
             <Fld label="Title"><input value={editForm.title} onChange={e => setEditForm({...editForm, title: e.target.value})} style={inp} /></Fld>
-            <Fld label="Category"><select value={editForm.category} onChange={e => setEditForm({...editForm, category: e.target.value})} style={sel}>{CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}</select></Fld>
+            <Fld label="Category"><select value={editForm.category} onChange={e => setEditForm({...editForm, category: e.target.value})} style={sel}>{CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}</select></Fld>
             <Fld label="Station"><select value={editForm.station} onChange={e => setEditForm({...editForm, station: e.target.value})} style={sel}><option value="">(global)</option>{stations.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></Fld>
             <Fld label="Duration (mins)"><input type="number" value={editForm.durationMins} onChange={e => setEditForm({...editForm, durationMins: e.target.value})} style={inp} /></Fld>
             <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>

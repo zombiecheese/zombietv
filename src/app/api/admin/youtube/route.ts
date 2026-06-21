@@ -5,7 +5,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
 import { requireAdmin } from '@/lib/admin-guard'
 import { prisma }       from '@/lib/db'
-import { scrapeYouTubePlaylist, normalizePlaylistId } from '@/lib/youtube-playlist'
+import { scrapeYouTubePlaylist, normalizePlaylistId, getYouTubeVideoDurationMins } from '@/lib/youtube-playlist'
 
 export const dynamic = 'force-dynamic'
 
@@ -122,6 +122,11 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  let resolvedDurationMins: number | null = durationMins ? Number(durationMins) : null
+  if ((!resolvedDurationMins || !Number.isFinite(resolvedDurationMins)) && cleanVideoId) {
+    resolvedDurationMins = await getYouTubeVideoDurationMins(cleanVideoId).catch(() => null)
+  }
+
   const entry = await prisma.youtubeContent.create({
     data: {
       title,
@@ -130,7 +135,7 @@ export async function POST(req: NextRequest) {
       isPlaylist:  false,
       category,
       station:     station    || null,
-      durationMins: durationMins || null,
+      durationMins: resolvedDurationMins,
     },
   })
 
