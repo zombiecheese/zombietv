@@ -54,6 +54,7 @@ export default function AdminDashboard() {
   const [catalogAutoSyncHours, setCatalogAutoSyncHours] = useState('72')
   const [authRedirectBaseUrl, setAuthRedirectBaseUrl] = useState('')
   const [appName, setAppName] = useState('')
+  const [appTagline, setAppTagline] = useState('')
   const [isSavingAppName, setIsSavingAppName] = useState(false)
   const [appNameMsg, setAppNameMsg] = useState('')
   const [schedulerHorizonDays, setSchedulerHorizonDays]       = useState('7')
@@ -100,13 +101,14 @@ export default function AdminDashboard() {
     const r = await fetch('/api/app-settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ appName }),
+      body: JSON.stringify({ appName, appTagline }),
     })
     const data = await r.json().catch(() => ({}))
     setIsSavingAppName(false)
     if (!r.ok) { setAppNameMsg(data?.error || 'Could not save app name.'); return }
     setAppName(data.appName ?? appName)
-    setAppNameMsg(`App name saved: ${data.appName}`)
+    if (typeof data.appTagline === 'string') setAppTagline(data.appTagline)
+    setAppNameMsg(`Site identity saved: ${data.appName}`)
   }
 
   const saveSchedulerSettings = async () => {
@@ -156,7 +158,7 @@ export default function AdminDashboard() {
   }, [])
 
   useEffect(() => {
-    fetch('/api/app-settings').then((r) => r.ok ? r.json() : null).then((d) => { if (d?.appName) setAppName(d.appName) }).catch(() => {})
+    fetch('/api/app-settings').then((r) => r.ok ? r.json() : null).then((d) => { if (d?.appName) setAppName(d.appName); if (typeof d?.appTagline === 'string') setAppTagline(d.appTagline) }).catch(() => {})
     refreshPlexStatus().catch(() => {})
     refreshSchedulerStatus().catch(() => {})
   }, [])
@@ -334,6 +336,7 @@ export default function AdminDashboard() {
         <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#e8f0fe', marginBottom: 6 }}>Site Identity</div>
         <div style={{ fontSize: '0.72rem', color: '#4a7fb5', lineHeight: 1.5, marginBottom: 10 }}>
           The app name is shown in the browser title, admin sidebar, admin login, and viewer sign-in screen.
+          The tagline is the descriptive suffix after the app name in the browser tab title (e.g. &ldquo;Zombie TV — 1990s Broadcast Simulator&rdquo;). Leave it blank to show only the app name.
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 6 }}>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.72rem', color: '#a8c4e0', minWidth: 260, flex: 1 }}>
@@ -344,6 +347,17 @@ export default function AdminDashboard() {
               placeholder="Zombie TV"
               value={appName}
               onChange={(e) => setAppName(e.target.value)}
+              style={numberInput}
+            />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.72rem', color: '#a8c4e0', minWidth: 260, flex: 1 }}>
+            Browser title tagline
+            <input
+              type="text"
+              maxLength={120}
+              placeholder="1990s Broadcast Simulator"
+              value={appTagline}
+              onChange={(e) => setAppTagline(e.target.value)}
               style={numberInput}
             />
           </label>

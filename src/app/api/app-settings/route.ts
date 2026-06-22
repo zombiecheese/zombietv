@@ -7,6 +7,8 @@ import { sessionOptions, type SessionData } from '@/lib/session'
 import {
   getAppName,
   saveAppName,
+  getAppTagline,
+  saveAppTagline,
   getSchedulerHorizonDays,
   getSchedulerIntervalHours,
   saveSchedulerHorizonDays,
@@ -17,12 +19,13 @@ import { restartScheduler } from '@/lib/scheduler'
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
-  const [appName, schedulerHorizonDays, schedulerIntervalHours] = await Promise.all([
+  const [appName, appTagline, schedulerHorizonDays, schedulerIntervalHours] = await Promise.all([
     getAppName(),
+    getAppTagline(),
     getSchedulerHorizonDays(),
     getSchedulerIntervalHours(),
   ])
-  return NextResponse.json({ appName, schedulerHorizonDays, schedulerIntervalHours }, {
+  return NextResponse.json({ appName, appTagline, schedulerHorizonDays, schedulerIntervalHours }, {
     headers: { 'Cache-Control': 'public, max-age=30' },
   })
 }
@@ -47,6 +50,13 @@ export async function POST(req: NextRequest) {
     result.appName = await saveAppName(body.appName)
   }
 
+  if (body?.appTagline !== undefined) {
+    if (typeof body.appTagline !== 'string') {
+      return NextResponse.json({ error: 'appTagline must be a string.' }, { status: 400 })
+    }
+    result.appTagline = await saveAppTagline(body.appTagline)
+  }
+
   if (body?.schedulerHorizonDays !== undefined) {
     result.schedulerHorizonDays = await saveSchedulerHorizonDays(body.schedulerHorizonDays)
     schedulerSettingsChanged = true
@@ -57,7 +67,7 @@ export async function POST(req: NextRequest) {
     schedulerSettingsChanged = true
   }
 
-  if (!result.appName && !result.schedulerHorizonDays && !result.schedulerIntervalHours) {
+  if (!result.appName && result.appTagline === undefined && !result.schedulerHorizonDays && !result.schedulerIntervalHours) {
     return NextResponse.json({ error: 'No valid settings provided.' }, { status: 400 })
   }
 

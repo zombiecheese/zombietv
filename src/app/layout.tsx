@@ -3,7 +3,7 @@
 
 import { DEFAULT_VHS_SETTINGS, type VHSSettings } from '@/lib/vhs-defaults'
 import RouteVisualEffects from '@/components/RouteVisualEffects'
-import { getAppName } from '@/lib/app-settings'
+import { getAppName, getAppTagline } from '@/lib/app-settings'
 
 async function getVHSSettings(): Promise<VHSSettings> {
   try {
@@ -21,9 +21,9 @@ async function getVHSSettings(): Promise<VHSSettings> {
 }
 
 export async function generateMetadata() {
-  const name = await getAppName()
+  const [name, tagline] = await Promise.all([getAppName(), getAppTagline()])
   return {
-    title:       `${name} — 1990s Broadcast Simulator`,
+    title:       tagline ? `${name} — ${tagline}` : name,
     description: 'Watch 24/7 era-accurate 1990s television.',
   }
 }
