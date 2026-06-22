@@ -105,6 +105,11 @@ model MediaItem {
   languages      String?  // e.g. "english,japanese"
   ratings        String   // e.g. "PG"
 
+  // Source Plex library section (null for rows synced before this field existed;
+  // populated on the next catalog sync).
+  librarySectionKey   String?
+  librarySectionTitle String?
+
   // Episode info (null for movies)
   parentPlexKey  String?  // Parent show ratingKey for episodes
   showTitle      String?
@@ -124,6 +129,7 @@ model MediaItem {
   @@index([ratings])
   @@index([durationMins])
   @@index([year])
+  @@index([librarySectionKey])
   @@index([showTitle, seasonNumber, episodeNumber])
 }
 

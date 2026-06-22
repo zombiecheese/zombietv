@@ -10,6 +10,8 @@ interface CatalogItem {
   year: number
 }
 
+interface CatalogLibrary { key: string; title: string }
+
 interface HolidaySetting { id: string; name: string; label: string; startMonth: number; startDay: number; endMonth: number; endDay: number; enabled: boolean }
 
 const DEFAULT_HOLIDAY_SETTINGS: HolidaySetting[] = [
@@ -26,21 +28,25 @@ export default function CatalogPage() {
   const [blockedKeys, setBlockedKeys] = useState<string[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [searchType, setSearchType] = useState<'all' | 'movie' | 'show'>('all')
+  const [libraryFilter, setLibraryFilter] = useState('')
+  const [libraries, setLibraries] = useState<CatalogLibrary[]>([])
   const [searchResults, setSearchResults] = useState<CatalogItem[]>([])
   const [holidayName, setHolidayName] = useState('christmas')
   const [holidayTaggedItems, setHolidayTaggedItems] = useState<CatalogItem[]>([])
   const [holidayTaggedKeys, setHolidayTaggedKeys] = useState<string[]>([])
   const [msg, setMsg] = useState('')
 
-  const loadBlocked = async (query = '', type: 'all' | 'movie' | 'show' = searchType) => {
+  const loadBlocked = async (query = '', type: 'all' | 'movie' | 'show' = searchType, library = libraryFilter) => {
     const params = new URLSearchParams()
     if (query) params.set('q', query)
     params.set('type', type)
+    if (library) params.set('library', library)
     const r = await fetch(`/api/admin/blocked-media?${params.toString()}`)
     const data = await r.json()
     setBlockedItems(data.blockedItems || [])
     setBlockedKeys(data.blockedKeys || [])
     setSearchResults(data.results || [])
+    if (Array.isArray(data.libraries)) setLibraries(data.libraries)
   }
 
   useEffect(() => {
@@ -60,11 +66,12 @@ export default function CatalogPage() {
       .catch(() => setHolidaySettings(DEFAULT_HOLIDAY_SETTINGS))
   }, [])
 
-  const loadHolidayTags = async (targetHoliday = holidayName, query = '', type: 'all' | 'movie' | 'show' = searchType) => {
+  const loadHolidayTags = async (targetHoliday = holidayName, query = '', type: 'all' | 'movie' | 'show' = searchType, library = libraryFilter) => {
     const params = new URLSearchParams()
     params.set('holidayName', targetHoliday)
     if (query) params.set('q', query)
     params.set('type', type)
+    if (library) params.set('library', library)
     const r = await fetch(`/api/admin/catalog/holiday-tags?${params.toString()}`)
     const data = await r.json()
     setHolidayTaggedItems(data.taggedItems || [])
@@ -83,8 +90,8 @@ export default function CatalogPage() {
       return
     }
     await Promise.all([
-      loadBlocked(query, searchType),
-      loadHolidayTags(holidayName, query, searchType),
+      loadBlocked(query, searchType, libraryFilter),
+      loadHolidayTags(holidayName, query, searchType, libraryFilter),
     ])
   }
 
@@ -170,6 +177,12 @@ export default function CatalogPage() {
             <option value="all">All</option>
             <option value="movie">Movies</option>
             <option value="show">Shows</option>
+          </select>
+          <select value={libraryFilter} onChange={e => setLibraryFilter(e.target.value)} style={{ ...sel, width: 180 }} title="Filter by Plex library">
+            <option value="">All Libraries</option>
+            {libraries.map((lib) => (
+              <option key={lib.key} value={lib.key}>{lib.title}</option>
+            ))}
           </select>
           <button onClick={doSearch} style={btn}>Search</button>
           <button onClick={() => loadBlocked()} style={{ ...btn, backgroundColor: '#1a3a6e' }}>Refresh</button>

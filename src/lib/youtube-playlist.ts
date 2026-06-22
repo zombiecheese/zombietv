@@ -14,6 +14,11 @@ export interface YouTubePlaylistImport {
   items: YouTubePlaylistItem[]
 }
 
+// Public WEB innertube API key/version used as a fallback when they cannot be
+// scraped from the playlist page.
+const DEFAULT_INNERTUBE_API_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8'
+const DEFAULT_CLIENT_VERSION = '2.20240101.00.00'
+
 export function normalizePlaylistId(input: string): string {
   const value = input.trim()
   if (!value) return ''
@@ -40,16 +45,16 @@ export async function scrapeYouTubePlaylist(input: string): Promise<YouTubePlayl
     Accept: 'application/xml,text/xml,text/html;q=0.9,*/*;q=0.8',
   }
 
-  // Primary strategy: load the playlist page, parse its embedded JSON, then
-  // follow continuation tokens through YouTube's internal API so we capture
-  // every video (not just the first lazy-loaded batch).
+  // Primary strategy: read the API credentials off the playlist page, then pull
+  // the full playlist through YouTube's internal browse endpoint (following
+  // continuation tokens) so we capture every video, not just the first batch.
   let pageParsed: Omit<YouTubePlaylistImport, 'playlistId'> | null = null
   const pageUrl = `https://www.youtube.com/playlist?list=${encodeURIComponent(playlistId)}&hl=en&gl=US`
   try {
     const pageRes = await fetch(pageUrl, { headers })
     if (pageRes.ok) {
       const html = await pageRes.text()
-      pageParsed = await parsePlaylistPage(html, headers)
+      pageParsed = await parsePlaylistPage(playlistId, html, headers)
     }
   } catch {
     // Ignore page failures and fall back to the Atom feed below.
@@ -77,36 +82,41 @@ export async function scrapeYouTubePlaylist(input: string): Promise<YouTubePlayl
   return { playlistId, playlistTitle: merged.playlistTitle, items }
 }
 
-// Parse the playlist watch page: extract the initial batch from the embedded
-// ytInitialData JSON, then page through continuation tokens via the youtubei
-// browse endpoint until the full playlist has been collected.
+// Parse the playlist watch page only to obtain the API key and client version,
+// then pull the entire playlist through YouTube's internal browse endpoint,
+// following continuation tokens until every video has been collected.
 async function parsePlaylistPage(
+  playlistId: string,
   html: string,
   headers: Record<string, string>,
 ): Promise<Omit<YouTubePlaylistImport, 'playlistId'>> {
-  const playlistTitle = decodeHtmlEntities(matchFirst(html, /<meta property="og:title" content="([^"]+)"/i)) || null
+  let playlistTitle = decodeHtmlEntities(matchFirst(html, /<meta property="og:title" content="([^"]+)"/i)) || null
 
-  const initialData = extractInitialData(html)
-  if (!initialData) {
-    // No JSON available — fall back to the loose regex scrape of the first page.
+  const apiKey = matchFirst(html, /"INNERTUBE_API_KEY":"([^"]+)"/) || DEFAULT_INNERTUBE_API_KEY
+  const clientVersion = matchFirst(html, /"INNERTUBE_CONTEXT_CLIENT_VERSION":"([^"]+)"/)
+    || matchFirst(html, /"clientVersion":"([^"]+)"/)
+    || DEFAULT_CLIENT_VERSION
+
+  const items = new Map<string, YouTubePlaylistItem>()
+
+  // Seed the first batch from the browse endpoint (the playlist page itself no
+  // longer embeds the video list).
+  const initial = await fetchPlaylist(apiKey, clientVersion, { browseId: `VL${playlistId}` }, headers)
+  if (!initial) {
+    // Last resort: scrape whatever the loose regex can find on the page.
     return parsePlaylistHtml(html)
   }
 
-  const apiKey = matchFirst(html, /"INNERTUBE_API_KEY":"([^"]+)"/)
-  const clientVersion = matchFirst(html, /"INNERTUBE_CONTEXT_CLIENT_VERSION":"([^"]+)"/)
-    || matchFirst(html, /"clientVersion":"([^"]+)"/)
-    || '2.20240101.00.00'
-
-  const items = new Map<string, YouTubePlaylistItem>()
-  let { collected, continuation } = collectPlaylistItems(initialData)
+  playlistTitle = playlistTitle || extractPlaylistTitle(initial)
+  let { collected, continuation } = collectPlaylistItems(initial)
   for (const item of collected) {
     if (!items.has(item.videoId)) items.set(item.videoId, item)
   }
 
   let guard = 0
-  while (continuation && apiKey && guard < 100) {
+  while (continuation && guard < 200) {
     guard += 1
-    const data = await fetchPlaylistContinuation(apiKey, clientVersion, continuation, headers)
+    const data = await fetchPlaylist(apiKey, clientVersion, { continuation }, headers)
     if (!data) break
 
     const next = collectPlaylistItems(data)
@@ -119,15 +129,26 @@ async function parsePlaylistPage(
     }
 
     continuation = next.continuation
-    // Stop if a continuation page returns nothing new to avoid infinite loops.
+    // Stop once a page yields nothing new and offers no further continuation.
     if (added === 0 && !next.continuation) break
   }
 
   return { playlistTitle, items: [...items.values()] }
 }
 
-// Recursively walk a youtubei data object collecting playlist video renderers
-// and the next continuation token. Walking the tree keeps this resilient to
+function extractPlaylistTitle(data: unknown): string | null {
+  if (!data || typeof data !== 'object') return null
+  const record = data as Record<string, unknown>
+  const metadata = record.metadata as Record<string, unknown> | undefined
+  const meta = metadata?.playlistMetadataRenderer as Record<string, unknown> | undefined
+  if (typeof meta?.title === 'string' && meta.title.trim()) return meta.title.trim()
+  return null
+}
+
+// Recursively walk a youtubei data object collecting playlist video items and
+// the next continuation token. YouTube now renders playlist entries as
+// `lockupViewModel` objects, but we also handle the legacy
+// `playlistVideoRenderer` shape. Walking the tree keeps this resilient to
 // YouTube's frequent structural changes.
 function collectPlaylistItems(data: unknown): {
   collected: YouTubePlaylistItem[]
@@ -136,6 +157,13 @@ function collectPlaylistItems(data: unknown): {
   const collected: YouTubePlaylistItem[] = []
   const seen = new Set<string>()
   let continuation: string | null = null
+
+  const addItem = (item: YouTubePlaylistItem): void => {
+    if (!seen.has(item.videoId)) {
+      seen.add(item.videoId)
+      collected.push(item)
+    }
+  }
 
   const walk = (node: unknown): void => {
     if (!node || typeof node !== 'object') return
@@ -146,24 +174,40 @@ function collectPlaylistItems(data: unknown): {
 
     const record = node as Record<string, unknown>
 
+    // Current format: lockupViewModel.
+    const lockup = record.lockupViewModel as Record<string, unknown> | undefined
+    if (lockup && lockup.contentType === 'LOCKUP_CONTENT_TYPE_VIDEO' && typeof lockup.contentId === 'string') {
+      const videoId = lockup.contentId
+      if (/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+        const metadata = lockup.metadata as Record<string, unknown> | undefined
+        const metaVm = metadata?.lockupMetadataViewModel as Record<string, unknown> | undefined
+        const titleObj = metaVm?.title as Record<string, unknown> | undefined
+        const title = (typeof titleObj?.content === 'string' ? titleObj.content : '') || videoId
+        const durationMins = parseDurationText(extractLockupDurationText(lockup))
+        addItem({ videoId, title: title.trim(), durationMins })
+      }
+    }
+
+    // Legacy format: playlistVideoRenderer.
     const renderer = record.playlistVideoRenderer as Record<string, unknown> | undefined
     if (renderer && typeof renderer.videoId === 'string') {
       const videoId = renderer.videoId
-      if (/^[A-Za-z0-9_-]{11}$/.test(videoId) && !seen.has(videoId)) {
-        seen.add(videoId)
+      if (/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
         const title = extractRendererText(renderer.title) || videoId
         const lengthSeconds = Number(renderer.lengthSeconds)
         const durationMins = Number.isFinite(lengthSeconds) && lengthSeconds > 0
           ? Math.max(1, Math.round(lengthSeconds / 60))
           : null
-        collected.push({ videoId, title: title.trim(), durationMins })
+        addItem({ videoId, title: title.trim(), durationMins })
       }
     }
 
     const contRenderer = record.continuationItemRenderer as Record<string, unknown> | undefined
     if (contRenderer) {
       const token = extractContinuationToken(contRenderer)
-      if (token) continuation = token
+      // Keep the first token only: playlist pages expose a second, dead
+      // section-level token that returns no further items.
+      if (token && !continuation) continuation = token
     }
 
     for (const key of Object.keys(record)) walk(record[key])
@@ -171,6 +215,37 @@ function collectPlaylistItems(data: unknown): {
 
   walk(data)
   return { collected, continuation }
+}
+
+// Pull the duration badge text (e.g. "12:34") from a lockupViewModel thumbnail.
+function extractLockupDurationText(lockup: Record<string, unknown>): string {
+  const contentImage = lockup.contentImage as Record<string, unknown> | undefined
+  const thumbnail = contentImage?.thumbnailViewModel as Record<string, unknown> | undefined
+  const overlays = thumbnail?.overlays
+  if (!Array.isArray(overlays)) return ''
+  for (const overlay of overlays) {
+    if (!overlay || typeof overlay !== 'object') continue
+    const bottom = (overlay as Record<string, unknown>).thumbnailBottomOverlayViewModel as Record<string, unknown> | undefined
+    const badges = bottom?.badges
+    if (!Array.isArray(badges)) continue
+    for (const badge of badges) {
+      if (!badge || typeof badge !== 'object') continue
+      const vm = (badge as Record<string, unknown>).thumbnailBadgeViewModel as Record<string, unknown> | undefined
+      if (typeof vm?.text === 'string' && /^\d+(:\d+)+$/.test(vm.text.trim())) {
+        return vm.text.trim()
+      }
+    }
+  }
+  return ''
+}
+
+// Convert a "M:SS" or "H:MM:SS" duration string into whole minutes.
+function parseDurationText(text: string): number | null {
+  if (!text) return null
+  const parts = text.split(':').map((part) => Number(part))
+  if (!parts.length || parts.some((part) => !Number.isFinite(part))) return null
+  const totalSeconds = parts.reduce((acc, part) => acc * 60 + part, 0)
+  return totalSeconds > 0 ? Math.max(1, Math.round(totalSeconds / 60)) : null
 }
 
 function extractRendererText(value: unknown): string {
@@ -195,10 +270,10 @@ function extractContinuationToken(contRenderer: Record<string, unknown>): string
   return typeof token === 'string' && token ? token : null
 }
 
-async function fetchPlaylistContinuation(
+async function fetchPlaylist(
   apiKey: string,
   clientVersion: string,
-  continuation: string,
+  payload: { browseId: string } | { continuation: string },
   headers: Record<string, string>,
 ): Promise<unknown | null> {
   try {
@@ -218,7 +293,7 @@ async function fetchPlaylistContinuation(
             gl: 'US',
           },
         },
-        continuation,
+        ...payload,
       }),
     })
     if (!res.ok) return null
@@ -226,55 +301,6 @@ async function fetchPlaylistContinuation(
   } catch {
     return null
   }
-}
-
-// Locate and parse the ytInitialData JSON blob embedded in the playlist page.
-function extractInitialData(html: string): unknown | null {
-  const markers = ['var ytInitialData = ', 'ytInitialData = ', 'window["ytInitialData"] = ']
-  for (const marker of markers) {
-    const markerIdx = html.indexOf(marker)
-    if (markerIdx === -1) continue
-    const start = html.indexOf('{', markerIdx)
-    if (start === -1) continue
-    const json = sliceBalancedJson(html, start)
-    if (!json) continue
-    try {
-      return JSON.parse(json)
-    } catch {
-      // Try the next marker if parsing fails.
-    }
-  }
-  return null
-}
-
-// Extract a complete JSON object starting at `start` by tracking brace depth
-// while respecting string literals and escape sequences.
-function sliceBalancedJson(html: string, start: number): string | null {
-  let depth = 0
-  let inString = false
-  let escaped = false
-  for (let i = start; i < html.length; i += 1) {
-    const ch = html[i]
-    if (inString) {
-      if (escaped) {
-        escaped = false
-      } else if (ch === '\\') {
-        escaped = true
-      } else if (ch === '"') {
-        inString = false
-      }
-      continue
-    }
-    if (ch === '"') {
-      inString = true
-    } else if (ch === '{') {
-      depth += 1
-    } else if (ch === '}') {
-      depth -= 1
-      if (depth === 0) return html.slice(start, i + 1)
-    }
-  }
-  return null
 }
 
 function parseFeedXml(xml: string): Omit<YouTubePlaylistImport, 'playlistId'> {

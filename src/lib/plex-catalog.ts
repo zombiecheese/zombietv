@@ -347,6 +347,10 @@ async function upsertCatalogItem(item: PlexMediaItem): Promise<void> {
       seasonNumber: normalized.seasonNumber,
       episodeNumber: normalized.episodeNumber,
       chapters: normalized.chapters ? toJson(normalized.chapters) : null,
+      // Only overwrite library metadata when the item carries it (episodes do
+      // not), so we never clear a show/movie's library on a partial upsert.
+      librarySectionKey: normalized.sourceSectionKey ?? undefined,
+      librarySectionTitle: normalized.sourceSectionTitle ?? undefined,
     },
     create: {
       plexKey: normalized.ratingKey,
@@ -361,6 +365,8 @@ async function upsertCatalogItem(item: PlexMediaItem): Promise<void> {
       seasonNumber: normalized.seasonNumber,
       episodeNumber: normalized.episodeNumber,
       chapters: normalized.chapters ? toJson(normalized.chapters) : undefined,
+      librarySectionKey: normalized.sourceSectionKey ?? undefined,
+      librarySectionTitle: normalized.sourceSectionTitle ?? undefined,
     },
   })
 
@@ -549,6 +555,8 @@ export interface CatalogSearchItem {
   title: string
   type: 'movie' | 'show'
   year: number
+  libraryKey?: string | null
+  libraryTitle?: string | null
 }
 
 export interface CatalogEpisodeRef {
@@ -887,12 +895,15 @@ export async function searchCatalogMedia(
   query: string,
   type: 'movie' | 'show' | 'all' = 'all',
   limit = 25,
+  libraryKey = '',
 ): Promise<CatalogSearchItem[]> {
   const whereType = type === 'all' ? ['movie', 'show'] : [type]
+  const normalizedLibraryKey = String(libraryKey ?? '').trim()
   const rows = await prisma.mediaItem.findMany({
     where: {
       type: { in: whereType },
-      title: query ? { contains: query } : undefined,
+      title: query ? { contains: query, mode: 'insensitive' } : undefined,
+      librarySectionKey: normalizedLibraryKey ? normalizedLibraryKey : undefined,
     },
     orderBy: { title: 'asc' },
     take: Math.max(1, Math.min(limit, 100)),
@@ -905,6 +916,29 @@ export async function searchCatalogMedia(
       title: row.title,
       type: row.type as 'movie' | 'show',
       year: row.year,
+      libraryKey: row.librarySectionKey ?? null,
+      libraryTitle: row.librarySectionTitle ?? null,
+    }))
+}
+
+// Distinct list of libraries represented in the synced catalog, for use as a
+// search filter on the admin catalog page.
+export async function listCatalogLibraries(): Promise<Array<{ key: string; title: string }>> {
+  const rows = await prisma.mediaItem.findMany({
+    where: {
+      type: { in: ['movie', 'show'] },
+      librarySectionKey: { not: null },
+    },
+    distinct: ['librarySectionKey'],
+    select: { librarySectionKey: true, librarySectionTitle: true },
+    orderBy: { librarySectionTitle: 'asc' },
+  })
+
+  return rows
+    .filter((row): row is { librarySectionKey: string; librarySectionTitle: string | null } => !!row.librarySectionKey)
+    .map((row) => ({
+      key: row.librarySectionKey,
+      title: row.librarySectionTitle || `Library ${row.librarySectionKey}`,
     }))
 }
 

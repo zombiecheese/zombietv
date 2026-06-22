@@ -20,6 +20,7 @@ export async function GET(req: NextRequest) {
   const query = String(url.searchParams.get('q') || '').trim()
   const typeRaw = String(url.searchParams.get('type') || 'all').toLowerCase()
   const type = typeRaw === 'movie' || typeRaw === 'show' ? typeRaw : 'all'
+  const library = String(url.searchParams.get('library') || '').trim()
   const limit = Number(url.searchParams.get('limit') || 25)
 
   if (!holidayName) {
@@ -30,7 +31,7 @@ export async function GET(req: NextRequest) {
   const [taggedKeys, taggedItems, results] = await Promise.all([
     getHolidayTaggedKeys(holidayName),
     listHolidayTaggedItems(holidayName),
-    query.length >= 2 ? searchCatalogMedia(query, type, limit) : Promise.resolve([]),
+    query.length >= 2 ? searchCatalogMedia(query, type, limit, library) : Promise.resolve([]),
   ])
 
   return NextResponse.json({ holidayName, taggedKeys, taggedItems, results })

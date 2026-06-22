@@ -4,6 +4,7 @@ import {
   addBlockedPlexKey,
   getBlockedPlexKeys,
   listBlockedCatalogItems,
+  listCatalogLibraries,
   removeBlockedPlexKey,
   searchCatalogMedia,
 } from '@/lib/plex-catalog'
@@ -18,15 +19,17 @@ export async function GET(req: NextRequest) {
   const query = (url.searchParams.get('q') || '').trim()
   const typeRaw = (url.searchParams.get('type') || 'all').toLowerCase()
   const type = typeRaw === 'movie' || typeRaw === 'show' ? typeRaw : 'all'
+  const library = (url.searchParams.get('library') || '').trim()
   const limit = Number(url.searchParams.get('limit') || 25)
 
-  const [blockedKeys, blockedItems, results] = await Promise.all([
+  const [blockedKeys, blockedItems, results, libraries] = await Promise.all([
     getBlockedPlexKeys(),
     listBlockedCatalogItems(),
-    query.length >= 2 ? searchCatalogMedia(query, type, limit) : Promise.resolve([]),
+    query.length >= 2 ? searchCatalogMedia(query, type, limit, library) : Promise.resolve([]),
+    listCatalogLibraries(),
   ])
 
-  return NextResponse.json({ blockedKeys, blockedItems, results })
+  return NextResponse.json({ blockedKeys, blockedItems, results, libraries })
 }
 
 export async function POST(req: NextRequest) {
