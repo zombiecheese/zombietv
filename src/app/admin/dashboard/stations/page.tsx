@@ -409,6 +409,8 @@ export default function StationsPage() {
       </div>
     </AdminShell>
   )
+}
+
 function FillerWindowsBuilder({ slot, index, updateSlot }: { slot: SlotConfig; index: number; updateSlot: (idx: number, patch: Partial<SlotConfig>) => void }) {
   const FILLER_CATEGORIES = ['ads', 'filler', 'music', 'news'] as const
   const slotDurationMins = (() => {
@@ -503,9 +505,6 @@ function parseClockToMinutes(value: string): number {
   const hours = Number(parts[0]) || 0
   const mins = Number(parts[1]) || 0
   return hours * 60 + mins
-}
-
-const h2: React.CSSProperties
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -609,6 +608,7 @@ const h2: React.CSSProperties = { margin: 0, color: '#ff6600', fontSize: '1rem',
 const sub: React.CSSProperties = { color: '#4a7fb5', fontSize: '0.78rem', margin: '6px 0 0' }
 const btn: React.CSSProperties = { backgroundColor: '#ff6600', color: '#fff', border: 'none', padding: '9px 20px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 700, letterSpacing: '0.06em' }
 const inp: React.CSSProperties = { backgroundColor: '#060f1e', border: '1px solid #1e3a5f', color: '#fff', padding: '7px 10px', fontSize: '0.78rem', width: '100%', boxSizing: 'border-box' as const }
+const sel: React.CSSProperties = { ...inp }
 const checkLabel: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 7, color: '#a8c4e0', fontSize: '0.75rem', cursor: 'pointer' }
 const pickerWrap: React.CSSProperties = { backgroundColor: '#07111f', border: '1px solid #1e3a5f', padding: 12 }
 const chipWrap: React.CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }

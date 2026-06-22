@@ -351,7 +351,7 @@ function getContentTypeForSlot(
   matches.sort((a, b) => spanMins(a) - spanMins(b))
   const best = matches[0]
   // A filler-only slot must broadcast filler content, so let 'filler' pass through.
-  if (best?.fillerOnly || best?.contentType === 'filler') return 'filler'
+  if (best?.contentType === 'filler') return 'filler'
   return normalizeType(best?.contentType ?? baseType)
 }
 
@@ -886,621 +886,657 @@ export async function runScheduler(
   }
 
   try {
-  console.log(`[Scheduler] Starting — horizon: ${horizonDays} days${stationId ? `, station: ${stationId}` : ''}${forceRegenerate ? ', force: true' : ''}`)
+    console.log(`[Scheduler] Starting — horizon: ${horizonDays} days${stationId ? `, station: ${stationId}` : ''}${forceRegenerate ? ', force: true' : ''}`)
 
-  //await persistStatus({
-      isRunning: false,
-      phase: 'error',
-      finishedAt: new Date().toISOString(),
-      lastError: `Station ${stationId} was not found.`,
-      note: 'Station scope not found',
+    const adminUsers = await prisma.user.findMany({
+      where: { isAdmin: true },
+      select: { id: true, preferences: true },
     })
-    return
-  }
-  const today = startOfDay(new Date())
-  await persistStatus({
-    phase: 'loading_catalog',
-    stationsTotal: stations.length,
-    daysTotal: Math.max(1, horizonDays * Math.max(1, stations.length)),
-    note: stationId
-      ? `Preparing ${horizonDays}-day regeneration for ${stationId}`
-      : `Preparing ${horizonDays}-day generation for ${stations.length} stations`,
-  }
-    select: { id: true, preferences: true },
-  })
 
-  let plexToken = ''
-  let plexServerUrl = ''
-  for (const adminUser of adminUsers) {
-    const prefs = fromJsonObject<Record<string, string>>(adminUser.preferences)
-    if (prefs?.plexToken && prefs?.plexServerUrl) {
-      plexToken = prefs.plexToken
-      plexServerUrl = prefs.plexServerUrl
-      break
-    }
-  await persistStatus({
-    phase: 'loading_catalog',
-    note: forceRegenerate
-      ? 'Skipping catalog sync during regeneration and reusing the existing catalog snapshot'
-      : 'Checking catalog freshness before scheduling',
-  })
-
-  }
-  const stations = await prisma.station.findMany(
-    stationId ? { where: { id: stationId } } : undefined,
-  )
-  if (stationId && !stations.length) {
-    console.warn(`[Scheduler] Station ${stationId} not found — skipping run.`)
-    return
-  }
-  const today = startOfDay(new Date())
-  const finalDate = startOfDay(addDays(today, Math.max(0, horizonDays - 1)))
-
-  if (forceRegenerate) {
-    await clearSchedulesForRange({ startDate: today, endDate: finalDate, stationId })
-  }
-
-  const maxScheduled = await prisma.schedule.aggregate({
-    where: { isActive: true },
-    _max: { date: true },
-  })
-  const daysRemaining = maxScheduled._max.date
-    ? differenceInCalendarDays(startOfDay(maxScheduled._max.date), today) + 1
-    : 0
-  if (forceRegenerate) {
-    console.log('[Scheduler] Skipping Plex catalog sync during regeneration; using existing catalog.')
-  } else {
-    const forceCatalogSync = daysRemaining <= 3
-    const catalogAutoSyncMaxAgeHours = await getCatalogAutoSyncMaxAgeHours()
-    const catalogIsStale = await shouldSyncCatalog(catalogAutoSyncMaxAgeHours)
-
-    if (forceCatalogSync || catalogIsStale) {
-      if (!plexToken || !plexServerUrl) {
-        console.warn('[Scheduler] Catalog is due for sync but Plex credentials are unavailable; continuing with existing synced catalog only.')
-      } else {
-        try {
-          const summary = await syncPlexCatalog(new PlexClient(plexServerUrl, plexToken))
-          console.log(
-            `[Scheduler] Catalog sync complete (movies=${summary.movies}, shows=${summary.shows}, episodes=${summary.episodes}, upserts=${summary.upserts})`,
-          )
-        } catch (err) {
-          console.error('[Scheduler] Catalog sync failed; continuing with existing synced catalog only:', err)
-        }
+    let plexToken = ''
+    let plexServerUrl = ''
+    for (const adminUser of adminUsers) {
+      const prefs = fromJsonObject<Record<string, string>>(adminUser.preferences)
+      if (prefs?.plexToken && prefs?.plexServerUrl) {
+        plexToken = prefs.plexToken
+        plexServerUrl = prefs.plexServerUrl
+        break
       }
+    }
+
+    const stations = await prisma.station.findMany(
+      stationId ? { where: { id: stationId } } : undefined,
+    )
+    if (stationId && !stations.length) {
+      console.warn(`[Scheduler] Station ${stationId} not found — skipping run.`)
+      await persistStatus({
+        isRunning: false,
+        phase: 'error',
+        finishedAt: new Date().toISOString(),
+        lastError: `Station ${stationId} was not found.`,
+        note: 'Station scope not found',
+      })
+      return
+    }
+
+    const today = startOfDay(new Date())
+    await persistStatus({
+      phase: 'loading_catalog',
+      stationsTotal: stations.length,
+      daysTotal: Math.max(1, horizonDays * Math.max(1, stations.length)),
+      note: stationId
+        ? `Preparing ${horizonDays}-day regeneration for ${stationId}`
+        : `Preparing ${horizonDays}-day generation for ${stations.length} stations`,
+    })
+    const finalDate = startOfDay(addDays(today, Math.max(0, horizonDays - 1)))
+
+    if (forceRegenerate) {
+      await clearSchedulesForRange({ startDate: today, endDate: finalDate, stationId })
+    }
+
+    const maxScheduled = await prisma.schedule.aggregate({
+      where: { isActive: true },
+      _max: { date: true },
+    })
+    const daysRemaining = maxScheduled._max.date
+      ? differenceInCalendarDays(startOfDay(maxScheduled._max.date), today) + 1
+      : 0
+    await persistStatus({
+      phase: 'loading_catalog',
+      note: forceRegenerate
+        ? 'Skipping catalog sync during regeneration and reusing the existing catalog snapshot'
+        : 'Checking catalog freshness before scheduling',
+    })
+    if (forceRegenerate) {
+      console.log('[Scheduler] Skipping Plex catalog sync during regeneration; using existing catalog.')
     } else {
-      console.log(`[Scheduler] Catalog fresh enough; skipping auto-sync (threshold=${catalogAutoSyncMaxAgeHours}h).`)
-    }
-  }
+      const forceCatalogSync = daysRemaining <= 3
+      const catalogAutoSyncMaxAgeHours = await getCatalogAutoSyncMaxAgeHours()
+      const catalogIsStale = await shouldSyncCatalog(catalogAutoSyncMaxAgeHours)
 
-  const holidayTagMap = await getHolidayTagMap()
-  const holidaySettings = await loadHolidaySettings()
-  const showOwnership = await buildShowOwnershipMap()
-  const activeClassByPlexKey = await getActiveClassByPlexKey()
-  const holidayOverrideRows = await prisma.holidayOverride.findMany({
-    where: {
-  await persistStatus({
-    phase: 'scheduling',
-    note: 'Generating station schedules',
-  })
-
-  for (const station of stations) {
-    const blockedKeys = new Set(await getBlockedPlexKeys())
-    const rawRules = fromJsonObject<Record<string, unknown>>(station.rules)
-    const rules = normalizeStationRules(rawRules)
-    const fillerPools      = fromJsonObject<Record<string, string | null>>(station.fillerPools)
-    const holidayOverrides = fromJsonObject<Record<string, any>>(station.holidayOverrides)
-    for (let dayOffset = 0; dayOffset < horizonDays; dayOffset++) {
-      const date = startOfDay(addDays(today, dayOffset))
-
-      try {
-
-      // Skip if already scheduled
-      const existing = await prisma.schedule.findUnique({
-        where: { stationId_date: { stationId: station.id, date } },
-      })
-      if (existing) {
-        await persistStatus({
-          daysProcessed: runStatus.daysProcessed + 1,
-          note: `Skipped existing schedule for ${station.id} on ${date.toISOString().split('T')[0]}`,
-        })
-        continue
-      }
-      try {
-
-      // Skip if already scheduled
-      const existing = await prisma.schedule.findUnique({
-        where: { stationId_date: { stationId: station.id, date } },
-      })
-      if (existing) continue
-
-      const holiday       = getHolidayForDate(date, holidaySettings)
-      const holidayResolved = holiday
-        ? resolveHolidayConfig({
-            holiday,
-            date,
-            stationId: station.id,
-            rows: holidayOverrideRows,
-            legacyOverrides: holidayOverrides,
-          })
-        : { config: null, row: null }
-      const holidayConfig = holidayResolved.config
-      const holidayContentOverride = Boolean(holidayConfig?.replace_schedule)
-      const holidayTaggedKeys = holiday && holidayContentOverride ? new Set(holidayTagMap[holiday] ?? []) : null
-      const isWeekend     = [0, 6].includes(getDay(date))
-      const weekNumber    = Math.floor(dayOffset / 7) + 1
-
-      // Create the schedule row
-      const schedule = await prisma.schedule.create({
-        data: { stationId: station.id, date, weekNumber, isActive: true },
-      })
-
-      if (holidayResolved.row?.onceOffEvent && holidayContentOverride) {
-        await prisma.holidayOverride.update({
-          where: { id: holidayResolved.row.id },
-          data: { consumedAt: new Date() },
-        }).catch(() => null)
-      }
-
-      // Pick the template — holiday full-replace, else weekday/weekend
-      let blocks = isWeekend ? WEEKEND_BLOCKS : WEEKDAY_BLOCKS
-      const stationBlocks = resolveStationTimeBlocks(date, rawRules)
-
-      // Genre overrides for holidays
-      const effectiveAllowGenres = holidayContentOverride && holidayConfig?.content_priority?.length
-        ? asStringArray(holidayConfig.content_priority)
-        : rules.allow_genres
-
-      const adEnabled  = holidayConfig?.ad_free ? false : rules.ad_policy.enabled
-      const adIntervalTv    = rules.ad_policy.break_interval_tv
-      const adIntervalMovie = rules.ad_policy.break_interval_movie
-
-      // Pre-fetch available movies and shows from the synced catalog only.
-      let availableMovies = await loadStationCandidates({
-        type: 'movie',
-        allowGenres: effectiveAllowGenres,
-        denyGenres: rules.deny_genres,
-        allowLanguages: rules.allow_languages,
-        denyLanguages: rules.deny_languages,
-      }).catch(() => [])
-
-      let availableShows = await loadStationCandidates({
-        type: 'show',
-        allowGenres: effectiveAllowGenres,
-        denyGenres: rules.deny_genres,
-        allowLanguages: rules.allow_languages,
-        denyLanguages: rules.deny_languages,
-      }).catch(() => [])
-
-      availableMovies = availableMovies.filter((movie) => !blockedKeys.has(movie.ratingKey))
-      availableShows = availableShows
-        .filter((show) => !blockedKeys.has(show.ratingKey))
-        .filter((show) => showIsOwnedByStation(showOwnership, show.ratingKey, station.id))
-
-      // Build the complete set of all holiday-tagged keys across all holidays.
-      // Any item tagged for *any* holiday must only appear on its matching holiday day —
-      // exclude them entirely from general scheduling when today's holiday doesn't match.
-      const allHolidayTaggedKeys = new Set<string>(
-        Object.values(holidayTagMap).flat()
-      )
-      // Keys that are valid for today's active holiday (if any)
-      const todayPermittedHolidayKeys = holiday
-        ? new Set<string>(holidayTagMap[holiday] ?? [])
-        : new Set<string>()
-
-      // Filter out holiday-tagged content that shouldn't air today:
-      //   - If today has NO holiday: exclude all holiday-tagged items
-      //   - If today HAS a holiday: keep only items tagged for today's holiday (or untagged items)
-      availableMovies = availableMovies.filter((movie) => {
-        if (!allHolidayTaggedKeys.has(movie.ratingKey)) return true  // untagged — always allowed
-        return todayPermittedHolidayKeys.has(movie.ratingKey)         // tagged — only on matching holiday
-      })
-      availableShows = availableShows.filter((show) => {
-        if (!allHolidayTaggedKeys.has(show.ratingKey)) return true
-        return todayPermittedHolidayKeys.has(show.ratingKey)
-      })
-
-      // Rescue pool used only when normal placement fails repeatedly.
-      const rescueMovies = (await getCatalogCandidates({
-        type: 'movie',
-        allowGenres: [],
-        denyGenres: [],
-        allowLanguages: [],
-        denyLanguages: [],
-      }).catch(() => [])).filter((movie) => !blockedKeys.has(movie.ratingKey))
-
-      const holidayTaggedMovies = holidayTaggedKeys
-        ? availableMovies.filter((movie) => holidayTaggedKeys.has(movie.ratingKey))
-        : []
-      const holidayTaggedShows = holidayTaggedKeys
-        ? availableShows.filter((show) => holidayTaggedKeys.has(show.ratingKey))
-        : []
-      const dayTitleCounts = new Map<string, number>()
-      const daySeriesCounts = new Map<string, number>()
-      const dayEpisodeKeys = new Set<string>()
-      const windowBumperAssigned = new Set<string>()
-
-      // ── Special event injection (overrides normal + holiday scheduling) ──
-      // Priority: SpecialEvent (high → low) > Holiday override > normal blocks.
-      // Reserved windows are skipped by the normal block loop below, and the
-      // event slot's later start time also wins at playback time.
-      const reservedIntervals: Array<{ start: number; end: number }> = []
-      const dayStartMs = startOfDay(date).getTime()
-      const dayEndMs = addDays(startOfDay(date), 1).getTime()
-      const dayEvents = await prisma.specialEvent.findMany({
-        where: {
-          consumedAt: null,
-          OR: [{ stationId: null }, { stationId: station.id }],
-        },
-      })
-      const eventPriorityRank = (p: string) => (p === 'high' ? 0 : p === 'medium' ? 1 : 2)
-      dayEvents.sort((a, b) =>
-        eventPriorityRank(a.priority) - eventPriorityRank(b.priority)
-        || a.startTime.getTime() - b.startTime.getTime(),
-      )
-
-      for (const ev of dayEvents) {
-        let evContent: { source?: string; id?: string; untilContentFinished?: boolean } = {}
-        try { evContent = JSON.parse(ev.content) } catch { evContent = {} }
-        const evSource = String(evContent.source ?? '').toLowerCase()
-        const evContentId = String(evContent.id ?? '').trim()
-        if (!evContentId) continue
-
-        const eventMonthDay = ev.startTime.getMonth() * 100 + ev.startTime.getDate()
-        const currentMonthDay = date.getMonth() * 100 + date.getDate()
-        if (eventMonthDay !== currentMonthDay) continue
-
-        const startMs = new Date(date)
-        startMs.setHours(ev.startTime.getHours(), ev.startTime.getMinutes(), 0, 0)
-        const startTimeMs = startMs.getTime()
-        if (startTimeMs < dayStartMs || startTimeMs >= dayEndMs) continue
-
-        let durationMins = ev.durationMins > 0 ? ev.durationMins : 0
-        let eventMediaItemId: string | null = null
-        if (evSource === 'plex') {
-          const mi = await prisma.mediaItem
-            .findUnique({ where: { plexKey: evContentId }, select: { id: true, durationMins: true } })
-            .catch(() => null)
-          if (mi) {
-            eventMediaItemId = mi.id
-            if (evContent.untilContentFinished || durationMins <= 0) durationMins = mi.durationMins
+      if (forceCatalogSync || catalogIsStale) {
+        if (!plexToken || !plexServerUrl) {
+          console.warn('[Scheduler] Catalog is due for sync but Plex credentials are unavailable; continuing with existing synced catalog only.')
+        } else {
+          try {
+            const summary = await syncPlexCatalog(new PlexClient(plexServerUrl, plexToken))
+            console.log(
+              `[Scheduler] Catalog sync complete (movies=${summary.movies}, shows=${summary.shows}, episodes=${summary.episodes}, upserts=${summary.upserts})`,
+            )
+          } catch (err) {
+            console.error('[Scheduler] Catalog sync failed; continuing with existing synced catalog only:', err)
           }
         }
-        if (durationMins <= 0) durationMins = 60 // fallback for YouTube / unknown length
-
-        const endMs = startTimeMs + durationMins * 60_000
-        // Skip if it overlaps an already-reserved (higher priority) window.
-        if (reservedIntervals.some((r) => startTimeMs < r.end && endMs > r.start)) continue
-
-        const eventAdBreaks = buildAdBreaks(durationMins, evSource === 'plex' ? adIntervalMovie : adIntervalTv, adEnabled)
-        const eventSlot = await prisma.slot.create({
-          data: {
-            scheduleId:     schedule.id,
-            startTime:      new Date(startTimeMs),
-            durationMins,
-            contentSource:  evSource === 'plex' ? 'plex' : 'youtube',
-            contentId:      evSource === 'plex' ? evContentId : null,
-            adBreaks:       eventAdBreaks.length ? toJson(eventAdBreaks) : null,
-            fillerId:       evSource === 'plex' ? null : evContentId,
-            fillerDuration: null,
-            isOverride:     true,
-            overrideReason: 'special_event',
-            metadata:       toJson({ blockName: ev.name, title: ev.name, reason: 'special_event', priority: ev.priority, untilContentFinished: Boolean(evContent.untilContentFinished), onceOffEvent: Boolean(ev.onceOffEvent) }),
-          },
-        })
-        if (eventMediaItemId) {
-          await prisma.slotMediaItem
-            .create({ data: { slotId: eventSlot.id, mediaItemId: eventMediaItemId, orderIndex: 0 } })
-            .catch(() => null)
-        }
-        reservedIntervals.push({ start: startTimeMs, end: endMs })
-
-        if (ev.onceOffEvent) {
-          await prisma.specialEvent.update({
-            where: { id: ev.id },
-            data: { consumedAt: new Date() },
-          }).catch(() => null)
-        }
+      } else {
+        console.log(`[Scheduler] Catalog fresh enough; skipping auto-sync (threshold=${catalogAutoSyncMaxAgeHours}h).`)
       }
+    }
 
-      // Build slots for the day
-      let cursor = new Date(date)
+    const holidayTagMap = await getHolidayTagMap()
+    const holidaySettings = await loadHolidaySettings()
+    const showOwnership = await buildShowOwnershipMap()
+    const activeClassByPlexKey = await getActiveClassByPlexKey()
+    const overrideYears = new Set<number>()
+    for (let dayOffset = 0; dayOffset < horizonDays; dayOffset++) {
+      overrideYears.add(startOfDay(addDays(today, dayOffset)).getFullYear())
+    }
+    const holidayOverrideRows = await prisma.holidayOverride.findMany({
+      where: {
+        year: { in: Array.from(overrideYears) },
+        OR: [
+          { stationId: null },
+          ...(stationId ? [{ stationId }] : []),
+        ],
+      },
+    })
 
-      for (const block of blocks) {
-        // Block window in absolute UTC
-        const blockStart = new Date(date)
-        blockStart.setHours(block.startHour, block.startMin, 0, 0)
+    await persistStatus({
+      phase: 'scheduling',
+      note: 'Generating station schedules',
+    })
 
-        const blockEnd = new Date(date)
-        blockEnd.setHours(
-          block.endHour === 24 ? 0 : block.endHour,
-          block.endMin,
-          0,
-          0,
-        )
-        // Handle midnight crossover
-        if (block.endHour === 24 || blockEnd <= blockStart) {
-          blockEnd.setDate(blockEnd.getDate() + 1)
-        }
+    for (const station of stations) {
+      const blockedKeys = new Set(await getBlockedPlexKeys())
+      const rawRules = fromJsonObject<Record<string, unknown>>(station.rules)
+      const rules = normalizeStationRules(rawRules)
+      const fillerPools      = fromJsonObject<Record<string, string | null>>(station.fillerPools)
+      const holidayOverrides = fromJsonObject<Record<string, any>>(station.holidayOverrides)
+      for (let dayOffset = 0; dayOffset < horizonDays; dayOffset++) {
+        const date = startOfDay(addDays(today, dayOffset))
 
-        const blockDurationMins = differenceInMinutes(blockEnd, blockStart)
-        if (blockDurationMins <= 0) continue
+        try {
 
-        // Filter content by rating ceiling
-        const validMovies = applyRatingCeiling(
-          holidayTaggedMovies.length ? holidayTaggedMovies : availableMovies,
-          block.ratingCeiling,
-        ).filter(
-          (m) => ratingAllowed(m.contentRating, block.ratingCeiling),
-        )
-        const validShows = applyRatingCeiling(
-          holidayTaggedShows.length ? holidayTaggedShows : availableShows,
-          block.ratingCeiling,
-        ).filter(
-          (s) => ratingAllowed(s.contentRating, block.ratingCeiling),
-        )
-
-        let slotStart = new Date(blockStart)
-        let failedPlacementsAtCurrentStart = 0
-
-        while (differenceInMinutes(blockEnd, slotStart) >= 30) {
-          const remainingMins = differenceInMinutes(blockEnd, slotStart)
-          const effectiveContentType = getContentTypeForSlot(slotStart, block.contentType, stationBlocks)
-
-          // Skip any window reserved by a special event — it is already booked.
-          const reservedHit = reservedIntervals.find((r) => {
-            const t = slotStart.getTime()
-            return t >= r.start && t < r.end
+          // Skip if already scheduled
+          const existing = await prisma.schedule.findUnique({
+            where: { stationId_date: { stationId: station.id, date } },
           })
-          if (reservedHit) {
-            slotStart = new Date(reservedHit.end)
-            failedPlacementsAtCurrentStart = 0
+          if (existing) {
+            await persistStatus({
+              daysProcessed: runStatus.daysProcessed + 1,
+              note: `Skipped existing schedule for ${station.id} on ${date.toISOString().split('T')[0]}`,
+            })
             continue
           }
 
-          // Per-slot allow-genres / allow-languages from the Station Rules editor.
-          // Holiday content override takes precedence, so slot filtering is skipped then.
-          const activeStationSlot = getMatchingStationBlock(slotStart, stationBlocks)
-          const applySlotFilter = !holidayContentOverride && !!activeStationSlot
-          const slotMovies = applySlotFilter ? filterCandidatesBySlot(validMovies, activeStationSlot, activeClassByPlexKey) : validMovies
-          const slotShows  = applySlotFilter ? filterCandidatesBySlot(validShows, activeStationSlot, activeClassByPlexKey) : validShows
-          const slotLibWeights = applySlotFilter ? activeStationSlot?.libraryWeights : undefined
-          const libMultiplier = (item: PlexMediaItem) => slotLibraryMultiplier(item, slotLibWeights, activeClassByPlexKey)
+          const holiday       = getHolidayForDate(date, holidaySettings)
+          const holidayResolved = holiday
+            ? resolveHolidayConfig({
+                holiday,
+                date,
+                stationId: station.id,
+                rows: holidayOverrideRows,
+                legacyOverrides: holidayOverrides,
+              })
+            : { config: null, row: null }
+          const holidayConfig = holidayResolved.config
+          const holidayContentOverride = Boolean(holidayConfig?.replace_schedule)
+          const holidayTaggedKeys = holiday && holidayContentOverride ? new Set(holidayTagMap[holiday] ?? []) : null
+          const isWeekend     = [0, 6].includes(getDay(date))
+          const weekNumber    = Math.floor(dayOffset / 7) + 1
 
-          if (failedPlacementsAtCurrentStart >= 6) {
-            const fallbackDuration = Math.min(30, remainingMins)
-            const fallbackAdBreaks = buildAdBreaks(fallbackDuration, adIntervalTv, adEnabled)
+          // Create the schedule row
+          const schedule = await prisma.schedule.create({
+            data: { stationId: station.id, date, weekNumber, isActive: true },
+          })
 
-            const rescuePool = applyRatingCeiling(rescueMovies, block.ratingCeiling)
-            const rescueCandidates = rescuePool.length ? rescuePool : rescueMovies
-            const rescueMovie = pickMovieCandidate(
-              rescueCandidates,
-              block,
-              fallbackDuration,
-              dayTitleCounts,
+          if (holidayResolved.row?.onceOffEvent && holidayContentOverride) {
+            await prisma.holidayOverride.update({
+              where: { id: holidayResolved.row.id },
+              data: { consumedAt: new Date() },
+            }).catch(() => null)
+          }
+
+          // Pick the template — holiday full-replace, else weekday/weekend
+          const blocks = isWeekend ? WEEKEND_BLOCKS : WEEKDAY_BLOCKS
+          const stationBlocks = resolveStationTimeBlocks(date, rawRules)
+
+          // Genre overrides for holidays
+          const effectiveAllowGenres = holidayContentOverride && holidayConfig?.content_priority?.length
+            ? asStringArray(holidayConfig.content_priority)
+            : rules.allow_genres
+
+          const adEnabled  = holidayConfig?.ad_free ? false : rules.ad_policy.enabled
+          const adIntervalTv    = rules.ad_policy.break_interval_tv
+          const adIntervalMovie = rules.ad_policy.break_interval_movie
+
+          // Pre-fetch available movies and shows from the synced catalog only.
+          let availableMovies = await loadStationCandidates({
+            type: 'movie',
+            allowGenres: effectiveAllowGenres,
+            denyGenres: rules.deny_genres,
+            allowLanguages: rules.allow_languages,
+            denyLanguages: rules.deny_languages,
+          }).catch(() => [])
+
+          let availableShows = await loadStationCandidates({
+            type: 'show',
+            allowGenres: effectiveAllowGenres,
+            denyGenres: rules.deny_genres,
+            allowLanguages: rules.allow_languages,
+            denyLanguages: rules.deny_languages,
+          }).catch(() => [])
+
+          availableMovies = availableMovies.filter((movie) => !blockedKeys.has(movie.ratingKey))
+          availableShows = availableShows
+            .filter((show) => !blockedKeys.has(show.ratingKey))
+            .filter((show) => showIsOwnedByStation(showOwnership, show.ratingKey, station.id))
+
+          const allHolidayTaggedKeys = new Set<string>(
+            Object.values(holidayTagMap).flat(),
+          )
+          const todayPermittedHolidayKeys = holiday
+            ? new Set<string>(holidayTagMap[holiday] ?? [])
+            : new Set<string>()
+
+          availableMovies = availableMovies.filter((movie) => {
+            if (!allHolidayTaggedKeys.has(movie.ratingKey)) return true
+            return todayPermittedHolidayKeys.has(movie.ratingKey)
+          })
+          availableShows = availableShows.filter((show) => {
+            if (!allHolidayTaggedKeys.has(show.ratingKey)) return true
+            return todayPermittedHolidayKeys.has(show.ratingKey)
+          })
+
+          const rescueMovies = (await getCatalogCandidates({
+            type: 'movie',
+            allowGenres: [],
+            denyGenres: [],
+            allowLanguages: [],
+            denyLanguages: [],
+          }).catch(() => [])).filter((movie) => !blockedKeys.has(movie.ratingKey))
+
+          const holidayTaggedMovies = holidayTaggedKeys
+            ? availableMovies.filter((movie) => holidayTaggedKeys.has(movie.ratingKey))
+            : []
+          const holidayTaggedShows = holidayTaggedKeys
+            ? availableShows.filter((show) => holidayTaggedKeys.has(show.ratingKey))
+            : []
+          const dayTitleCounts = new Map<string, number>()
+          const daySeriesCounts = new Map<string, number>()
+          const dayEpisodeKeys = new Set<string>()
+          const windowBumperAssigned = new Set<string>()
+
+          const reservedIntervals: Array<{ start: number; end: number }> = []
+          const dayStartMs = startOfDay(date).getTime()
+          const dayEndMs = addDays(startOfDay(date), 1).getTime()
+          const dayEvents = await prisma.specialEvent.findMany({
+            where: {
+              consumedAt: null,
+              OR: [{ stationId: null }, { stationId: station.id }],
+            },
+          })
+          const eventPriorityRank = (p: string) => (p === 'high' ? 0 : p === 'medium' ? 1 : 2)
+          dayEvents.sort((a, b) =>
+            eventPriorityRank(a.priority) - eventPriorityRank(b.priority)
+            || a.startTime.getTime() - b.startTime.getTime(),
+          )
+
+          for (const ev of dayEvents) {
+            let evContent: { source?: string; id?: string; untilContentFinished?: boolean } = {}
+            try { evContent = JSON.parse(ev.content) } catch { evContent = {} }
+            const evSource = String(evContent.source ?? '').toLowerCase()
+            const evContentId = String(evContent.id ?? '').trim()
+            if (!evContentId) continue
+
+            const eventMonthDay = ev.startTime.getMonth() * 100 + ev.startTime.getDate()
+            const currentMonthDay = date.getMonth() * 100 + date.getDate()
+            if (eventMonthDay !== currentMonthDay) continue
+
+            const startMs = new Date(date)
+            startMs.setHours(ev.startTime.getHours(), ev.startTime.getMinutes(), 0, 0)
+            const startTimeMs = startMs.getTime()
+            if (startTimeMs < dayStartMs || startTimeMs >= dayEndMs) continue
+
+            let durationMins = ev.durationMins > 0 ? ev.durationMins : 0
+            let eventMediaItemId: string | null = null
+            if (evSource === 'plex') {
+              const mi = await prisma.mediaItem
+                .findUnique({ where: { plexKey: evContentId }, select: { id: true, durationMins: true } })
+                .catch(() => null)
+              if (mi) {
+                eventMediaItemId = mi.id
+                if (evContent.untilContentFinished || durationMins <= 0) durationMins = mi.durationMins
+              }
+            }
+            if (durationMins <= 0) durationMins = 60
+
+            const endMs = startTimeMs + durationMins * 60_000
+            if (reservedIntervals.some((r) => startTimeMs < r.end && endMs > r.start)) continue
+
+            const eventAdBreaks = buildAdBreaks(durationMins, evSource === 'plex' ? adIntervalMovie : adIntervalTv, adEnabled)
+            const eventSlot = await prisma.slot.create({
+              data: {
+                scheduleId:     schedule.id,
+                startTime:      new Date(startTimeMs),
+                durationMins,
+                contentSource:  evSource === 'plex' ? 'plex' : 'youtube',
+                contentId:      evSource === 'plex' ? evContentId : null,
+                adBreaks:       eventAdBreaks.length ? toJson(eventAdBreaks) : null,
+                fillerId:       evSource === 'plex' ? null : evContentId,
+                fillerDuration: null,
+                isOverride:     true,
+                overrideReason: 'special_event',
+                metadata:       toJson({ blockName: ev.name, title: ev.name, reason: 'special_event', priority: ev.priority, untilContentFinished: Boolean(evContent.untilContentFinished), onceOffEvent: Boolean(ev.onceOffEvent) }),
+              },
+            })
+            if (eventMediaItemId) {
+              await prisma.slotMediaItem
+                .create({ data: { slotId: eventSlot.id, mediaItemId: eventMediaItemId, orderIndex: 0 } })
+                .catch(() => null)
+            }
+            reservedIntervals.push({ start: startTimeMs, end: endMs })
+
+            if (ev.onceOffEvent) {
+              await prisma.specialEvent.update({
+                where: { id: ev.id },
+                data: { consumedAt: new Date() },
+              }).catch(() => null)
+            }
+          }
+
+          for (const block of blocks) {
+            const blockStart = new Date(date)
+            blockStart.setHours(block.startHour, block.startMin, 0, 0)
+
+            const blockEnd = new Date(date)
+            blockEnd.setHours(
+              block.endHour === 24 ? 0 : block.endHour,
+              block.endMin,
+              0,
+              0,
+            )
+            if (block.endHour === 24 || blockEnd <= blockStart) {
+              blockEnd.setDate(blockEnd.getDate() + 1)
+            }
+
+            const blockDurationMins = differenceInMinutes(blockEnd, blockStart)
+            if (blockDurationMins <= 0) continue
+
+            const validMovies = applyRatingCeiling(
+              holidayTaggedMovies.length ? holidayTaggedMovies : availableMovies,
+              block.ratingCeiling,
+            ).filter(
+              (m) => ratingAllowed(m.contentRating, block.ratingCeiling),
+            )
+            const validShows = applyRatingCeiling(
+              holidayTaggedShows.length ? holidayTaggedShows : availableShows,
+              block.ratingCeiling,
+            ).filter(
+              (s) => ratingAllowed(s.contentRating, block.ratingCeiling),
             )
 
-            if (rescueMovie) {
-              const mediaItem = await upsertMediaItem(rescueMovie)
-              const slot = await prisma.slot.create({
-                data: {
-                  scheduleId:    schedule.id,
-                  startTime:     slotStart,
-                  durationMins:  fallbackDuration,
-                  contentSource: 'plex',
-                  contentId:     rescueMovie.ratingKey,
-                  adBreaks:      fallbackAdBreaks.length ? toJson(fallbackAdBreaks) : null,
-                  fillerId:      null,
-                  fillerDuration: null,
-                  metadata:      toJson({ blockName: block.name, title: rescueMovie.title, reason: 'placement_safety_rescue' }),
-                },
+            let slotStart = new Date(blockStart)
+            let failedPlacementsAtCurrentStart = 0
+
+            while (differenceInMinutes(blockEnd, slotStart) >= 30) {
+              const remainingMins = differenceInMinutes(blockEnd, slotStart)
+              const effectiveContentType = getContentTypeForSlot(slotStart, block.contentType, stationBlocks)
+
+              const reservedHit = reservedIntervals.find((r) => {
+                const t = slotStart.getTime()
+                return t >= r.start && t < r.end
               })
-              await prisma.slotMediaItem.create({
-                data: { slotId: slot.id, mediaItemId: mediaItem.id, orderIndex: 0 },
-              })
-              await prisma.mediaItem.update({
-                where: { id: mediaItem.id },
-                data: { scheduledCount: { increment: 1 }, lastScheduled: new Date() },
-              })
+              if (reservedHit) {
+                slotStart = new Date(reservedHit.end)
+                failedPlacementsAtCurrentStart = 0
+                continue
+              }
 
-              incrementCount(dayTitleCounts, rescueMovie.title)
-              slotStart = addMinutes(slotStart, fallbackDuration)
-              failedPlacementsAtCurrentStart = 0
-              continue
-            }
+              const activeStationSlot = getMatchingStationBlock(slotStart, stationBlocks)
+              const applySlotFilter = !holidayContentOverride && !!activeStationSlot
+              const slotMovies = applySlotFilter ? filterCandidatesBySlot(validMovies, activeStationSlot, activeClassByPlexKey) : validMovies
+              const slotShows  = applySlotFilter ? filterCandidatesBySlot(validShows, activeStationSlot, activeClassByPlexKey) : validShows
+              const slotLibWeights = applySlotFilter ? activeStationSlot?.libraryWeights : undefined
+              const libMultiplier = (item: PlexMediaItem) => slotLibraryMultiplier(item, slotLibWeights, activeClassByPlexKey)
 
-            await prisma.slot.create({
-              data: {
-                scheduleId:    schedule.id,
-                startTime:     slotStart,
-                durationMins:  fallbackDuration,
-                contentSource: 'youtube',
-                adBreaks:      fallbackAdBreaks.length ? toJson(fallbackAdBreaks) : null,
-                fillerId:      fillerPools.music ?? fillerPools.ads ?? null,
-                fillerDuration: null,
-                metadata:      toJson({ blockName: block.name, title: 'Filler', reason: 'placement_safety_fallback', fillerWindows: block.fillerWindows ?? [] }),
-              },
-            })
-            slotStart = addMinutes(slotStart, fallbackDuration)
-            failedPlacementsAtCurrentStart = 0
-            continue
-          }
+              if (failedPlacementsAtCurrentStart >= 6) {
+                const fallbackDuration = Math.min(30, remainingMins)
+                const fallbackAdBreaks = buildAdBreaks(fallbackDuration, adIntervalTv, adEnabled)
 
-          // ── FILLER block (infomercials, music videos) ──
-          if (effectiveContentType === 'filler' || effectiveContentType === 'news') {
-            const fillerDuration = remainingMins
-            const fillerAdBreaks = buildAdBreaks(fillerDuration, adIntervalTv, adEnabled)
-            await prisma.slot.create({
-              data: {
-                scheduleId:    schedule.id,
-                startTime:     slotStart,
-                durationMins:  fillerDuration,
-                contentSource: 'youtube',
-                adBreaks:      fillerAdBreaks.length ? toJson(fillerAdBreaks) : null,
-                fillerId:      fillerPools.ads ?? fillerPools.music ?? null,
-                fillerDuration: null,
-                metadata:      toJson({ blockName: block.name, title: block.name, fillerWindows: block.fillerWindows ?? [] }),
-              },
-            })
-            slotStart = new Date(blockEnd)
-            failedPlacementsAtCurrentStart = 0
-            continue
-          }
+                const rescuePool = applyRatingCeiling(rescueMovies, block.ratingCeiling)
+                const rescueCandidates = rescuePool.length ? rescuePool : rescueMovies
+                const rescueMovie = pickMovieCandidate(
+                  rescueCandidates,
+                  block,
+                  fallbackDuration,
+                  dayTitleCounts,
+                )
 
-          // ── MOVIE block ──
-          const tryMovieBlock = effectiveContentType === 'movie'
-            || (effectiveContentType === 'mixed' && shouldTryMovieInMixedBlock({
-              remainingMins,
-              validMovies: slotMovies.length,
-              validShows: slotShows.length,
-              daySeriesCounts,
-            }))
-
-          if (tryMovieBlock && slotMovies.length) {
-            const chosen = pickMovieCandidate(slotMovies, block, remainingMins, dayTitleCounts, libMultiplier)
-            if (!chosen) {
-              failedPlacementsAtCurrentStart += 1
-              continue
-            }
-            const adBreaks = buildAdBreaks(chosen.durationMins, adIntervalMovie, adEnabled)
-            const adMins   = adBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
-            const slotEnd  = addMinutes(slotStart, chosen.durationMins + adMins)
-            const alignedEnd = alignEndTime(slotEnd)
-            const fillerMins = differenceInMinutes(alignedEnd, slotEnd)
-
-            // Index the media item
-            const mediaItem = await upsertMediaItem(chosen)
-
-            const slot = await prisma.slot.create({
-              data: {
-                scheduleId:    schedule.id,
-                startTime:     slotStart,
-                durationMins:  chosen.durationMins,
-                contentSource: 'plex',
-                contentId:     chosen.ratingKey,
-                adBreaks:      adBreaks.length ? toJson(adBreaks) : null,
-                fillerId:      fillerMins > 0 ? (fillerPools.ads ?? fillerPools.music ?? null) : null,
-                fillerDuration: fillerMins > 0 ? fillerMins : null,
-                metadata:      toJson({ blockName: block.name, title: chosen.title, year: chosen.year, ...bumperMetaForWindow(activeStationSlot, windowBumperAssigned) }),
-              },
-            })
-            await prisma.slotMediaItem.create({
-              data: { slotId: slot.id, mediaItemId: mediaItem.id, orderIndex: 0 },
-            })
-            await prisma.mediaItem.update({
-              where: { id: mediaItem.id },
-              data: { scheduledCount: { increment: 1 }, lastScheduled: new Date() },
-            })
-
-            incrementCount(dayTitleCounts, chosen.title)
-
-            slotStart = alignedEnd
-            failedPlacementsAtCurrentStart = 0
-            continue
-          }
-
-          // ── EPISODE block ──
-          if (
-            (effectiveContentType === 'episode' || effectiveContentType === 'mixed') &&
-            slotShows.length
-          ) {
-            // Check ShowProgress for a pinned show at this weekday + time
-            const weekday = getDay(slotStart)
-            const timeStr = `${String(slotStart.getHours()).padStart(2, '0')}:${String(slotStart.getMinutes()).padStart(2, '0')}`
-
-            let progress = await prisma.showProgress.findFirst({
-              where: {
-                stationId:   station.id,
-                airedWeekday: weekday,
-                airedTime:   timeStr,
-                isCompleted: false,
-              },
-            })
-
-            if (progress && blockedKeys.has(progress.plexShowKey)) {
-              progress = null
-            }
-            if (progress && !showIsOwnedByStation(showOwnership, progress.plexShowKey, station.id)) {
-              progress = null
-            }
-            if (progress && holidayTaggedKeys?.size && !holidayTaggedKeys.has(progress.plexShowKey)) {
-              progress = null
-            }
-            if (progress && (daySeriesCounts.get(progress.showTitle?.toLowerCase() || '') ?? 0) >= MAX_SERIES_EPISODES_PER_DAY) {
-              progress = null
-            }
-
-            // If no pinned show, pick one from valid shows and create a progress record
-            if (!progress) {
-              const weightedShows = buildWeightedShowPool(slotShows, block, daySeriesCounts, libMultiplier)
-              const remainingShows = [...weightedShows]
-
-              while (remainingShows.length && !progress) {
-                const show = weightedRandom(remainingShows)
-                if (!show) break
-
-                const seriesKey = show.title.toLowerCase()
-                if ((daySeriesCounts.get(seriesKey) ?? 0) >= MAX_SERIES_EPISODES_PER_DAY) {
-                  const idxSkipped = remainingShows.findIndex((entry) => entry.item.ratingKey === show.ratingKey)
-                  if (idxSkipped >= 0) remainingShows.splice(idxSkipped, 1)
-                  continue
-                }
-
-                if (!showIsOwnedByStation(showOwnership, show.ratingKey, station.id)) {
-                  const idxOwner = remainingShows.findIndex((entry) => entry.item.ratingKey === show.ratingKey)
-                  if (idxOwner >= 0) remainingShows.splice(idxOwner, 1)
-                  continue
-                }
-
-                const idx = remainingShows.findIndex((entry) => entry.item.ratingKey === show.ratingKey)
-                if (idx >= 0) remainingShows.splice(idx, 1)
-
-                const epList = await getCatalogEpisodeList(show.ratingKey).catch(() => [])
-                if (!epList.length) {
-                  continue
-                }
-
-                progress = await prisma.showProgress.upsert({
-                  where: {
-                    stationId_plexShowKey: {
-                      stationId: station.id,
-                      plexShowKey: show.ratingKey,
+                if (rescueMovie) {
+                  const mediaItem = await upsertMediaItem(rescueMovie)
+                  const slot = await prisma.slot.create({
+                    data: {
+                      scheduleId:    schedule.id,
+                      startTime:     slotStart,
+                      durationMins:  fallbackDuration,
+                      contentSource: 'plex',
+                      contentId:     rescueMovie.ratingKey,
+                      adBreaks:      fallbackAdBreaks.length ? toJson(fallbackAdBreaks) : null,
+                      fillerId:      null,
+                      fillerDuration: null,
+                      metadata:      toJson({ blockName: block.name, title: rescueMovie.title, reason: 'placement_safety_rescue' }),
                     },
+                  })
+                  await prisma.slotMediaItem.create({
+                    data: { slotId: slot.id, mediaItemId: mediaItem.id, orderIndex: 0 },
+                  })
+                  await prisma.mediaItem.update({
+                    where: { id: mediaItem.id },
+                    data: { scheduledCount: { increment: 1 }, lastScheduled: new Date() },
+                  })
+
+                  incrementCount(dayTitleCounts, rescueMovie.title)
+                  slotStart = addMinutes(slotStart, fallbackDuration)
+                  failedPlacementsAtCurrentStart = 0
+                  continue
+                }
+
+                await prisma.slot.create({
+                  data: {
+                    scheduleId:    schedule.id,
+                    startTime:     slotStart,
+                    durationMins:  fallbackDuration,
+                    contentSource: 'youtube',
+                    adBreaks:      fallbackAdBreaks.length ? toJson(fallbackAdBreaks) : null,
+                    fillerId:      fillerPools.music ?? fillerPools.ads ?? null,
+                    fillerDuration: null,
+                    metadata:      toJson({ blockName: block.name, title: 'Filler', reason: 'placement_safety_fallback' }),
                   },
-                  update: {
+                })
+                slotStart = addMinutes(slotStart, fallbackDuration)
+                failedPlacementsAtCurrentStart = 0
+                continue
+              }
+
+              if (effectiveContentType === 'filler' || effectiveContentType === 'news') {
+                const fillerDuration = remainingMins
+                const fillerAdBreaks = buildAdBreaks(fillerDuration, adIntervalTv, adEnabled)
+                await prisma.slot.create({
+                  data: {
+                    scheduleId:    schedule.id,
+                    startTime:     slotStart,
+                    durationMins:  fillerDuration,
+                    contentSource: 'youtube',
+                    adBreaks:      fillerAdBreaks.length ? toJson(fillerAdBreaks) : null,
+                    fillerId:      fillerPools.ads ?? fillerPools.music ?? null,
+                    fillerDuration: null,
+                    metadata:      toJson({ blockName: block.name, title: block.name }),
+                  },
+                })
+                slotStart = new Date(blockEnd)
+                failedPlacementsAtCurrentStart = 0
+                continue
+              }
+
+              const tryMovieBlock = effectiveContentType === 'movie'
+                || (effectiveContentType === 'mixed' && shouldTryMovieInMixedBlock({
+                  remainingMins,
+                  validMovies: slotMovies.length,
+                  validShows: slotShows.length,
+                  daySeriesCounts,
+                }))
+
+              if (tryMovieBlock && slotMovies.length) {
+                const chosen = pickMovieCandidate(slotMovies, block, remainingMins, dayTitleCounts, libMultiplier)
+                if (!chosen) {
+                  failedPlacementsAtCurrentStart += 1
+                  continue
+                }
+                const adBreaks = buildAdBreaks(chosen.durationMins, adIntervalMovie, adEnabled)
+                const adMins   = adBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
+                const slotEnd  = addMinutes(slotStart, chosen.durationMins + adMins)
+                const alignedEnd = alignEndTime(slotEnd)
+                const fillerMins = differenceInMinutes(alignedEnd, slotEnd)
+
+                const mediaItem = await upsertMediaItem(chosen)
+
+                const slot = await prisma.slot.create({
+                  data: {
+                    scheduleId:    schedule.id,
+                    startTime:     slotStart,
+                    durationMins:  chosen.durationMins,
+                    contentSource: 'plex',
+                    contentId:     chosen.ratingKey,
+                    adBreaks:      adBreaks.length ? toJson(adBreaks) : null,
+                    fillerId:      fillerMins > 0 ? (fillerPools.ads ?? fillerPools.music ?? null) : null,
+                    fillerDuration: fillerMins > 0 ? fillerMins : null,
+                    metadata:      toJson({ blockName: block.name, title: chosen.title, year: chosen.year, ...bumperMetaForWindow(activeStationSlot, windowBumperAssigned) }),
+                  },
+                })
+                await prisma.slotMediaItem.create({
+                  data: { slotId: slot.id, mediaItemId: mediaItem.id, orderIndex: 0 },
+                })
+                await prisma.mediaItem.update({
+                  where: { id: mediaItem.id },
+                  data: { scheduledCount: { increment: 1 }, lastScheduled: new Date() },
+                })
+
+                incrementCount(dayTitleCounts, chosen.title)
+
+                slotStart = alignedEnd
+                failedPlacementsAtCurrentStart = 0
+                continue
+              }
+
+              if (
+                (effectiveContentType === 'episode' || effectiveContentType === 'mixed') &&
+                slotShows.length
+              ) {
+                const weekday = getDay(slotStart)
+                const timeStr = `${String(slotStart.getHours()).padStart(2, '0')}:${String(slotStart.getMinutes()).padStart(2, '0')}`
+
+                let progress = await prisma.showProgress.findFirst({
+                  where: {
+                    stationId:   station.id,
                     airedWeekday: weekday,
-                    airedTime: timeStr,
+                    airedTime:   timeStr,
                     isCompleted: false,
-                  },
-                  create: {
-                    stationId:     station.id,
-                    plexShowKey:   show.ratingKey,
-                    showTitle:     show.title,
-                    episodeOrderJson: toJson(await buildEpisodeSnapshotList(show.ratingKey)),
-                    nextSeason:    epList[0].season,
-                    nextEpisode:   epList[0].episode,
-                    totalSeasons:  Math.max(...epList.map((e) => e.season)),
-                    totalEpisodes: epList.length,
-                    airedWeekday:  weekday,
-                    airedTime:     timeStr,
                   },
                 })
 
-                // First station to claim a show keeps ownership for exclusive channel identity.
-                if (!showOwnership.has(show.ratingKey)) {
-                  showOwnership.set(show.ratingKey, station.id)
+                if (progress && blockedKeys.has(progress.plexShowKey)) {
+                  progress = null
                 }
-              }
-            }
+                if (progress && !showIsOwnedByStation(showOwnership, progress.plexShowKey, station.id)) {
+                  progress = null
+                }
+                if (progress && holidayTaggedKeys?.size && !holidayTaggedKeys.has(progress.plexShowKey)) {
+                  progress = null
+                }
+                if (progress && (daySeriesCounts.get(progress.showTitle?.toLowerCase() || '') ?? 0) >= MAX_SERIES_EPISODES_PER_DAY) {
+                  progress = null
+                }
 
-            if (progress) {
-              const episodeOrder = await loadEpisodeSnapshot(progress)
-              const episode = episodeOrder.find(
-                (ref) => ref.season === progress.nextSeason && ref.episode === progress.nextEpisode,
-              ) ?? null
+                if (!progress) {
+                  const weightedShows = buildWeightedShowPool(slotShows, block, daySeriesCounts, libMultiplier)
+                  const remainingShows = [...weightedShows]
 
-              if (episode) {
-                if (dayEpisodeKeys.has(episode.ratingKey)) {
-                  // Avoid exact episode duplicates in the same station/day.
+                  while (remainingShows.length && !progress) {
+                    const show = weightedRandom(remainingShows)
+                    if (!show) break
+
+                    const seriesKey = show.title.toLowerCase()
+                    if ((daySeriesCounts.get(seriesKey) ?? 0) >= MAX_SERIES_EPISODES_PER_DAY) {
+                      const idxSkipped = remainingShows.findIndex((entry) => entry.item.ratingKey === show.ratingKey)
+                      if (idxSkipped >= 0) remainingShows.splice(idxSkipped, 1)
+                      continue
+                    }
+
+                    if (!showIsOwnedByStation(showOwnership, show.ratingKey, station.id)) {
+                      const idxOwner = remainingShows.findIndex((entry) => entry.item.ratingKey === show.ratingKey)
+                      if (idxOwner >= 0) remainingShows.splice(idxOwner, 1)
+                      continue
+                    }
+
+                    const idx = remainingShows.findIndex((entry) => entry.item.ratingKey === show.ratingKey)
+                    if (idx >= 0) remainingShows.splice(idx, 1)
+
+                    const epList = await getCatalogEpisodeList(show.ratingKey).catch(() => [])
+                    if (!epList.length) {
+                      continue
+                    }
+
+                    progress = await prisma.showProgress.upsert({
+                      where: {
+                        stationId_plexShowKey: {
+                          stationId: station.id,
+                          plexShowKey: show.ratingKey,
+                        },
+                      },
+                      update: {
+                        airedWeekday: weekday,
+                        airedTime: timeStr,
+                        isCompleted: false,
+                      },
+                      create: {
+                        stationId:     station.id,
+                        plexShowKey:   show.ratingKey,
+                        showTitle:     show.title,
+                        episodeOrderJson: toJson(await buildEpisodeSnapshotList(show.ratingKey)),
+                        nextSeason:    epList[0].season,
+                        nextEpisode:   epList[0].episode,
+                        totalSeasons:  Math.max(...epList.map((e) => e.season)),
+                        totalEpisodes: epList.length,
+                        airedWeekday:  weekday,
+                        airedTime:     timeStr,
+                      },
+                    })
+
+                    if (!showOwnership.has(show.ratingKey)) {
+                      showOwnership.set(show.ratingKey, station.id)
+                    }
+                  }
+                }
+
+                if (progress) {
+                  const episodeOrder = await loadEpisodeSnapshot(progress)
+                  const episode = episodeOrder.find(
+                    (ref) => ref.season === progress.nextSeason && ref.episode === progress.nextEpisode,
+                  ) ?? null
+
+                  if (episode) {
+                    if (dayEpisodeKeys.has(episode.ratingKey)) {
+                      await prisma.showProgress.update({
+                        where: { id: progress.id },
+                        data: { isCompleted: true, lastAiredAt: new Date() },
+                      }).catch(() => null)
+                      failedPlacementsAtCurrentStart += 1
+                      continue
+                    }
+
+                    const adBreaks   = buildAdBreaks(episode.durationMins, adIntervalTv, adEnabled)
+                    const adMins     = adBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
+                    const slotEnd    = addMinutes(slotStart, episode.durationMins + adMins)
+                    const alignedEnd = alignEndTime(slotEnd)
+                    const fillerMins = differenceInMinutes(alignedEnd, slotEnd)
+
+                    const mediaItem = await upsertMediaItem(episode)
+                    const slot = await prisma.slot.create({
+                      data: {
+                        scheduleId:    schedule.id,
+                        startTime:     slotStart,
+                        durationMins:  episode.durationMins,
+                        contentSource: 'plex',
+                        contentId:     episode.ratingKey,
+                        showTitle:     episode.showTitle ?? progress.showTitle,
+                        seasonNumber:  episode.seasonNumber,
+                        episodeNumber: episode.episodeNumber,
+                        adBreaks:      adBreaks.length ? toJson(adBreaks) : null,
+                        fillerId:      fillerMins > 0 ? (fillerPools.ads ?? fillerPools.music ?? null) : null,
+                        fillerDuration: fillerMins > 0 ? fillerMins : null,
+                        metadata:      toJson({
+                          blockName: block.name,
+                          showTitle: episode.showTitle ?? progress.showTitle,
+                          season:    episode.seasonNumber,
+                          episode:   episode.episodeNumber,
+                          ...bumperMetaForWindow(activeStationSlot, windowBumperAssigned),
+                        }),
+                      },
+                    })
+                    await prisma.slotMediaItem.create({
+                      data: { slotId: slot.id, mediaItemId: mediaItem.id, orderIndex: 0 },
+                    })
+
+                    await prisma.mediaItem.update({
+                      where: { id: mediaItem.id },
+                      data: { scheduledCount: { increment: 1 }, lastScheduled: new Date() },
+                    })
+                    await prisma.mediaItem.updateMany({
+                      where: { plexKey: progress.plexShowKey },
+                      data: { scheduledCount: { increment: 1 }, lastScheduled: new Date() },
+                    })
+
+                    await advanceShowProgress(progress)
+
+                    incrementCount(dayTitleCounts, episode.showTitle ?? episode.title)
+                    incrementCount(daySeriesCounts, episode.showTitle)
+                    dayEpisodeKeys.add(episode.ratingKey)
+
+                    slotStart = alignedEnd
+                    failedPlacementsAtCurrentStart = 0
+                    continue
+                  }
+
                   await prisma.showProgress.update({
                     where: { id: progress.id },
                     data: { isCompleted: true, lastAiredAt: new Date() },
@@ -1508,148 +1544,93 @@ export async function runScheduler(
                   failedPlacementsAtCurrentStart += 1
                   continue
                 }
+              }
 
-                const adBreaks   = buildAdBreaks(episode.durationMins, adIntervalTv, adEnabled)
-                const adMins     = adBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
-                const slotEnd    = addMinutes(slotStart, episode.durationMins + adMins)
-                const alignedEnd = alignEndTime(slotEnd)
-                const fillerMins = differenceInMinutes(alignedEnd, slotEnd)
+              const fallbackDuration = 30
+              const fallbackAdBreaks = buildAdBreaks(fallbackDuration, adIntervalTv, adEnabled)
 
-                const mediaItem = await upsertMediaItem(episode)
+              const rescuePool = applyRatingCeiling(rescueMovies, block.ratingCeiling)
+              const rescueCandidates = rescuePool.length ? rescuePool : rescueMovies
+              const rescueMovie = pickMovieCandidate(
+                rescueCandidates,
+                block,
+                fallbackDuration,
+                dayTitleCounts,
+              )
+
+              if (rescueMovie) {
+                const mediaItem = await upsertMediaItem(rescueMovie)
                 const slot = await prisma.slot.create({
                   data: {
                     scheduleId:    schedule.id,
                     startTime:     slotStart,
-                    durationMins:  episode.durationMins,
+                    durationMins:  fallbackDuration,
                     contentSource: 'plex',
-                    contentId:     episode.ratingKey,
-                    showTitle:     episode.showTitle ?? progress.showTitle,
-                    seasonNumber:  episode.seasonNumber,
-                    episodeNumber: episode.episodeNumber,
-                    adBreaks:      adBreaks.length ? toJson(adBreaks) : null,
-                    fillerId:      fillerMins > 0 ? (fillerPools.ads ?? fillerPools.music ?? null) : null,
-                    fillerDuration: fillerMins > 0 ? fillerMins : null,
-                    metadata:      toJson({
-                          blockName: block.name,
-                          showTitle: episode.showTitle ?? progress.showTitle,
-                          season:    episode.seasonNumber,
-                          episode:   episode.episodeNumber,
-                          fillerWindows: block.fillerWindows ?? [],
-                          ...bumperMetaForWindow(activeStationSlot, windowBumperAssigned),
-                        }),
+                    contentId:     rescueMovie.ratingKey,
+                    adBreaks:      fallbackAdBreaks.length ? toJson(fallbackAdBreaks) : null,
+                    fillerId:      null,
+                    fillerDuration: null,
+                    metadata:      toJson({ blockName: block.name, title: rescueMovie.title, reason: 'fallback_rescue' }),
                   },
                 })
                 await prisma.slotMediaItem.create({
                   data: { slotId: slot.id, mediaItemId: mediaItem.id, orderIndex: 0 },
                 })
-
                 await prisma.mediaItem.update({
                   where: { id: mediaItem.id },
                   data: { scheduledCount: { increment: 1 }, lastScheduled: new Date() },
                 })
-                await prisma.mediaItem.updateMany({
-                  where: { plexKey: progress.plexShowKey },
-                  data: { scheduledCount: { increment: 1 }, lastScheduled: new Date() },
-                })
 
-                // Advance the episode pointer
-                await advanceShowProgress(progress)
-
-                incrementCount(dayTitleCounts, episode.showTitle ?? episode.title)
-                incrementCount(daySeriesCounts, episode.showTitle)
-                dayEpisodeKeys.add(episode.ratingKey)
-
-                slotStart = alignedEnd
+                incrementCount(dayTitleCounts, rescueMovie.title)
+                slotStart = addMinutes(slotStart, fallbackDuration)
                 failedPlacementsAtCurrentStart = 0
                 continue
               }
 
-              // The pointer no longer maps to a valid catalog episode.
-              // Mark complete so a new show can be selected in this same slot window.
-              await prisma.showProgress.update({
-                where: { id: progress.id },
-                data: { isCompleted: true, lastAiredAt: new Date() },
-              }).catch(() => null)
-              failedPlacementsAtCurrentStart += 1
-              continue
+              await prisma.slot.create({
+                data: {
+                  scheduleId:    schedule.id,
+                  startTime:     slotStart,
+                  durationMins:  fallbackDuration,
+                  contentSource: 'youtube',
+                  adBreaks:      fallbackAdBreaks.length ? toJson(fallbackAdBreaks) : null,
+                  fillerId:      fillerPools.music ?? fillerPools.ads ?? null,
+                  fillerDuration: null,
+                  metadata:      toJson({ blockName: block.name, title: 'Filler', reason: 'fallback_filler' }),
+                },
+              })
+              slotStart = addMinutes(slotStart, 30)
+              failedPlacementsAtCurrentStart = 0
             }
           }
 
-          // ── Fallback: YouTube filler ──
-          const fallbackDuration = 30
-          const fallbackAdBreaks = buildAdBreaks(fallbackDuration, adIntervalTv, adEnabled)
-
-          const rescuePool = applyRatingCeiling(rescueMovies, block.ratingCeiling)
-          const rescueCandidates = rescuePool.length ? rescuePool : rescueMovies
-          const rescueMovie = pickMovieCandidate(
-            rescueCandidates,
-            block,
-            fallbackDuration,
-            dayTitleCounts,
-          )
-
-          if (rescueMovie) {
-            const mediaItem = await upsertMediaItem(rescueMovie)
-            const slot = await prisma.slot.create({
-              data: {
-                scheduleId:    schedule.id,
-                startTime:     slotStart,
-                durationMins:  fallbackDuration,
-                contentSource: 'plex',
-                contentId:     rescueMovie.ratingKey,
-                adBreaks:      fallbackAdBreaks.length ? toJson(fallbackAdBreaks) : null,
-                fillerId:      null,
-                fillerDuration: null,
-                metadata:      toJson({ blockName: block.name, title: rescueMovie.title, reason: 'fallback_rescue' }),
-              },
-            })
-            await prisma.slotMediaItem.create({
-              data: { slotId: slot.id, mediaItemId: mediaItem.id, orderIndex: 0 },
-            })
-            await prisma.mediaItem.update({
-              where: { id: mediaItem.id },
-              data: { scheduledCount: { increment: 1 }, lastScheduled: new Date() },
-            })
-
-            incrementCount(dayTitleCounts, rescueMovie.title)
-            slotStart = addMinutes(slotStart, fallbackDuration)
-            failedPlacementsAtCurrentStart = 0
-            continue
-          }
-
-          await prisma.slot.create({
-            data: {
-              scheduleId:    schedule.id,
-              startTime:     slotStart,
-              durationMins:  fallbackDuration,
-              contentSource: 'youtube',
-      await persistStatus({
-        daysProcessed: runStatus.daysProcessed + 1,
-        daysCreated: runStatus.daysCreated + 1,
-        note: `Scheduled ${station.id} for ${date.toISOString().split('T')[0]}`,
-      })
-      console.log(`[Scheduler] Scheduled ${station.id} for ${date.toISOString().split('T')[0]}`)
-      } catch (err) {
-        await persistStatus({
-          lastError: err instanceof Error ? err.message : String(err),
-          note: `Failed ${station.id} for ${date.toISOString().split('T')[0]}`,
-        })
-        console.error(`[Scheduler] Failed ${station.id} for ${date.toISOString().split('T')[0]}:`, err)
+          await persistStatus({
+            daysProcessed: runStatus.daysProcessed + 1,
+            daysCreated: runStatus.daysCreated + 1,
+            note: `Scheduled ${station.id} for ${date.toISOString().split('T')[0]}`,
+          })
+          console.log(`[Scheduler] Scheduled ${station.id} for ${date.toISOString().split('T')[0]}`)
+        } catch (err) {
+          await persistStatus({
+            lastError: err instanceof Error ? err.message : String(err),
+            note: `Failed ${station.id} for ${date.toISOString().split('T')[0]}`,
+          })
+          console.error(`[Scheduler] Failed ${station.id} for ${date.toISOString().split('T')[0]}:`, err)
+        }
       }
+      await persistStatus({
+        stationsProcessed: runStatus.stationsProcessed + 1,
+        note: `Completed station ${station.id}`,
+      })
     }
-    await persistStatus({
-      stationsProcessed: runStatus.stationsProcessed + 1,
-      note: `Completed station ${station.id}`,
-    })
-  }
 
-  await persistStatus({
-    isRunning: false,
-    phase: 'complete',
-    finishedAt: new Date().toISOString(),
-    note: 'Scheduler run complete',
-  })
-  console.log('[Scheduler] Run complete.')
+    await persistStatus({
+      isRunning: false,
+      phase: 'complete',
+      finishedAt: new Date().toISOString(),
+      note: 'Scheduler run complete',
+    })
+    console.log('[Scheduler] Run complete.')
   } catch (error) {
     await persistStatus({
       isRunning: false,
@@ -1658,18 +1639,7 @@ export async function runScheduler(
       lastError: error instanceof Error ? error.message : String(error),
       note: 'Scheduler run failed',
     })
-    throw error 0
-        }
-      }
-
-      console.log(`[Scheduler] Scheduled ${station.id} for ${date.toISOString().split('T')[0]}`)
-      } catch (err) {
-        console.error(`[Scheduler] Failed ${station.id} for ${date.toISOString().split('T')[0]}:`, err)
-      }
-    }
-  }
-
-  console.log('[Scheduler] Run complete.')
+    throw error
   } finally {
     schedulerIsRunning = false
   }
