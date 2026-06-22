@@ -27,8 +27,12 @@ interface TimeBlock {
   endMin:        number
   // What kind of content belongs here
   contentType:   'movie' | 'episode' | 'mixed' | 'filler' | 'news'
-  // Maximum content rating allowed in this block
+  // Maximum content rating allowed in this block (daypart intent; the legal
+  // Australian classification zone is applied on top of this per slot).
   ratingCeiling: 'G' | 'PG' | 'M' | 'MA15+'
+  // Weeknight strip: the same series airs Monday–Friday in this window and
+  // advances one episode per broadcast day (soaps, stripped cartoons).
+  strip?:        boolean
 }
 
 interface StationRules {
@@ -62,6 +66,7 @@ interface EffectiveStationBlock {
   libraryWeights?: Record<string, number>
   openVideoId?: string
   closeVideoId?: string
+  strip?: boolean
 }
 
 interface FillerWindow {
@@ -81,6 +86,7 @@ interface SlotConfigSpec {
   allowGenres?: string[]
   openVideo?: { enabled?: boolean; videoId?: string }
   closeVideo?: { enabled?: boolean; videoId?: string }
+  strip?: boolean
 }
 
 
@@ -264,6 +270,7 @@ function resolveStationTimeBlocks(
         libraryWeights: slot.libraryWeights as Record<string, number> | undefined,
         openVideoId: slot.openVideo?.enabled && slot.openVideo.videoId ? String(slot.openVideo.videoId).trim() : undefined,
         closeVideoId: slot.closeVideo?.enabled && slot.closeVideo.videoId ? String(slot.closeVideo.videoId).trim() : undefined,
+        strip: Boolean(slot.strip),
       })
     }
     if (out.length) return out
@@ -546,40 +553,84 @@ function resolveHolidayConfig(params: {
   }
 }
 
-// ─── 1990s Australian weekday time-block template ────────────────────────────
+// ─── 1990s Australian time-block templates ───────────────────────────────────
+// These are the network-neutral defaults. A station's slot_config overrides the
+// content type/genre/weights per window; the classification zone (see
+// classificationCeiling) is always applied on top so nothing airs out of zone.
 
 const WEEKDAY_BLOCKS: TimeBlock[] = [
-  { name: 'Late Movies',        startHour:  0, startMin: 0,  endHour:  2, endMin: 0,  contentType: 'movie',   ratingCeiling: 'MA15+' },
-  { name: 'Infomercials',       startHour:  2, startMin: 0,  endHour:  4, endMin: 0,  contentType: 'filler',  ratingCeiling: 'G'     },
-  { name: 'Early News/Religion',startHour:  4, startMin: 0,  endHour:  6, endMin: 0,  contentType: 'news',    ratingCeiling: 'G'     },
-  { name: 'Breakfast Warm-Up',  startHour:  6, startMin: 0,  endHour:  7, endMin: 0,  contentType: 'mixed',   ratingCeiling: 'G'     },
-  { name: 'Kids Cartoons',      startHour:  7, startMin: 0,  endHour:  9, endMin: 0,  contentType: 'episode', ratingCeiling: 'G'     },
-  { name: 'Morning Lifestyle',  startHour:  9, startMin: 0,  endHour: 11, endMin: 0,  contentType: 'mixed',   ratingCeiling: 'PG'    },
-  { name: 'US/UK Reruns',       startHour: 11, startMin: 0,  endHour: 12, endMin: 0,  contentType: 'episode', ratingCeiling: 'PG'    },
-  { name: 'Midday Movie',       startHour: 12, startMin: 0,  endHour: 14, endMin: 0,  contentType: 'movie',   ratingCeiling: 'PG'    },
-  { name: 'Daytime Soaps',      startHour: 14, startMin: 0,  endHour: 16, endMin: 0,  contentType: 'episode', ratingCeiling: 'PG'    },
-  { name: 'After-School TV',    startHour: 16, startMin: 0,  endHour: 18, endMin: 0,  contentType: 'episode', ratingCeiling: 'G'     },
-  { name: 'Evening News',       startHour: 18, startMin: 0,  endHour: 18, endMin: 30, contentType: 'news',    ratingCeiling: 'PG'    },
-  { name: 'Current Affairs',    startHour: 18, startMin: 30, endHour: 19, endMin: 30, contentType: 'news',    ratingCeiling: 'PG'    },
-  { name: 'Prime Time',         startHour: 19, startMin: 30, endHour: 21, endMin: 30, contentType: 'mixed',   ratingCeiling: 'M'     },
-  { name: 'Second-Tier Prime',  startHour: 21, startMin: 30, endHour: 22, endMin: 30, contentType: 'mixed',   ratingCeiling: 'M'     },
-  { name: 'Late News',          startHour: 22, startMin: 30, endHour: 23, endMin: 0,  contentType: 'news',    ratingCeiling: 'PG'    },
-  { name: 'Late Night',         startHour: 23, startMin: 0,  endHour: 24, endMin: 0,  contentType: 'episode', ratingCeiling: 'MA15+' },
+  { name: 'Late Movies',         startHour:  0, startMin: 0,  endHour:  2, endMin: 0,  contentType: 'movie',   ratingCeiling: 'MA15+' },
+  { name: 'Overnight Infomercials', startHour: 2, startMin: 0, endHour: 5, endMin: 0,  contentType: 'filler',  ratingCeiling: 'G'     },
+  { name: 'Early Morning News',  startHour:  5, startMin: 0,  endHour:  6, endMin: 0,  contentType: 'news',    ratingCeiling: 'G'     },
+  { name: 'Breakfast',           startHour:  6, startMin: 0,  endHour:  9, endMin: 0,  contentType: 'mixed',   ratingCeiling: 'G'     },
+  { name: 'Morning Lifestyle',   startHour:  9, startMin: 0,  endHour: 11, endMin: 0,  contentType: 'mixed',   ratingCeiling: 'PG'    },
+  { name: 'Morning Reruns',      startHour: 11, startMin: 0,  endHour: 12, endMin: 0,  contentType: 'episode', ratingCeiling: 'PG'    },
+  { name: 'Midday News',         startHour: 12, startMin: 0,  endHour: 12, endMin: 30, contentType: 'news',    ratingCeiling: 'PG'    },
+  { name: 'Midday Movie',        startHour: 12, startMin: 30, endHour: 14, endMin: 30, contentType: 'movie',   ratingCeiling: 'M'     },
+  { name: 'Daytime Soaps',       startHour: 14, startMin: 30, endHour: 16, endMin: 0,  contentType: 'episode', ratingCeiling: 'PG', strip: true },
+  { name: 'After-School TV',     startHour: 16, startMin: 0,  endHour: 17, endMin: 30, contentType: 'episode', ratingCeiling: 'G',  strip: true },
+  { name: 'Early Evening',       startHour: 17, startMin: 30, endHour: 18, endMin: 0,  contentType: 'episode', ratingCeiling: 'G'     },
+  { name: 'Evening News',        startHour: 18, startMin: 0,  endHour: 18, endMin: 30, contentType: 'news',    ratingCeiling: 'PG'    },
+  { name: 'Current Affairs',     startHour: 18, startMin: 30, endHour: 19, endMin: 0,  contentType: 'news',    ratingCeiling: 'PG'    },
+  { name: 'Early Evening Soap',  startHour: 19, startMin: 0,  endHour: 19, endMin: 30, contentType: 'episode', ratingCeiling: 'PG', strip: true },
+  { name: 'Prime Drama',         startHour: 19, startMin: 30, endHour: 20, endMin: 30, contentType: 'mixed',   ratingCeiling: 'PG'    },
+  { name: 'Movie / Drama',       startHour: 20, startMin: 30, endHour: 22, endMin: 30, contentType: 'mixed',   ratingCeiling: 'M'     },
+  { name: 'Late News',           startHour: 22, startMin: 30, endHour: 23, endMin: 0,  contentType: 'news',    ratingCeiling: 'PG'    },
+  { name: 'Late Night',          startHour: 23, startMin: 0,  endHour: 24, endMin: 0,  contentType: 'mixed',   ratingCeiling: 'MA15+' },
 ]
 
-const WEEKEND_BLOCKS: TimeBlock[] = [
-  { name: 'Late Movies',        startHour:  0, startMin: 0,  endHour:  2, endMin: 0,  contentType: 'movie',   ratingCeiling: 'MA15+' },
-  { name: 'Infomercials',       startHour:  2, startMin: 0,  endHour:  4, endMin: 0,  contentType: 'filler',  ratingCeiling: 'G'     },
-  { name: 'Early Morning',      startHour:  4, startMin: 0,  endHour:  6, endMin: 0,  contentType: 'filler',  ratingCeiling: 'G'     },
-  { name: 'Kids Cartoons',      startHour:  6, startMin: 0,  endHour: 10, endMin: 0,  contentType: 'episode', ratingCeiling: 'G'     },
-  { name: 'Sports/Lifestyle',   startHour: 10, startMin: 0,  endHour: 12, endMin: 0,  contentType: 'mixed',   ratingCeiling: 'PG'    },
-  { name: 'Live Sport',         startHour: 12, startMin: 0,  endHour: 18, endMin: 0,  contentType: 'mixed',   ratingCeiling: 'PG'    },
-  { name: 'Weekend News',       startHour: 18, startMin: 0,  endHour: 19, endMin: 0,  contentType: 'news',    ratingCeiling: 'PG'    },
-  { name: 'Weekend Movie',      startHour: 19, startMin: 0,  endHour: 22, endMin: 0,  contentType: 'movie',   ratingCeiling: 'M'     },
-  { name: 'Music Videos',       startHour: 22, startMin: 0,  endHour: 24, endMin: 0,  contentType: 'filler',  ratingCeiling: 'MA15+' },
+const SATURDAY_BLOCKS: TimeBlock[] = [
+  { name: 'Late Movies',         startHour:  0, startMin: 0,  endHour:  2, endMin: 0,  contentType: 'movie',   ratingCeiling: 'MA15+' },
+  { name: 'Overnight Infomercials', startHour: 2, startMin: 0, endHour: 6, endMin: 0,  contentType: 'filler',  ratingCeiling: 'G'     },
+  { name: 'Saturday Cartoons',   startHour:  6, startMin: 0,  endHour: 10, endMin: 0,  contentType: 'episode', ratingCeiling: 'G'     },
+  { name: 'Morning Lifestyle',   startHour: 10, startMin: 0,  endHour: 12, endMin: 0,  contentType: 'mixed',   ratingCeiling: 'PG'    },
+  { name: 'Weekend Sport',       startHour: 12, startMin: 0,  endHour: 17, endMin: 0,  contentType: 'mixed',   ratingCeiling: 'PG'    },
+  { name: 'Family Programming',  startHour: 17, startMin: 0,  endHour: 18, endMin: 0,  contentType: 'episode', ratingCeiling: 'G'     },
+  { name: 'Weekend News',        startHour: 18, startMin: 0,  endHour: 18, endMin: 30, contentType: 'news',    ratingCeiling: 'PG'    },
+  { name: 'Saturday Night',      startHour: 18, startMin: 30, endHour: 20, endMin: 30, contentType: 'mixed',   ratingCeiling: 'PG'    },
+  { name: 'Saturday Movie',      startHour: 20, startMin: 30, endHour: 23, endMin: 0,  contentType: 'movie',   ratingCeiling: 'M'     },
+  { name: 'Late Music Videos',   startHour: 23, startMin: 0,  endHour: 24, endMin: 0,  contentType: 'filler',  ratingCeiling: 'MA15+' },
+]
+
+const SUNDAY_BLOCKS: TimeBlock[] = [
+  { name: 'Late Movies',         startHour:  0, startMin: 0,  endHour:  2, endMin: 0,  contentType: 'movie',   ratingCeiling: 'MA15+' },
+  { name: 'Overnight Infomercials', startHour: 2, startMin: 0, endHour: 6, endMin: 0,  contentType: 'filler',  ratingCeiling: 'G'     },
+  { name: 'Sunday Religion',     startHour:  6, startMin: 0,  endHour:  8, endMin: 0,  contentType: 'news',    ratingCeiling: 'G'     },
+  { name: 'Sunday Morning',      startHour:  8, startMin: 0,  endHour: 10, endMin: 0,  contentType: 'mixed',   ratingCeiling: 'G'     },
+  { name: 'Family Programming',  startHour: 10, startMin: 0,  endHour: 12, endMin: 0,  contentType: 'episode', ratingCeiling: 'G'     },
+  { name: 'Weekend Sport',       startHour: 12, startMin: 0,  endHour: 17, endMin: 0,  contentType: 'mixed',   ratingCeiling: 'PG'    },
+  { name: 'Family Programming',  startHour: 17, startMin: 0,  endHour: 18, endMin: 0,  contentType: 'episode', ratingCeiling: 'G'     },
+  { name: 'Sunday News',         startHour: 18, startMin: 0,  endHour: 18, endMin: 30, contentType: 'news',    ratingCeiling: 'PG'    },
+  { name: 'Sunday Night',        startHour: 18, startMin: 30, endHour: 20, endMin: 30, contentType: 'mixed',   ratingCeiling: 'PG'    },
+  { name: 'Sunday Movie',        startHour: 20, startMin: 30, endHour: 23, endMin: 0,  contentType: 'movie',   ratingCeiling: 'M'     },
+  { name: 'Late Night',          startHour: 23, startMin: 0,  endHour: 24, endMin: 0,  contentType: 'mixed',   ratingCeiling: 'MA15+' },
 ]
 
 const RATINGS_ORDER = ['G', 'PG', 'M', 'MA15+']
+
+// Australian free-to-air classification zones (the legal max rating by time of
+// day). Applied on top of each block's daypart ceiling so content never airs
+// out of zone regardless of how a station configures its slots.
+//   G      — any time
+//   PG     — any time
+//   M      — 20:30–05:00, plus 12:00–15:00 on school days (weekdays)
+//   MA15+  — 21:00–05:00
+function classificationCeiling(date: Date, minutesOfDay: number): 'G' | 'PG' | 'M' | 'MA15+' {
+  const isWeekday = ![0, 6].includes(getDay(date))
+  if (minutesOfDay >= 21 * 60 || minutesOfDay < 5 * 60) return 'MA15+'
+  if (minutesOfDay >= 20 * 60 + 30) return 'M'
+  if (isWeekday && minutesOfDay >= 12 * 60 && minutesOfDay < 15 * 60) return 'M'
+  return 'PG'
+}
+
+// Returns the stricter (lower) of two classification ratings.
+function stricterRating(a: string, b: string): 'G' | 'PG' | 'M' | 'MA15+' {
+  const ia = RATINGS_ORDER.indexOf(a)
+  const ib = RATINGS_ORDER.indexOf(b)
+  const idx = Math.min(ia === -1 ? RATINGS_ORDER.length - 1 : ia, ib === -1 ? RATINGS_ORDER.length - 1 : ib)
+  return RATINGS_ORDER[idx] as 'G' | 'PG' | 'M' | 'MA15+'
+}
+
 const SCHEDULER_RUN_STATUS_KEY = 'scheduler_run_status'
 const CATALOG_STATE_STATION_ID = '__global__'
 
@@ -661,6 +712,9 @@ export async function getSchedulerRunStatus(): Promise<SchedulerRunStatus> {
 let schedulerIsRunning = false
 const MAX_SERIES_EPISODES_PER_DAY = 2
 const EPISODE_PROGRESS_INTERVAL_DAYS = 7
+// Sentinel weekday for weeknight strips: one series owns this slot across all of
+// Monday–Friday (stored instead of a single 0–6 weekday) and advances daily.
+const STRIP_WEEKDAY = 7
 
 export function isSchedulerRunning(): boolean {
   return schedulerIsRunning
@@ -695,18 +749,55 @@ function incrementCount(map: Map<string, number>, key: string | null | undefined
   map.set(normalized, (map.get(normalized) ?? 0) + 1)
 }
 
+// ─── Cross-station airing coordination ───────────────────────────────────────
+// Tracks which catalog items are already on air (by ratingKey) across all
+// stations for the whole run, so two channels don't broadcast the same title in
+// an overlapping window.
+
+type Airing = { start: number; end: number }
+
+function recordAiring(map: Map<string, Airing[]>, key: string, start: number, end: number): void {
+  if (!key) return
+  const list = map.get(key) ?? []
+  list.push({ start, end })
+  map.set(key, list)
+}
+
+// Returns the set of ratingKeys already on air at the given instant on any station.
+function keysAiringAt(map: Map<string, Airing[]>, atMs: number): Set<string> {
+  const out = new Set<string>()
+  for (const [key, intervals] of map) {
+    if (intervals.some((r) => atMs >= r.start && atMs < r.end)) out.add(key)
+  }
+  return out
+}
+
 function pickMovieCandidate(
   movies: PlexMediaItem[],
   block: TimeBlock,
   remainingMins: number,
   dayTitleCounts: Map<string, number>,
   libMultiplier: (item: PlexMediaItem) => number = () => 1,
+  options?: { excludeKeys?: Set<string>; maxOvershootMins?: number },
 ): PlexMediaItem | null {
+  const excludeKeys = options?.excludeKeys
+  const maxOvershoot = options?.maxOvershootMins ?? 45
+
+  // Runtime-aware eligibility: never pick content that runs well past the time
+  // available, and never repeat an exact title already used today or already on
+  // air elsewhere right now.
+  const eligible = movies.filter((movie) => {
+    if (excludeKeys?.has(movie.ratingKey)) return false
+    if (movie.durationMins > remainingMins + maxOvershoot) return false
+    return true
+  })
+  if (!eligible.length) return null
+
   const tolerances = [15, 30, 45, 60]
   const pool = tolerances
-    .map((tolerance) => movies.filter((movie) => Math.abs(movie.durationMins - remainingMins) <= tolerance))
+    .map((tolerance) => eligible.filter((movie) => Math.abs(movie.durationMins - remainingMins) <= tolerance))
     .find((candidates) => candidates.length)
-    ?? movies
+    ?? eligible
 
   return weightedRandom(
     pool.map((movie) => {
@@ -970,6 +1061,11 @@ export async function runScheduler(
     const holidaySettings = await loadHolidaySettings()
     const showOwnership = await buildShowOwnershipMap()
     const activeClassByPlexKey = await getActiveClassByPlexKey()
+
+    // Cross-station airing ledger for the whole run. Stations are processed
+    // sequentially, so each station can see what earlier stations already placed
+    // and avoid broadcasting the same title at the same time on another channel.
+    const globalAirings = new Map<string, Airing[]>()
     const overrideYears = new Set<number>()
     for (let dayOffset = 0; dayOffset < horizonDays; dayOffset++) {
       overrideYears.add(startOfDay(addDays(today, dayOffset)).getFullYear())
@@ -993,6 +1089,7 @@ export async function runScheduler(
       const blockedKeys = new Set(await getBlockedPlexKeys())
       const rawRules = fromJsonObject<Record<string, unknown>>(station.rules)
       const rules = normalizeStationRules(rawRules)
+      const overnightClosedown = Boolean(rawRules.overnight_closedown)
       const fillerPools      = fromJsonObject<Record<string, string | null>>(station.fillerPools)
       const holidayOverrides = fromJsonObject<Record<string, any>>(station.holidayOverrides)
       for (let dayOffset = 0; dayOffset < horizonDays; dayOffset++) {
@@ -1025,7 +1122,6 @@ export async function runScheduler(
           const holidayConfig = holidayResolved.config
           const holidayContentOverride = Boolean(holidayConfig?.replace_schedule)
           const holidayTaggedKeys = holiday && holidayContentOverride ? new Set(holidayTagMap[holiday] ?? []) : null
-          const isWeekend     = [0, 6].includes(getDay(date))
           const weekNumber    = Math.floor(dayOffset / 7) + 1
 
           // Create the schedule row
@@ -1041,7 +1137,7 @@ export async function runScheduler(
           }
 
           // Pick the template — holiday full-replace, else weekday/weekend
-          const blocks = isWeekend ? WEEKEND_BLOCKS : WEEKDAY_BLOCKS
+          const blocks = getDay(date) === 6 ? SATURDAY_BLOCKS : getDay(date) === 0 ? SUNDAY_BLOCKS : WEEKDAY_BLOCKS
           const stationBlocks = resolveStationTimeBlocks(date, rawRules)
 
           // Genre overrides for holidays
@@ -1108,6 +1204,9 @@ export async function runScheduler(
           const dayTitleCounts = new Map<string, number>()
           const daySeriesCounts = new Map<string, number>()
           const dayEpisodeKeys = new Set<string>()
+          // Every exact catalog item (movie or episode) placed today on this
+          // station. Guarantees no exact repeat within a single day.
+          const dayUsedMediaKeys = new Set<string>()
           const windowBumperAssigned = new Set<string>()
 
           const reservedIntervals: Array<{ start: number; end: number }> = []
@@ -1219,6 +1318,20 @@ export async function runScheduler(
               (s) => ratingAllowed(s.contentRating, block.ratingCeiling),
             )
 
+            // Holiday guardrail: when a holiday-tagged pool is active but its
+            // unique items are exhausted for the day, fall back to the general
+            // catalog instead of dropping straight to filler.
+            const generalMovies = holidayTaggedMovies.length
+              ? applyRatingCeiling(availableMovies, block.ratingCeiling).filter(
+                  (m) => ratingAllowed(m.contentRating, block.ratingCeiling),
+                )
+              : validMovies
+            const generalShows = holidayTaggedShows.length
+              ? applyRatingCeiling(availableShows, block.ratingCeiling).filter(
+                  (s) => ratingAllowed(s.contentRating, block.ratingCeiling),
+                )
+              : validShows
+
             let slotStart = new Date(blockStart)
             let failedPlacementsAtCurrentStart = 0
 
@@ -1238,36 +1351,57 @@ export async function runScheduler(
 
               const activeStationSlot = getMatchingStationBlock(slotStart, stationBlocks)
               const applySlotFilter = !holidayContentOverride && !!activeStationSlot
-              const slotMovies = applySlotFilter ? filterCandidatesBySlot(validMovies, activeStationSlot, activeClassByPlexKey) : validMovies
-              const slotShows  = applySlotFilter ? filterCandidatesBySlot(validShows, activeStationSlot, activeClassByPlexKey) : validShows
+
+              // Apply the Australian classification zone on top of the daypart's
+              // own ceiling so nothing airs out of zone (e.g. no M before 8:30pm).
+              const slotMinsOfDay = slotStart.getHours() * 60 + slotStart.getMinutes()
+              const effCeiling = stricterRating(block.ratingCeiling, classificationCeiling(date, slotMinsOfDay))
+              const ceil = (items: PlexMediaItem[]) => items.filter((i) => ratingAllowed(i.contentRating, effCeiling))
+
+              const slotMovies = ceil(applySlotFilter ? filterCandidatesBySlot(validMovies, activeStationSlot, activeClassByPlexKey) : validMovies)
+              const slotShows  = ceil(applySlotFilter ? filterCandidatesBySlot(validShows, activeStationSlot, activeClassByPlexKey) : validShows)
+              const slotMoviesFallback = ceil(applySlotFilter ? filterCandidatesBySlot(generalMovies, activeStationSlot, activeClassByPlexKey) : generalMovies)
+              const slotShowsFallback  = ceil(applySlotFilter ? filterCandidatesBySlot(generalShows, activeStationSlot, activeClassByPlexKey) : generalShows)
               const slotLibWeights = applySlotFilter ? activeStationSlot?.libraryWeights : undefined
               const libMultiplier = (item: PlexMediaItem) => slotLibraryMultiplier(item, slotLibWeights, activeClassByPlexKey)
 
-              if (failedPlacementsAtCurrentStart >= 6) {
-                const fallbackDuration = Math.min(30, remainingMins)
-                const fallbackAdBreaks = buildAdBreaks(fallbackDuration, adIntervalTv, adEnabled)
+              // Keys to avoid for this slot: anything already used today on this
+              // station, plus anything on air right now on another station.
+              const excludeKeys = new Set<string>(dayUsedMediaKeys)
+              for (const busyKey of keysAiringAt(globalAirings, slotStart.getTime())) {
+                excludeKeys.add(busyKey)
+              }
 
-                const rescuePool = applyRatingCeiling(rescueMovies, block.ratingCeiling)
+              if (failedPlacementsAtCurrentStart >= 6) {
+                const rescuePool = applyRatingCeiling(rescueMovies, effCeiling)
                 const rescueCandidates = rescuePool.length ? rescuePool : rescueMovies
                 const rescueMovie = pickMovieCandidate(
                   rescueCandidates,
                   block,
-                  fallbackDuration,
+                  remainingMins,
                   dayTitleCounts,
+                  () => 1,
+                  { excludeKeys, maxOvershootMins: 30 },
                 )
 
                 if (rescueMovie) {
+                  const rescueAdBreaks = buildAdBreaks(rescueMovie.durationMins, adIntervalMovie, adEnabled)
+                  const rescueAdMins   = rescueAdBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
+                  const rescueSlotEnd  = addMinutes(slotStart, rescueMovie.durationMins + rescueAdMins)
+                  const rescueAligned  = alignEndTime(rescueSlotEnd)
+                  const rescueFillerMins = differenceInMinutes(rescueAligned, rescueSlotEnd)
+
                   const mediaItem = await upsertMediaItem(rescueMovie)
                   const slot = await prisma.slot.create({
                     data: {
                       scheduleId:    schedule.id,
                       startTime:     slotStart,
-                      durationMins:  fallbackDuration,
+                      durationMins:  rescueMovie.durationMins,
                       contentSource: 'plex',
                       contentId:     rescueMovie.ratingKey,
-                      adBreaks:      fallbackAdBreaks.length ? toJson(fallbackAdBreaks) : null,
-                      fillerId:      null,
-                      fillerDuration: null,
+                      adBreaks:      rescueAdBreaks.length ? toJson(rescueAdBreaks) : null,
+                      fillerId:      rescueFillerMins > 0 ? (fillerPools.ads ?? fillerPools.music ?? null) : null,
+                      fillerDuration: rescueFillerMins > 0 ? rescueFillerMins : null,
                       metadata:      toJson({ blockName: block.name, title: rescueMovie.title, reason: 'placement_safety_rescue' }),
                     },
                   })
@@ -1280,11 +1414,18 @@ export async function runScheduler(
                   })
 
                   incrementCount(dayTitleCounts, rescueMovie.title)
-                  slotStart = addMinutes(slotStart, fallbackDuration)
+                  dayUsedMediaKeys.add(rescueMovie.ratingKey)
+                  recordAiring(globalAirings, rescueMovie.ratingKey, slotStart.getTime(), rescueAligned.getTime())
+                  slotStart = rescueAligned
                   failedPlacementsAtCurrentStart = 0
                   continue
                 }
 
+                // No runtime-appropriate rescue content — fill the rest of the
+                // block with filler in a single window rather than truncating a
+                // long movie into a short slot.
+                const fallbackDuration = remainingMins
+                const fallbackAdBreaks = buildAdBreaks(fallbackDuration, adIntervalTv, adEnabled)
                 await prisma.slot.create({
                   data: {
                     scheduleId:    schedule.id,
@@ -1297,7 +1438,7 @@ export async function runScheduler(
                     metadata:      toJson({ blockName: block.name, title: 'Filler', reason: 'placement_safety_fallback' }),
                   },
                 })
-                slotStart = addMinutes(slotStart, fallbackDuration)
+                slotStart = new Date(blockEnd)
                 failedPlacementsAtCurrentStart = 0
                 continue
               }
@@ -1305,6 +1446,23 @@ export async function runScheduler(
               if (effectiveContentType === 'filler' || effectiveContentType === 'news') {
                 const fillerDuration = remainingMins
                 const fillerAdBreaks = buildAdBreaks(fillerDuration, adIntervalTv, adEnabled)
+
+                const isNews = effectiveContentType === 'news'
+                const isClosedown = overnightClosedown && /infomercial/i.test(block.name)
+                // Drive the playback filler selector to the right YouTube category:
+                // news bulletins for news slots, a transmission-pause loop when the
+                // station closes down overnight, otherwise general filler.
+                const fillerCategories = isNews
+                  ? ['news']
+                  : isClosedown
+                    ? ['closedown']
+                    : /infomercial/i.test(block.name)
+                      ? ['ads']
+                      : ['filler', 'music']
+                const fillerId = isNews
+                  ? (fillerPools.news ?? fillerPools.ads ?? fillerPools.music ?? null)
+                  : (fillerPools.ads ?? fillerPools.music ?? null)
+
                 await prisma.slot.create({
                   data: {
                     scheduleId:    schedule.id,
@@ -1312,9 +1470,9 @@ export async function runScheduler(
                     durationMins:  fillerDuration,
                     contentSource: 'youtube',
                     adBreaks:      fillerAdBreaks.length ? toJson(fillerAdBreaks) : null,
-                    fillerId:      fillerPools.ads ?? fillerPools.music ?? null,
+                    fillerId,
                     fillerDuration: null,
-                    metadata:      toJson({ blockName: block.name, title: block.name }),
+                    metadata:      toJson({ blockName: block.name, title: isClosedown ? 'Close Down' : block.name, fillerCategories }),
                   },
                 })
                 slotStart = new Date(blockEnd)
@@ -1330,8 +1488,12 @@ export async function runScheduler(
                   daySeriesCounts,
                 }))
 
-              if (tryMovieBlock && slotMovies.length) {
-                const chosen = pickMovieCandidate(slotMovies, block, remainingMins, dayTitleCounts, libMultiplier)
+              if (tryMovieBlock && (slotMovies.length || slotMoviesFallback.length)) {
+                let chosen = pickMovieCandidate(slotMovies, block, remainingMins, dayTitleCounts, libMultiplier, { excludeKeys })
+                if (!chosen && holidayTaggedMovies.length) {
+                  // Holiday-tagged movies are exhausted for now — fall back to the general pool.
+                  chosen = pickMovieCandidate(slotMoviesFallback, block, remainingMins, dayTitleCounts, libMultiplier, { excludeKeys })
+                }
                 if (!chosen) {
                   failedPlacementsAtCurrentStart += 1
                   continue
@@ -1366,6 +1528,8 @@ export async function runScheduler(
                 })
 
                 incrementCount(dayTitleCounts, chosen.title)
+                dayUsedMediaKeys.add(chosen.ratingKey)
+                recordAiring(globalAirings, chosen.ratingKey, slotStart.getTime(), alignedEnd.getTime())
 
                 slotStart = alignedEnd
                 failedPlacementsAtCurrentStart = 0
@@ -1374,15 +1538,24 @@ export async function runScheduler(
 
               if (
                 (effectiveContentType === 'episode' || effectiveContentType === 'mixed') &&
-                slotShows.length
+                (slotShows.length || slotShowsFallback.length)
               ) {
+                // Honour the holiday-tagged pool first; only widen to the general
+                // catalog when the tagged pool yields no eligible series.
+                const showSelectionPool = slotShows.length ? slotShows : slotShowsFallback
                 const weekday = getDay(slotStart)
                 const timeStr = `${String(slotStart.getHours()).padStart(2, '0')}:${String(slotStart.getMinutes()).padStart(2, '0')}`
+
+                // Weeknight strip: Mon–Fri share one series at this time, advancing
+                // one episode per day. Other slots pin per actual weekday + weekly.
+                const isStrip = weekday >= 1 && weekday <= 5 && Boolean(activeStationSlot?.strip ?? block.strip)
+                const pinWeekday = isStrip ? STRIP_WEEKDAY : weekday
+                const cadenceDays = isStrip ? 1 : EPISODE_PROGRESS_INTERVAL_DAYS
 
                 let progress = await prisma.showProgress.findFirst({
                   where: {
                     stationId:   station.id,
-                    airedWeekday: weekday,
+                    airedWeekday: pinWeekday,
                     airedTime:   timeStr,
                     isCompleted: false,
                   },
@@ -1402,7 +1575,7 @@ export async function runScheduler(
                 }
 
                 if (!progress) {
-                  const weightedShows = buildWeightedShowPool(slotShows, block, daySeriesCounts, libMultiplier)
+                  const weightedShows = buildWeightedShowPool(showSelectionPool, block, daySeriesCounts, libMultiplier)
                   const remainingShows = [...weightedShows]
 
                   while (remainingShows.length && !progress) {
@@ -1438,7 +1611,7 @@ export async function runScheduler(
                         },
                       },
                       update: {
-                        airedWeekday: weekday,
+                        airedWeekday: pinWeekday,
                         airedTime: timeStr,
                         isCompleted: false,
                       },
@@ -1451,7 +1624,7 @@ export async function runScheduler(
                         nextEpisode:   epList[0].episode,
                         totalSeasons:  Math.max(...epList.map((e) => e.season)),
                         totalEpisodes: epList.length,
-                        airedWeekday:  weekday,
+                        airedWeekday:  pinWeekday,
                         airedTime:     timeStr,
                       },
                     })
@@ -1469,11 +1642,12 @@ export async function runScheduler(
                   ) ?? null
 
                   if (episode) {
-                    if (dayEpisodeKeys.has(episode.ratingKey)) {
-                      await prisma.showProgress.update({
-                        where: { id: progress.id },
-                        data: { isCompleted: true, lastAiredAt: new Date() },
-                      }).catch(() => null)
+                    // Skip without retiring the series when the episode is already
+                    // used today on this station, already on air on another
+                    // station, or too long for the time remaining. Preserving the
+                    // progression pointer keeps the series alive for later slots.
+                    const episodeTooLong = episode.durationMins > remainingMins + 30
+                    if (excludeKeys.has(episode.ratingKey) || episodeTooLong) {
                       failedPlacementsAtCurrentStart += 1
                       continue
                     }
@@ -1520,11 +1694,13 @@ export async function runScheduler(
                       data: { scheduledCount: { increment: 1 }, lastScheduled: new Date() },
                     })
 
-                    await advanceShowProgress(progress)
+                    await advanceShowProgress(progress, cadenceDays)
 
                     incrementCount(dayTitleCounts, episode.showTitle ?? episode.title)
                     incrementCount(daySeriesCounts, episode.showTitle)
                     dayEpisodeKeys.add(episode.ratingKey)
+                    dayUsedMediaKeys.add(episode.ratingKey)
+                    recordAiring(globalAirings, episode.ratingKey, slotStart.getTime(), alignedEnd.getTime())
 
                     slotStart = alignedEnd
                     failedPlacementsAtCurrentStart = 0
@@ -1543,27 +1719,35 @@ export async function runScheduler(
               const fallbackDuration = 30
               const fallbackAdBreaks = buildAdBreaks(fallbackDuration, adIntervalTv, adEnabled)
 
-              const rescuePool = applyRatingCeiling(rescueMovies, block.ratingCeiling)
+              const rescuePool = applyRatingCeiling(rescueMovies, effCeiling)
               const rescueCandidates = rescuePool.length ? rescuePool : rescueMovies
               const rescueMovie = pickMovieCandidate(
                 rescueCandidates,
                 block,
-                fallbackDuration,
+                remainingMins,
                 dayTitleCounts,
+                () => 1,
+                { excludeKeys, maxOvershootMins: 30 },
               )
 
               if (rescueMovie) {
+                const rescueAdBreaks = buildAdBreaks(rescueMovie.durationMins, adIntervalMovie, adEnabled)
+                const rescueAdMins   = rescueAdBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
+                const rescueSlotEnd  = addMinutes(slotStart, rescueMovie.durationMins + rescueAdMins)
+                const rescueAligned  = alignEndTime(rescueSlotEnd)
+                const rescueFillerMins = differenceInMinutes(rescueAligned, rescueSlotEnd)
+
                 const mediaItem = await upsertMediaItem(rescueMovie)
                 const slot = await prisma.slot.create({
                   data: {
                     scheduleId:    schedule.id,
                     startTime:     slotStart,
-                    durationMins:  fallbackDuration,
+                    durationMins:  rescueMovie.durationMins,
                     contentSource: 'plex',
                     contentId:     rescueMovie.ratingKey,
-                    adBreaks:      fallbackAdBreaks.length ? toJson(fallbackAdBreaks) : null,
-                    fillerId:      null,
-                    fillerDuration: null,
+                    adBreaks:      rescueAdBreaks.length ? toJson(rescueAdBreaks) : null,
+                    fillerId:      rescueFillerMins > 0 ? (fillerPools.ads ?? fillerPools.music ?? null) : null,
+                    fillerDuration: rescueFillerMins > 0 ? rescueFillerMins : null,
                     metadata:      toJson({ blockName: block.name, title: rescueMovie.title, reason: 'fallback_rescue' }),
                   },
                 })
@@ -1576,7 +1760,9 @@ export async function runScheduler(
                 })
 
                 incrementCount(dayTitleCounts, rescueMovie.title)
-                slotStart = addMinutes(slotStart, fallbackDuration)
+                dayUsedMediaKeys.add(rescueMovie.ratingKey)
+                recordAiring(globalAirings, rescueMovie.ratingKey, slotStart.getTime(), rescueAligned.getTime())
+                slotStart = rescueAligned
                 failedPlacementsAtCurrentStart = 0
                 continue
               }
@@ -1643,10 +1829,11 @@ export async function runScheduler(
 
 async function advanceShowProgress(
   progress: { id: string; nextSeason: number; nextEpisode: number; plexShowKey: string; totalEpisodes: number; episodeOrderJson?: string | null; lastAiredAt?: Date | null },
+  cadenceDays: number = EPISODE_PROGRESS_INTERVAL_DAYS,
 ): Promise<void> {
   const now = new Date()
   if (!progress.lastAiredAt) {
-    // First run pins episode 1 and starts the weekly progression timer.
+    // First run pins the first episode and starts the progression timer.
     await prisma.showProgress.update({
       where: { id: progress.id },
       data: { lastAiredAt: now },
@@ -1655,9 +1842,9 @@ async function advanceShowProgress(
   }
 
   const msSinceLastAdvance = now.getTime() - progress.lastAiredAt.getTime()
-  const minAdvanceMs = EPISODE_PROGRESS_INTERVAL_DAYS * 24 * 60 * 60 * 1000
+  const minAdvanceMs = Math.max(1, cadenceDays) * 24 * 60 * 60 * 1000
   if (msSinceLastAdvance < minAdvanceMs) {
-    // Hold on the same episode until the weekly cadence is reached.
+    // Hold on the same episode until the configured cadence is reached.
     return
   }
 

@@ -18,15 +18,16 @@ async function main() {
       name: 'Subtitle Television Network',
       branding: { logo: '/assets/stn-logo.png', ident_pack: 'stn-idents', colour_theme: '#2c3e50' },
       rules: {
-        allow_genres: 'foreign,drama,art-house,multicultural',
-        deny_genres: 'japanese,anime',
-        allow_languages: 'chinese,indonesian,tagalog,french,spanish',
+        // STN = the SBS-equivalent: subtitled, multicultural, foreign-language
+        // programming. No in-program ads (ads only between programmes), and the
+        // network closes down overnight. Japanese/Korean are denied so they stay
+        // the exclusive domain of the Nippon Network.
+        allow_genres: 'foreign,drama,art-house,multicultural,documentary,world-movies',
+        deny_genres: 'horror',
+        allow_languages: 'chinese,indonesian,tagalog,french,spanish,italian,german,arabic,greek,vietnamese',
         deny_languages: 'japanese,korean',
-        ad_policy: { enabled: true, break_interval_tv: 15, break_interval_movie: 30 },
-        time_blocks: [
-          { name: 'Late Night Movies', day: '*', start: '00:00', end: '02:00', content_source: 'plex' },
-          { name: 'Multicultural Drama', day: '*', start: '09:00', end: '11:00', content_source: 'plex' },
-        ],
+        ad_policy: { enabled: false, break_interval_tv: 0, break_interval_movie: 0 },
+        overnight_closedown: true,
       },
       holidayOverrides: {},
       fillerPools: { ads: null, music: null, bumpers: null }
@@ -36,17 +37,14 @@ async function main() {
       name: 'Zombie Cheese Broadcasting Network',
       branding: { logo: '/assets/zbc-logo.png', ident_pack: 'zbc-idents', colour_theme: '#8b0000' },
       rules: {
-        allow_genres: 'documentary,uk-drama,children,comedy',
+        // ZBC = the ABC-equivalent: public broadcaster, no ads, strong children's
+        // and documentary/UK-drama identity, and an overnight close-down.
+        allow_genres: 'documentary,uk-drama,children,comedy,drama,nature',
         deny_genres: 'horror,violence',
         allow_languages: 'english',
         deny_languages: '',
         ad_policy: { enabled: false, break_interval_tv: 0, break_interval_movie: 0 },
-        time_blocks: [
-          { name: "Children's Programming", day: '*', start: '06:00', end: '09:00', content_source: 'plex' },
-          { name: 'UK Dramas', day: '*', start: '11:00', end: '13:00', content_source: 'plex' },
-          { name: 'Afternoon Show', day: '*', start: '14:00', end: '16:00', content_source: 'plex' },
-          { name: 'Play School', day: '*', start: '08:30', end: '09:00', content_source: 'youtube' },
-        ],
+        overnight_closedown: true,
       },
       holidayOverrides: { christmas: { replace_schedule: true, ad_free: true } },
       fillerPools: { ads: null, music: 'RDLzk0sygecu4', bumpers: null }
@@ -56,14 +54,15 @@ async function main() {
       name: 'Nippon Network',
       branding: { logo: '/assets/nnwk-logo.png', ident_pack: 'nnwk-idents', colour_theme: '#003366' },
       rules: {
-        allow_genres: 'japanese-drama,korean-drama,anime',
+        // Nippon Network: strictly Japanese content only — Japanese language and
+        // anime / Japanese drama. Korean and English are denied so the channel
+        // stays exclusively Japanese.
+        allow_genres: 'anime,japanese-drama,japanese',
         deny_genres: '',
-        allow_languages: 'japanese,korean',
-        deny_languages: '',
+        allow_languages: 'japanese',
+        deny_languages: 'korean,english',
         ad_policy: { enabled: true, break_interval_tv: 15, break_interval_movie: 30 },
-        time_blocks: [
-          { name: 'Japanese Drama', day: '*', start: '20:00', end: '23:00', content_source: 'plex' },
-        ],
+        overnight_closedown: false,
       },
       holidayOverrides: {},
       fillerPools: { ads: null, music: null, bumpers: null }
@@ -73,15 +72,14 @@ async function main() {
       name: 'Seven',
       branding: { logo: '/assets/seven-logo.png', ident_pack: 'seven-idents', colour_theme: '#ff6600' },
       rules: {
-        allow_genres: 'documentary,drama,sitcom',
+        // Seven: mainstream commercial network — drama, sitcoms, documentaries and
+        // a marquee Saturday-night movie.
+        allow_genres: 'drama,sitcom,documentary,reality,family',
         deny_genres: '',
         allow_languages: 'english',
         deny_languages: '',
         ad_policy: { enabled: true, break_interval_tv: 15, break_interval_movie: 30 },
-        time_blocks: [
-          { name: 'Documentary', day: '*', start: '21:00', end: '23:00', content_source: 'plex' },
-          { name: 'Saturday Blockbuster', day: 'saturday', start: '20:00', end: '23:30', content_source: 'plex' },
-        ],
+        overnight_closedown: false,
       },
       holidayOverrides: {},
       fillerPools: { ads: null, music: null, bumpers: null }
@@ -91,15 +89,14 @@ async function main() {
       name: 'Nine',
       branding: { logo: '/assets/nine-logo.png', ident_pack: 'nine-idents', colour_theme: '#cc0000' },
       rules: {
-        allow_genres: 'sitcom,drama,reality',
+        // Nine: mainstream commercial network — US sitcoms, drama and reality, with
+        // a marquee Sunday-night movie.
+        allow_genres: 'sitcom,drama,reality,crime,family',
         deny_genres: '',
         allow_languages: 'english',
         deny_languages: '',
         ad_policy: { enabled: true, break_interval_tv: 15, break_interval_movie: 30 },
-        time_blocks: [
-          { name: 'US Sitcoms', day: '*', start: '20:00', end: '23:00', content_source: 'plex' },
-          { name: 'Sunday Blockbuster', day: 'sunday', start: '20:00', end: '23:30', content_source: 'plex' },
-        ],
+        overnight_closedown: false,
       },
       holidayOverrides: {},
       fillerPools: { ads: null, music: null, bumpers: null }
@@ -109,15 +106,14 @@ async function main() {
       name: 'Ten',
       branding: { logo: '/assets/ten-logo.png', ident_pack: 'ten-idents', colour_theme: '#0066cc' },
       rules: {
-        allow_genres: 'teen,comedy,action',
+        // Ten: the youth-skewed commercial network — teen drama, comedy, action and
+        // late-night teen movies.
+        allow_genres: 'teen,comedy,action,sci-fi,music',
         deny_genres: '',
         allow_languages: 'english',
         deny_languages: '',
         ad_policy: { enabled: true, break_interval_tv: 15, break_interval_movie: 30 },
-        time_blocks: [
-          { name: 'Youth Programming', day: '*', start: '19:00', end: '22:00', content_source: 'plex' },
-          { name: 'Teen Movies', day: '*', start: '22:00', end: '01:00', content_source: 'plex' },
-        ],
+        overnight_closedown: false,
       },
       holidayOverrides: { halloween: { replace_schedule: true, ad_free: false } },
       fillerPools: { ads: null, music: null, bumpers: null }
@@ -127,7 +123,14 @@ async function main() {
   for (const s of stations) {
     await prisma.station.upsert({
       where: { id: s.id },
-      update: {},
+      // Re-seeding realigns the canonical rules/branding for the built-in base
+      // channels (name is left as-is to preserve any admin rename).
+      update: {
+        branding:         JSON.stringify(s.branding),
+        rules:            JSON.stringify(s.rules),
+        holidayOverrides: JSON.stringify(s.holidayOverrides),
+        fillerPools:      JSON.stringify(s.fillerPools)
+      },
       create: {
         id:               s.id,
         name:             s.name,
