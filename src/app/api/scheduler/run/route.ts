@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getIronSession }            from 'iron-session'
 import { prisma } from '@/lib/db'
-import { isSchedulerRunning } from '@/lib/scheduler'
+import { isSchedulerRunning, getSchedulerRunStatus } from '@/lib/scheduler'
 import { getSchedulerHorizonDays } from '@/lib/app-settings'
 
 export const dynamic = 'force-dynamic'
@@ -61,9 +61,10 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     ok:          true,
     message:     stationId
-      ? `${forceRegenerate ? 'Scheduler regeneration' : 'Scheduler run'} triggered for ${horizonDays} days for ${stationId}. Check server logs.`
-      : `${forceRegenerate ? 'Scheduler regeneration' : 'Scheduler run'} triggered for ${horizonDays} days. Check server logs.`,
+      ? `${forceRegenerate ? 'Scheduler regeneration' : 'Scheduler run'} triggered for ${horizonDays} days for ${stationId}. Check status below.`
+      : `${forceRegenerate ? 'Scheduler regeneration' : 'Scheduler run'} triggered for ${horizonDays} days. Check status below.`,
     startedAt:   new Date().toISOString(),
+    status:      await getSchedulerRunStatus(),
   })
 }
 
@@ -110,6 +111,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     isRunning: isSchedulerRunning(),
+    status: await getSchedulerRunStatus(),
     scope: {
       stationId: scopeStationId,
       horizonDays,

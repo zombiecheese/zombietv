@@ -1,9 +1,8 @@
-﻿# Project Documentation Moved
+# Zombie TV - Current Codebase State
 
-This file has been moved to `docs/code-state.md` to centralize all project documentation.
+Last updated: 2026-06-23.
 
-Please refer to [docs/code-state.md](docs/code-state.md) for the current implementation snapshot.
-
+This file is a concise implementation snapshot for active development.
 
 ## Runtime Overview
 
@@ -92,9 +91,16 @@ Please refer to [docs/code-state.md](docs/code-state.md) for the current impleme
 - PostgreSQL is the intended runtime database for concurrent admin operations and catalog sync.
 - If behavior appears stale after major API changes, clear build artifacts and restart the server process.
 
+## Recently Implemented (Previous Session)
+
+- **Environment validation:** App now exits with clear error message if critical env vars (`DATABASE_URL`, `SESSION_SECRET`, `PLEX_CLIENT_ID`) are missing. Validation runs at startup in `db.ts` before attempting Prisma connection.
+- **Bumper semantics:** Open/close bumper IDs (`openBumperId`, `closeBumperId`) are now exposed in `PlaybackState` API response from `/api/now/[stationId]`. Data is available for client rendering.
+- **Show pacing visibility:** Episode pacing tracked by scheduler is now visible in the admin schedule editor. "Pacing" column displays next episode (S##E##) and last aired date for tracked shows.
+
 ## Known Gaps
 
 - No formal automated test suite yet.
-- Mobile EPG/admin ergonomics still need dedicated responsive polish beyond the current guide layout.
+- Mobile admin page ergonomics still need dedicated responsive design (admin pages have no CSS media queries).
 - Deployment docs and release process are now documented, but the release checklist still depends on manual verification.
-- Observability for long-running sync/regeneration jobs now exists, but the app still relies on dashboard polling rather than push updates.
+- Observability for long-running sync/regeneration jobs now exists, but the app still relies on dashboard polling rather than push updates (WebSocket push is a future optimization).
+- Bumper rendering UI: PlaybackState includes bumper IDs, but viewer component rendering logic not yet implemented.

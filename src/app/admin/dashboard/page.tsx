@@ -60,6 +60,40 @@ export default function AdminDashboard() {
   const [schedulerIntervalHours, setSchedulerIntervalHours]   = useState('24')
   const [isSavingSchedulerSettings, setIsSavingSchedulerSettings] = useState(false)
   const [schedulerSettingsMsg, setSchedulerSettingsMsg]       = useState('')
+  const [schedulerStatus, setSchedulerStatus] = useState<{
+    isRunning: boolean
+    status?: {
+      isRunning: boolean
+      phase: string
+      horizonDays: number
+      stationId: string | null
+      forceRegenerate: boolean
+      stationsTotal: number
+      stationsProcessed: number
+      daysTotal: number
+      daysProcessed: number
+      daysCreated: number
+      startedAt: string | null
+      updatedAt: string
+      finishedAt: string | null
+      lastError: string | null
+      note: string | null
+    }
+    coverage: {
+      scheduledDays: number
+      targetDays: number
+      progressPercent: number
+      byStation: Array<{ stationId: string; days: number }>
+    }
+    checkedAt: string
+  } | null>(null)
+
+  const refreshSchedulerStatus = async () => {
+    const data = await fetch('/api/scheduler/run').then((r) => (r.ok ? r.json() : null)).catch(() => null)
+    if (data) {
+      setSchedulerStatus(data)
+    }
+  }
 
   const saveAppName = async () => {
     setIsSavingAppName(true)
@@ -124,6 +158,7 @@ export default function AdminDashboard() {
   useEffect(() => {
     fetch('/api/app-settings').then((r) => r.ok ? r.json() : null).then((d) => { if (d?.appName) setAppName(d.appName) }).catch(() => {})
     refreshPlexStatus().catch(() => {})
+    refreshSchedulerStatus().catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -278,12 +313,13 @@ export default function AdminDashboard() {
   }
 
   useEffect(() => {
-    if (!isCatalogSyncing) return
+    if (!isCatalogSyncing && !schedulerStatus?.status?.isRunning) return
     const id = setInterval(() => {
       refreshPlexStatus().catch(() => {})
+      refreshSchedulerStatus().catch(() => {})
     }, 3000)
     return () => clearInterval(id)
-  }, [isCatalogSyncing])
+  }, [isCatalogSyncing, schedulerStatus?.status?.isRunning])
 
   return (
     <AdminShell>
@@ -342,6 +378,56 @@ export default function AdminDashboard() {
         </div>
         {schedulerSettingsMsg && <div style={{ fontSize: '0.72rem', color: '#4caf50', marginTop: 4 }}>{schedulerSettingsMsg}</div>}
       </div>
+
+      {/* ── Scheduler Status ──────────────────────────────────────────────── */}
+      {schedulerStatus && (
+        <div style={{ ...card, marginBottom: 18 }}>
+          <div style={{ fontSize: '1.2rem', marginBottom: 8 }}>⚙️</div>
+          <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#e8f0fe', marginBottom: 6 }}>Regeneration Status</div>
+          <div style={{ fontSize: '0.72rem', color: '#4a7fb5', lineHeight: 1.5, marginBottom: 10 }}>
+            Live status of the scheduler. Visit the Schedule Editor for manual triggers and detailed logs.
+          </div>
+          {schedulerStatus.status ? (
+            <div style={{ fontSize: '0.72rem', color: '#a8c4e0', lineHeight: 1.6, marginBottom: 10 }}>
+              <div style={{ marginBottom: 8 }}>
+                <span style={{ color: schedulerStatus.status.isRunning ? '#ffb74d' : '#4caf50', fontWeight: 700 }}>
+                  {schedulerStatus.status.isRunning ? 'RUNNING' : 'IDLE'}
+                </span>
+                {schedulerStatus.status.phase ? (
+                  <span> · Phase: {schedulerStatus.status.phase}</span>
+                ) : null}
+              </div>
+              <div>
+                Scope: {schedulerStatus.status.stationId ? schedulerStatus.status.stationId.toUpperCase() : 'ALL'} · Horizon: {schedulerStatus.status.horizonDays} days · Mode: {schedulerStatus.status.forceRegenerate ? 'regeneration' : 'generation'}
+              </div>
+              <div style={{ marginTop: 6 }}>
+                Stations: {schedulerStatus.status.stationsProcessed}/{schedulerStatus.status.stationsTotal} · Days: {schedulerStatus.status.daysProcessed}/{schedulerStatus.status.daysTotal} · Created: {schedulerStatus.status.daysCreated}
+              </div>
+              {schedulerStatus.status.note ? (
+                <div style={{ marginTop: 6 }}>{schedulerStatus.status.note}</div>
+              ) : null}
+              {schedulerStatus.status.lastError ? (
+                <div style={{ marginTop: 6, color: '#ff8a80' }}>Error: {schedulerStatus.status.lastError}</div>
+              ) : null}
+              {schedulerStatus.status.startedAt ? (
+                <div style={{ marginTop: 6, color: '#4a7fb5', fontSize: '0.68rem' }}>
+                  Started: {new Date(schedulerStatus.status.startedAt).toLocaleString()}
+                </div>
+              ) : null}
+              {schedulerStatus.status.finishedAt ? (
+                <div style={{ color: '#4a7fb5', fontSize: '0.68rem' }}>
+                  Finished: {new Date(schedulerStatus.status.finishedAt).toLocaleString()}
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <div style={{ fontSize: '0.72rem', color: '#4a7fb5' }}>No recent scheduler runs.</div>
+          )}
+          <div style={{ fontSize: '0.68rem', color: '#4a7fb5', marginTop: 8 }}>
+            Updated {new Date(schedulerStatus.checkedAt).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
+          </div>
+        </div>
+      )}
 
       <div style={{ ...card, marginBottom: 18 }}>
         <div style={{ fontSize: '1.2rem', marginBottom: 8 }}>🔐</div>

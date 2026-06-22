@@ -9,6 +9,7 @@ const CATEGORIES: Array<{ value: string; label: string }> = [
   { value: 'ads',   label: 'Advertisements' },
   { value: 'filler', label: 'Filler' },
   { value: 'music', label: 'Music Videos' },
+  { value: 'news', label: 'News' },
 ]
 
 interface YTEntry { id: string; title: string; videoId: string | null; playlistId: string | null; isPlaylist: boolean; category: string; station: string | null; durationMins: number | null; scheduledCount: number; createdAt: string }

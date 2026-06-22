@@ -8,12 +8,12 @@ interface StationOption { id: string; name: string }
 const TYPES     = ['breaking_news','sports_overrun','marathon','custom']
 const PRIOS     = ['high','medium','low']
 
-interface Event { id: string; name: string; type: string; stationId: string | null; startTime: string; durationMins: number; priority: string; replaceSchedule: boolean; content: Record<string,unknown> }
+interface Event { id: string; name: string; type: string; stationId: string | null; startTime: string; durationMins: number; priority: string; replaceSchedule: boolean; onceOffEvent: boolean; content: Record<string,unknown> }
 
 export default function EventsPage() {
   const [events, setEvents] = useState<Event[]>([])
   const [stations, setStations] = useState<StationOption[]>([{ id: 'stn', name: 'STN' }, { id: 'zbc', name: 'ZBC' }, { id: 'nnwk', name: 'NNWK' }, { id: 'seven', name: '7' }, { id: 'nine', name: '9' }, { id: 'ten', name: '10' }])
-  const [form,   setForm]   = useState({ name: '', type: 'custom', stationId: '', startTime: '', durationMode: 'preset', durationMins: 60, priority: 'medium', replaceSchedule: false, contentSource: 'youtube', contentId: '', description: '' })
+  const [form,   setForm]   = useState({ name: '', type: 'custom', stationId: '', startTime: '', durationMode: 'preset', durationMins: 60, priority: 'medium', replaceSchedule: false, onceOffEvent: false, contentSource: 'youtube', contentId: '', description: '' })
   const [msg,    setMsg]    = useState('')
 
   const load = () => fetch('/api/admin/events').then(r => r.json()).then(setEvents)
@@ -40,6 +40,7 @@ export default function EventsPage() {
         durationMins: untilContentFinished ? 0 : Number(form.durationMins),
         priority: form.priority,
         replaceSchedule: form.replaceSchedule,
+        onceOffEvent: form.onceOffEvent,
         content: { source: form.contentSource, id: form.contentId, description: form.description, untilContentFinished },
       }),
     })
@@ -75,6 +76,7 @@ export default function EventsPage() {
           <Fld label="Description"><input value={form.description} onChange={e => setForm({...form, description: e.target.value})} style={inp} /></Fld>
         </div>
         <label style={checkLabel}><input type="checkbox" checked={form.replaceSchedule} onChange={e => setForm({...form, replaceSchedule: e.target.checked})} /> Replace existing schedule for this window</label>
+        <label style={checkLabel}><input type="checkbox" checked={form.onceOffEvent} onChange={e => setForm({...form, onceOffEvent: e.target.checked})} /> Once-off event</label>
         {msg && <p style={{ color: '#4CAF50', fontSize: '0.78rem', margin: '10px 0 0' }}>{msg}</p>}
         <button onClick={save} style={{ ...btn, marginTop: 14 }}>Create Event</button>
       </div>

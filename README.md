@@ -1,9 +1,11 @@
-﻿# IdiotBox
+﻿# Zombie TV
 
 1990s broadcast simulator with a shared live timeline, Plex-backed programming, and YouTube filler content.
-For people that dont want to make decisions on what to watch...
+
+For people that don't want to make decisions on what to watch...
 But only after like a million setup decisions.
-Complacency is earned
+
+Complacency is earned.
 
 ## What It Does
 
@@ -50,6 +52,8 @@ POSTGRES_USER="zombietv"
 POSTGRES_PASSWORD="zombietv_dev_password"
 ```
 
+⚠️ **Important:** All three variables above (`DATABASE_URL`, `SESSION_SECRET`, `PLEX_CLIENT_ID`) are required. The app will exit at startup with a clear error message if any are missing or empty.
+
 ### 3. Initialize database
 
 ```bash
@@ -94,8 +98,11 @@ Docker compose starts both PostgreSQL and the app. Container startup runs `prism
 - Overview and Plex connection status
 - Plex catalog sync and library classification controls
 - Optional Plex auth redirect base URL for hosted callback redirects
-- Schedule editor (regen all or single station, slot edits, swaps, audit trail)
-- Station Rules editor with weekday/weekend slot configuration
+- Schedule editor with:
+  - Regen all or single station scheduling
+  - Show pacing visibility (next episode and last aired date for tracked shows)
+  - Slot edits, swaps, and audit trail
+- Station Rules editor with weekday/weekend slot configuration and bumper ID assignment
 - Filler Content manager (renamed from YouTube Pool)
 - Holiday settings and holiday override management
 - Special Events with duration mode (`preset` or `until finished`)
@@ -152,4 +159,4 @@ prisma/
 scripts/
 ```
 
-See `CODE_STATE.md` for a deeper implementation snapshot and `test-checklist.md` for verification coverage.
+See [docs/code-state.md](docs/code-state.md) for a deeper implementation snapshot, [docs/schedule-generation.md](docs/schedule-generation.md) for the scheduling rules and flow, [docs/project-plan.md](docs/project-plan.md) for the project roadmap and priorities, [docs/deployment-release.md](docs/deployment-release.md) for deployment and release guidance, [docs/test-checklist.md](docs/test-checklist.md) for verification coverage, and [docs/checklist-verification.md](docs/checklist-verification.md) for current feature status and release readiness.

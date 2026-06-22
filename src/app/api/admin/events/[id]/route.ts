@@ -14,7 +14,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (!guard.ok) return guard.response
 
   const body = await req.json().catch(() => ({}))
-  const { name, type, stationId, startTime, durationMins, priority, replaceSchedule, content } = body
+  const { name, type, stationId, startTime, durationMins, priority, replaceSchedule, onceOffEvent, content } = body
 
   const updated = await prisma.specialEvent.update({
     where: { id },
@@ -26,6 +26,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       ...(durationMins     !== undefined ? { durationMins }                  : {}),
       ...(priority         !== undefined ? { priority }                      : {}),
       ...(replaceSchedule  !== undefined ? { replaceSchedule }               : {}),
+      ...(onceOffEvent     !== undefined ? { onceOffEvent }                 : {}),
       ...(content          !== undefined ? { content: toJson(content) }      : {}),
     },
   })

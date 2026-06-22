@@ -23,16 +23,44 @@ interface Slot {
   isOverride: boolean
   overrideReason: string | null
   metadata: Record<string, unknown>
+  showPacing?: {
+    nextSeason: number
+    nextEpisode: number
+    lastAiredAt: string | null
+  }
 }
 
 interface ScheduleProgress {
   isRunning: boolean
+  status?: {
+    isRunning: boolean
+    phase: 'idle' | 'starting' | 'loading_catalog' | 'scheduling' | 'finalizing' | 'complete' | 'error'
+    horizonDays: number
+    stationId: string | null
+    forceRegenerate: boolean
+    stationsTotal: number
+    stationsProcessed: number
+    daysTotal: number
+    daysProcessed: number
+    daysCreated: number
+    startedAt: string | null
+    updatedAt: string
+    finishedAt: string | null
+    lastError: string | null
+    note: string | null
+  }
   coverage: {
     scheduledDays: number
     targetDays: number
     progressPercent: number
     byStation: Array<{ stationId: string; days: number }>
   }
+  lastManualRun?: {
+    startedAt: string
+    horizonDays: number
+    stationId: string | null
+    forceRegenerate: boolean
+  } | null
   checkedAt: string
 }
 
@@ -223,7 +251,7 @@ export default function SchedulePage() {
         <div style={{ marginBottom: 16, border: '1px solid #1e3a5f', padding: 10, backgroundColor: '#081426' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
             <span style={{ color: '#a8c4e0', fontSize: '0.72rem', letterSpacing: '0.04em' }}>
-              {progress.isRunning ? 'REGEN IN PROGRESS' : 'REGEN STATUS'}
+              {progress.status?.isRunning || progress.isRunning ? 'REGEN IN PROGRESS' : 'REGEN STATUS'}
               {regenScope === 'selected' ? ` · ${station.toUpperCase()}` : ' · ALL STATIONS'}
             </span>
             <span style={{ color: '#4a7fb5', fontSize: '0.7rem' }}>
@@ -235,7 +263,7 @@ export default function SchedulePage() {
               style={{
                 width: `${progress.coverage.progressPercent}%`,
                 height: '100%',
-                backgroundColor: progress.isRunning ? '#ff6600' : '#2e7d32',
+                backgroundColor: progress.status?.isRunning || progress.isRunning ? '#ff6600' : '#2e7d32',
                 transition: 'width 0.25s ease',
               }}
             />
@@ -244,6 +272,22 @@ export default function SchedulePage() {
             <span style={{ color: '#a8c4e0', fontSize: '0.72rem' }}>{progress.coverage.progressPercent}%</span>
             <span style={{ color: '#4a7fb5', fontSize: '0.68rem' }}>Updated {new Date(progress.checkedAt).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</span>
           </div>
+          {progress.status && (
+            <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #1e3a5f', color: '#a8c4e0', fontSize: '0.72rem', lineHeight: 1.6 }}>
+              <div>{`Phase: ${progress.status.phase}`}</div>
+              <div>{`Scope: ${progress.status.stationId ? progress.status.stationId.toUpperCase() : 'ALL'} · horizon ${progress.status.horizonDays} days`}</div>
+              <div>{`Stations: ${progress.status.stationsProcessed}/${progress.status.stationsTotal} · Days: ${progress.status.daysProcessed}/${progress.status.daysTotal} · Created: ${progress.status.daysCreated}`}</div>
+              {progress.status.note ? <div>{progress.status.note}</div> : null}
+              {progress.status.lastError ? <div style={{ color: '#ff8a80' }}>{`Last error: ${progress.status.lastError}`}</div> : null}
+              {progress.status.startedAt ? <div style={{ color: '#4a7fb5' }}>{`Started ${new Date(progress.status.startedAt).toLocaleString()}`}</div> : null}
+              {progress.status.finishedAt ? <div style={{ color: '#4a7fb5' }}>{`Finished ${new Date(progress.status.finishedAt).toLocaleString()}`}</div> : null}
+            </div>
+          )}
+          {progress.lastManualRun ? (
+            <div style={{ marginTop: 8, color: '#4a7fb5', fontSize: '0.68rem', lineHeight: 1.5 }}>
+              {`Last manual trigger: ${new Date(progress.lastManualRun.startedAt).toLocaleString()} · ${progress.lastManualRun.forceRegenerate ? 'regeneration' : 'generation'} · ${progress.lastManualRun.stationId ? progress.lastManualRun.stationId.toUpperCase() : 'all stations'} · ${progress.lastManualRun.horizonDays} days`}
+            </div>
+          ) : null}
         </div>
       )}
 
@@ -266,7 +310,7 @@ export default function SchedulePage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid #1e3a5f', color: '#4a7fb5' }}>
-                {['⠿','Time','Duration','Title','Source','S/E','Override','Actions'].map((h) => (
+                {['⠿','Time','Duration','Title','Source','S/E','Pacing','Override','Actions'].map((h) => (
                   <th key={h} style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 600, whiteSpace: 'nowrap' }}>{h}</th>
                 ))}
               </tr>
@@ -302,6 +346,11 @@ export default function SchedulePage() {
                       </span>
                     </td>
                     <td style={td}>{s.seasonNumber != null ? `S${s.seasonNumber}E${s.episodeNumber}` : '—'}</td>
+                    <td style={{ ...td, fontSize: '0.7rem', color: s.showPacing ? '#2e7d32' : '#4a7fb5' }}>
+                      {s.showPacing
+                        ? `S${s.showPacing.nextSeason}E${s.showPacing.nextEpisode}${s.showPacing.lastAiredAt ? ' (' + new Date(s.showPacing.lastAiredAt).toLocaleDateString('en-AU') + ')' : ''}`
+                        : '—'}
+                    </td>
                     <td style={td}>{s.isOverride ? <span style={{ color: '#ff6600' }}>✓ {s.overrideReason}</span> : '—'}</td>
                     <td style={td}>
                       <div style={{ display: 'flex', gap: 6 }}>

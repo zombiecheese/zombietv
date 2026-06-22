@@ -21,6 +21,8 @@ export interface HolidaySetting {
   endMonth: number
   endDay: number
   enabled: boolean
+  onceOffEvent?: boolean
+  consumedAt?: string | null
 }
 
 const HOLIDAY_SETTINGS_KEY = 'holiday_settings'
@@ -67,6 +69,8 @@ function normalizeHolidaySetting(setting: Partial<HolidaySetting> & { id?: strin
     endMonth,
     endDay,
     enabled: setting.enabled !== false,
+    onceOffEvent: Boolean(setting.onceOffEvent),
+    consumedAt: setting.consumedAt ? String(setting.consumedAt) : null,
   }
 }
 
@@ -164,6 +168,7 @@ export function getHolidayForDate(date: Date, settings: HolidaySetting[] = DEFAU
 
   for (const holiday of settings) {
     if (!holiday.enabled) continue
+    if (holiday.consumedAt) continue
     if (holiday.name === 'good_friday') {
       if (isSameDay(date, goodFriday)) return holiday.name
       continue
@@ -178,6 +183,19 @@ export function getHolidayForDate(date: Date, settings: HolidaySetting[] = DEFAU
     }
   }
 
+  return null
+}
+
+export function getHolidayForMonthDay(date: Date, settings: HolidaySetting[] = DEFAULT_HOLIDAY_SETTINGS): string | null {
+  const month = date.getMonth() + 1
+  const day = date.getDate()
+  for (const holiday of settings) {
+    if (!holiday.enabled || holiday.consumedAt) continue
+    if (holiday.name === 'good_friday' || holiday.name === 'easter') continue
+    if (matchesMonthDayRange(month, day, holiday.startMonth, holiday.startDay, holiday.endMonth, holiday.endDay)) {
+      return holiday.name
+    }
+  }
   return null
 }
 

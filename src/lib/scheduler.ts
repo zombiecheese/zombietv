@@ -59,19 +59,25 @@ interface EffectiveStationBlock {
   contentType: TimeBlock['contentType']
   allowGenres?: string[]
   allowLanguages?: string[]
-  fillerOnly?: boolean
+  fillerWindows?: FillerWindow[]
   libraryWeights?: Record<string, number>
   openVideoId?: string
   closeVideoId?: string
 }
 
+interface FillerWindow {
+  durationMins: number
+  category: string
+  openVideo?: { enabled?: boolean; videoId?: string }
+  closeVideo?: { enabled?: boolean; videoId?: string }
+}
 interface SlotConfigSpec {
   key: string
   name: string
   start: string
   end: string
   enabled?: boolean
-  fillerOnly?: boolean
+  fillerWindows?: FillerWindow[]
   libraryWeights?: { tv_shows?: number; movies?: number; animation?: number; fitness?: number }
   allowGenres?: string[]
   allowLanguages?: string[]
@@ -257,7 +263,7 @@ function resolveStationTimeBlocks(
         contentType: slotContentType(slot),
         allowGenres: Array.isArray(slot.allowGenres) && slot.allowGenres.length ? slot.allowGenres : undefined,
         allowLanguages: Array.isArray(slot.allowLanguages) && slot.allowLanguages.length ? slot.allowLanguages : undefined,
-        fillerOnly: Boolean(slot.fillerOnly),
+        fillerWindows: Array.isArray(slot.fillerWindows) ? slot.fillerWindows : undefined,
         libraryWeights: slot.libraryWeights as Record<string, number> | undefined,
         openVideoId: slot.openVideo?.enabled && slot.openVideo.videoId ? String(slot.openVideo.videoId).trim() : undefined,
         closeVideoId: slot.closeVideo?.enabled && slot.closeVideo.videoId ? String(slot.closeVideo.videoId).trim() : undefined,
@@ -297,16 +303,21 @@ function resolveStationTimeBlocks(
 }
 
 function slotContentType(slot: SlotConfigSpec): TimeBlock['contentType'] {
-  if (slot.fillerOnly) return 'filler'
+  // If slot has filler windows but no library weights, it's filler-only
+  const hasFillerWindows = Array.isArray(slot.fillerWindows) && slot.fillerWindows.length > 0
+  const w = slot.libraryWeights ?? {}
+  const hasLibraryWeights = Object.values(w).some(v => v && Number(v) > 0)
+  
+  if (hasFillerWindows && !hasLibraryWeights) return 'filler'
+  
   const key = String(slot.key || '').toLowerCase()
   if (key.includes('news')) return 'news'
-  const w = slot.libraryWeights ?? {}
   const movies = Number(w.movies ?? 0)
   const episodic = Number(w.tv_shows ?? 0) + Number(w.animation ?? 0) + Number(w.fitness ?? 0)
   if (movies > 0 && movies >= episodic) return 'movie'
   if (episodic > 0) return 'episode'
   if (key.includes('movie')) return 'movie'
-  return 'mixed'
+  return hasFillerWindows ? 'mixed' : 'mixed'
 }
 
 function timeIsInRange(minOfDay: number, startMins: number, endMins: number): boolean {
@@ -499,37 +510,45 @@ function resolveHolidayConfig(params: {
   date: Date
   stationId: string
   rows: Array<{
+    id: string
     holidayName: string
-    year: number
     stationId: string | null
     replaceSchedule: boolean
     adFree: boolean
     contentPriority: string
+    onceOffEvent?: boolean
+    consumedAt?: Date | string | null
   }>
   legacyOverrides: Record<string, any>
-}): ResolvedHolidayConfig | null {
-  const { holiday, date, stationId, rows, legacyOverrides } = params
-  const year = date.getFullYear()
+}): { config: ResolvedHolidayConfig | null; row: { id: string; onceOffEvent?: boolean } | null } {
+  const { holiday, stationId, rows, legacyOverrides } = params
 
-  const stationSpecific = rows.find((row) => row.holidayName === holiday && row.year === year && row.stationId === stationId)
-  const globalOverride = rows.find((row) => row.holidayName === holiday && row.year === year && row.stationId == null)
+  const activeRows = rows.filter((row) => !row.consumedAt && row.holidayName === holiday)
+  const stationSpecific = activeRows.find((row) => row.stationId === stationId)
+  const globalOverride = activeRows.find((row) => row.stationId == null)
   const dbOverride = stationSpecific ?? globalOverride
 
   if (dbOverride) {
     return {
-      replace_schedule: dbOverride.replaceSchedule,
-      ad_free: dbOverride.adFree,
-      content_priority: asStringArray(dbOverride.contentPriority),
+      config: {
+        replace_schedule: dbOverride.replaceSchedule,
+        ad_free: dbOverride.adFree,
+        content_priority: asStringArray(dbOverride.contentPriority),
+      },
+      row: { id: dbOverride.id, onceOffEvent: Boolean(dbOverride.onceOffEvent) },
     }
   }
 
   const legacy = legacyOverrides[holiday]
-  if (!legacy) return null
+  if (!legacy) return { config: null, row: null }
 
   return {
+    config: {
     replace_schedule: Boolean(legacy.replace_schedule ?? true),
     ad_free: Boolean(legacy.ad_free ?? false),
     content_priority: asStringArray(legacy.content_priority),
+    },
+    row: null,
   }
 }
 
@@ -567,6 +586,84 @@ const WEEKEND_BLOCKS: TimeBlock[] = [
 ]
 
 const RATINGS_ORDER = ['G', 'PG', 'M', 'MA15+']
+const SCHEDULER_RUN_STATUS_KEY = 'scheduler_run_status'
+const CATALOG_STATE_STATION_ID = '__global__'
+
+export interface SchedulerRunStatus {
+  isRunning: boolean
+  phase: 'idle' | 'starting' | 'loading_catalog' | 'scheduling' | 'finalizing' | 'complete' | 'error'
+  horizonDays: number
+  stationId: string | null
+  forceRegenerate: boolean
+  stationsTotal: number
+  stationsProcessed: number
+  daysTotal: number
+  daysProcessed: number
+  daysCreated: number
+  startedAt: string | null
+  updatedAt: string
+  finishedAt: string | null
+  lastError: string | null
+  note: string | null
+}
+
+function buildSchedulerRunStatus(partial?: Partial<SchedulerRunStatus>): SchedulerRunStatus {
+  return {
+    isRunning: false,
+    phase: 'idle',
+    horizonDays: 7,
+    stationId: null,
+    forceRegenerate: false,
+    stationsTotal: 0,
+    stationsProcessed: 0,
+    daysTotal: 0,
+    daysProcessed: 0,
+    daysCreated: 0,
+    startedAt: null,
+    updatedAt: new Date().toISOString(),
+    finishedAt: null,
+    lastError: null,
+    note: null,
+    ...partial,
+  }
+}
+
+async function saveSchedulerRunStatus(status: SchedulerRunStatus): Promise<void> {
+  await prisma.adminPreference.upsert({
+    where: {
+      stationId_settingKey: {
+        stationId: CATALOG_STATE_STATION_ID,
+        settingKey: SCHEDULER_RUN_STATUS_KEY,
+      },
+    },
+    update: { settingValue: toJson(status) },
+    create: {
+      stationId: CATALOG_STATE_STATION_ID,
+      settingKey: SCHEDULER_RUN_STATUS_KEY,
+      settingValue: toJson(status),
+    },
+  })
+}
+
+export async function getSchedulerRunStatus(): Promise<SchedulerRunStatus> {
+  const row = await prisma.adminPreference.findUnique({
+    where: {
+      stationId_settingKey: {
+        stationId: CATALOG_STATE_STATION_ID,
+        settingKey: SCHEDULER_RUN_STATUS_KEY,
+      },
+    },
+    select: { settingValue: true },
+  })
+
+  if (!row?.settingValue) return buildSchedulerRunStatus()
+  try {
+    return buildSchedulerRunStatus(JSON.parse(row.settingValue) as Partial<SchedulerRunStatus>)
+  } catch {
+    return buildSchedulerRunStatus()
+  }
+}
+
 let schedulerIsRunning = false
 const MAX_SERIES_EPISODES_PER_DAY = 2
 const EPISODE_PROGRESS_INTERVAL_DAYS = 7
@@ -766,13 +863,49 @@ export async function runScheduler(
 
   schedulerIsRunning = true
 
-  try {
   const forceRegenerate = Boolean(options?.forceRegenerate)
+  const runStatus = buildSchedulerRunStatus({
+    isRunning: true,
+    phase: 'starting',
+    horizonDays,
+    stationId: stationId ?? null,
+    forceRegenerate,
+    stationsTotal: 0,
+    stationsProcessed: 0,
+    daysTotal: 0,
+    daysProcessed: 0,
+    daysCreated: 0,
+    startedAt: new Date().toISOString(),
+    note: forceRegenerate ? 'Starting regeneration run' : 'Starting schedule generation run',
+  })
+  const persistStatus = async (partial: Partial<SchedulerRunStatus>) => {
+    Object.assign(runStatus, partial, {
+      updatedAt: new Date().toISOString(),
+    })
+    await saveSchedulerRunStatus(runStatus)
+  }
+
+  try {
   console.log(`[Scheduler] Starting — horizon: ${horizonDays} days${stationId ? `, station: ${stationId}` : ''}${forceRegenerate ? ', force: true' : ''}`)
 
-  // Fetch admin users and select one that actually has Plex credentials.
-  const adminUsers = await prisma.user.findMany({
-    where: { isAdmin: true },
+  //await persistStatus({
+      isRunning: false,
+      phase: 'error',
+      finishedAt: new Date().toISOString(),
+      lastError: `Station ${stationId} was not found.`,
+      note: 'Station scope not found',
+    })
+    return
+  }
+  const today = startOfDay(new Date())
+  await persistStatus({
+    phase: 'loading_catalog',
+    stationsTotal: stations.length,
+    daysTotal: Math.max(1, horizonDays * Math.max(1, stations.length)),
+    note: stationId
+      ? `Preparing ${horizonDays}-day regeneration for ${stationId}`
+      : `Preparing ${horizonDays}-day generation for ${stations.length} stations`,
+  }
     select: { id: true, preferences: true },
   })
 
@@ -785,6 +918,13 @@ export async function runScheduler(
       plexServerUrl = prefs.plexServerUrl
       break
     }
+  await persistStatus({
+    phase: 'loading_catalog',
+    note: forceRegenerate
+      ? 'Skipping catalog sync during regeneration and reusing the existing catalog snapshot'
+      : 'Checking catalog freshness before scheduling',
+  })
+
   }
   const stations = await prisma.station.findMany(
     stationId ? { where: { id: stationId } } : undefined,
@@ -836,18 +976,11 @@ export async function runScheduler(
   const holidaySettings = await loadHolidaySettings()
   const showOwnership = await buildShowOwnershipMap()
   const activeClassByPlexKey = await getActiveClassByPlexKey()
-  const overrideYears = new Set<number>()
-  for (let dayOffset = 0; dayOffset < horizonDays; dayOffset++) {
-    overrideYears.add(startOfDay(addDays(today, dayOffset)).getFullYear())
-  }
   const holidayOverrideRows = await prisma.holidayOverride.findMany({
     where: {
-      year: { in: Array.from(overrideYears) },
-      OR: [
-        { stationId: null },
-        ...(stationId ? [{ stationId }] : []),
-      ],
-    },
+  await persistStatus({
+    phase: 'scheduling',
+    note: 'Generating station schedules',
   })
 
   for (const station of stations) {
@@ -865,10 +998,23 @@ export async function runScheduler(
       const existing = await prisma.schedule.findUnique({
         where: { stationId_date: { stationId: station.id, date } },
       })
+      if (existing) {
+        await persistStatus({
+          daysProcessed: runStatus.daysProcessed + 1,
+          note: `Skipped existing schedule for ${station.id} on ${date.toISOString().split('T')[0]}`,
+        })
+        continue
+      }
+      try {
+
+      // Skip if already scheduled
+      const existing = await prisma.schedule.findUnique({
+        where: { stationId_date: { stationId: station.id, date } },
+      })
       if (existing) continue
 
       const holiday       = getHolidayForDate(date, holidaySettings)
-      const holidayConfig = holiday
+      const holidayResolved = holiday
         ? resolveHolidayConfig({
             holiday,
             date,
@@ -876,7 +1022,8 @@ export async function runScheduler(
             rows: holidayOverrideRows,
             legacyOverrides: holidayOverrides,
           })
-        : null
+        : { config: null, row: null }
+      const holidayConfig = holidayResolved.config
       const holidayContentOverride = Boolean(holidayConfig?.replace_schedule)
       const holidayTaggedKeys = holiday && holidayContentOverride ? new Set(holidayTagMap[holiday] ?? []) : null
       const isWeekend     = [0, 6].includes(getDay(date))
@@ -886,6 +1033,13 @@ export async function runScheduler(
       const schedule = await prisma.schedule.create({
         data: { stationId: station.id, date, weekNumber, isActive: true },
       })
+
+      if (holidayResolved.row?.onceOffEvent && holidayContentOverride) {
+        await prisma.holidayOverride.update({
+          where: { id: holidayResolved.row.id },
+          data: { consumedAt: new Date() },
+        }).catch(() => null)
+      }
 
       // Pick the template — holiday full-replace, else weekday/weekend
       let blocks = isWeekend ? WEEKEND_BLOCKS : WEEKDAY_BLOCKS
@@ -974,7 +1128,7 @@ export async function runScheduler(
       const dayEndMs = addDays(startOfDay(date), 1).getTime()
       const dayEvents = await prisma.specialEvent.findMany({
         where: {
-          startTime: { gte: new Date(dayStartMs), lt: new Date(dayEndMs) },
+          consumedAt: null,
           OR: [{ stationId: null }, { stationId: station.id }],
         },
       })
@@ -991,8 +1145,14 @@ export async function runScheduler(
         const evContentId = String(evContent.id ?? '').trim()
         if (!evContentId) continue
 
-        const startMs = ev.startTime.getTime()
-        if (startMs < dayStartMs || startMs >= dayEndMs) continue
+        const eventMonthDay = ev.startTime.getMonth() * 100 + ev.startTime.getDate()
+        const currentMonthDay = date.getMonth() * 100 + date.getDate()
+        if (eventMonthDay !== currentMonthDay) continue
+
+        const startMs = new Date(date)
+        startMs.setHours(ev.startTime.getHours(), ev.startTime.getMinutes(), 0, 0)
+        const startTimeMs = startMs.getTime()
+        if (startTimeMs < dayStartMs || startTimeMs >= dayEndMs) continue
 
         let durationMins = ev.durationMins > 0 ? ev.durationMins : 0
         let eventMediaItemId: string | null = null
@@ -1007,15 +1167,15 @@ export async function runScheduler(
         }
         if (durationMins <= 0) durationMins = 60 // fallback for YouTube / unknown length
 
-        const endMs = startMs + durationMins * 60_000
+        const endMs = startTimeMs + durationMins * 60_000
         // Skip if it overlaps an already-reserved (higher priority) window.
-        if (reservedIntervals.some((r) => startMs < r.end && endMs > r.start)) continue
+        if (reservedIntervals.some((r) => startTimeMs < r.end && endMs > r.start)) continue
 
         const eventAdBreaks = buildAdBreaks(durationMins, evSource === 'plex' ? adIntervalMovie : adIntervalTv, adEnabled)
         const eventSlot = await prisma.slot.create({
           data: {
             scheduleId:     schedule.id,
-            startTime:      new Date(startMs),
+            startTime:      new Date(startTimeMs),
             durationMins,
             contentSource:  evSource === 'plex' ? 'plex' : 'youtube',
             contentId:      evSource === 'plex' ? evContentId : null,
@@ -1024,7 +1184,7 @@ export async function runScheduler(
             fillerDuration: null,
             isOverride:     true,
             overrideReason: 'special_event',
-            metadata:       toJson({ blockName: ev.name, title: ev.name, reason: 'special_event', priority: ev.priority, untilContentFinished: Boolean(evContent.untilContentFinished) }),
+            metadata:       toJson({ blockName: ev.name, title: ev.name, reason: 'special_event', priority: ev.priority, untilContentFinished: Boolean(evContent.untilContentFinished), onceOffEvent: Boolean(ev.onceOffEvent) }),
           },
         })
         if (eventMediaItemId) {
@@ -1032,7 +1192,14 @@ export async function runScheduler(
             .create({ data: { slotId: eventSlot.id, mediaItemId: eventMediaItemId, orderIndex: 0 } })
             .catch(() => null)
         }
-        reservedIntervals.push({ start: startMs, end: endMs })
+        reservedIntervals.push({ start: startTimeMs, end: endMs })
+
+        if (ev.onceOffEvent) {
+          await prisma.specialEvent.update({
+            where: { id: ev.id },
+            data: { consumedAt: new Date() },
+          }).catch(() => null)
+        }
       }
 
       // Build slots for the day
@@ -1150,7 +1317,7 @@ export async function runScheduler(
                 adBreaks:      fallbackAdBreaks.length ? toJson(fallbackAdBreaks) : null,
                 fillerId:      fillerPools.music ?? fillerPools.ads ?? null,
                 fillerDuration: null,
-                metadata:      toJson({ blockName: block.name, title: 'Filler', reason: 'placement_safety_fallback' }),
+                metadata:      toJson({ blockName: block.name, title: 'Filler', reason: 'placement_safety_fallback', fillerWindows: block.fillerWindows ?? [] }),
               },
             })
             slotStart = addMinutes(slotStart, fallbackDuration)
@@ -1171,7 +1338,7 @@ export async function runScheduler(
                 adBreaks:      fillerAdBreaks.length ? toJson(fillerAdBreaks) : null,
                 fillerId:      fillerPools.ads ?? fillerPools.music ?? null,
                 fillerDuration: null,
-                metadata:      toJson({ blockName: block.name, title: block.name }),
+                metadata:      toJson({ blockName: block.name, title: block.name, fillerWindows: block.fillerWindows ?? [] }),
               },
             })
             slotStart = new Date(blockEnd)
@@ -1367,6 +1534,7 @@ export async function runScheduler(
                           showTitle: episode.showTitle ?? progress.showTitle,
                           season:    episode.seasonNumber,
                           episode:   episode.episodeNumber,
+                          fillerWindows: block.fillerWindows ?? [],
                           ...bumperMetaForWindow(activeStationSlot, windowBumperAssigned),
                         }),
                   },
@@ -1455,14 +1623,42 @@ export async function runScheduler(
               startTime:     slotStart,
               durationMins:  fallbackDuration,
               contentSource: 'youtube',
-              adBreaks:      fallbackAdBreaks.length ? toJson(fallbackAdBreaks) : null,
-              fillerId:      fillerPools.music ?? fillerPools.ads ?? null,
-              fillerDuration: null,
-              metadata:      toJson({ blockName: block.name, title: 'Filler', reason: 'fallback_filler' }),
-            },
-          })
-          slotStart = addMinutes(slotStart, 30)
-          failedPlacementsAtCurrentStart = 0
+      await persistStatus({
+        daysProcessed: runStatus.daysProcessed + 1,
+        daysCreated: runStatus.daysCreated + 1,
+        note: `Scheduled ${station.id} for ${date.toISOString().split('T')[0]}`,
+      })
+      console.log(`[Scheduler] Scheduled ${station.id} for ${date.toISOString().split('T')[0]}`)
+      } catch (err) {
+        await persistStatus({
+          lastError: err instanceof Error ? err.message : String(err),
+          note: `Failed ${station.id} for ${date.toISOString().split('T')[0]}`,
+        })
+        console.error(`[Scheduler] Failed ${station.id} for ${date.toISOString().split('T')[0]}:`, err)
+      }
+    }
+    await persistStatus({
+      stationsProcessed: runStatus.stationsProcessed + 1,
+      note: `Completed station ${station.id}`,
+    })
+  }
+
+  await persistStatus({
+    isRunning: false,
+    phase: 'complete',
+    finishedAt: new Date().toISOString(),
+    note: 'Scheduler run complete',
+  })
+  console.log('[Scheduler] Run complete.')
+  } catch (error) {
+    await persistStatus({
+      isRunning: false,
+      phase: 'error',
+      finishedAt: new Date().toISOString(),
+      lastError: error instanceof Error ? error.message : String(error),
+      note: 'Scheduler run failed',
+    })
+    throw error 0
         }
       }
 

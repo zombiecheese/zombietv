@@ -41,22 +41,44 @@ export async function GET(
     return NextResponse.json({ schedule: null, slots: [] })
   }
 
-  const slots = schedule.slots.map((s) => ({
-    id:            s.id,
-    startTime:     s.startTime.toISOString(),
-    durationMins:  s.durationMins,
-    contentSource: s.contentSource,
-    contentId:     s.contentId,
-    showTitle:     s.showTitle,
-    seasonNumber:  s.seasonNumber,
-    episodeNumber: s.episodeNumber,
-    adBreaks:      fromJsonArray(s.adBreaks),
-    fillerId:      s.fillerId,
-    fillerDuration: s.fillerDuration,
-    isOverride:    s.isOverride,
-    overrideReason: s.overrideReason,
-    metadata:      fromJsonObject(s.metadata),
-  }))
+  // Load ShowProgress data for pacing context
+  const showProgressMap = new Map<string, { nextSeason: number; nextEpisode: number; lastAiredAt: string | null; daysUntilNext?: number }>()
+  if (stationId) {
+    const showProgress = await prisma.showProgress.findMany({ where: { stationId } })
+    for (const sp of showProgress) {
+      showProgressMap.set(`${sp.stationId}:${sp.plexShowKey}`, {
+        nextSeason: sp.nextSeason,
+        nextEpisode: sp.nextEpisode,
+        lastAiredAt: sp.lastAiredAt?.toISOString() ?? null,
+      })
+    }
+  }
+
+  const slots = schedule.slots.map((s) => {
+    // Fetch pacing info for this slot's show if it exists
+    let showPacing: { nextSeason: number; nextEpisode: number; lastAiredAt: string | null } | undefined
+    if (s.contentSource === 'plex' && s.contentId) {
+      showPacing = showProgressMap.get(`${stationId}:${s.contentId}`)
+    }
+
+    return {
+      id:            s.id,
+      startTime:     s.startTime.toISOString(),
+      durationMins:  s.durationMins,
+      contentSource: s.contentSource,
+      contentId:     s.contentId,
+      showTitle:     s.showTitle,
+      seasonNumber:  s.seasonNumber,
+      episodeNumber: s.episodeNumber,
+      adBreaks:      fromJsonArray(s.adBreaks),
+      fillerId:      s.fillerId,
+      fillerDuration: s.fillerDuration,
+      isOverride:    s.isOverride,
+      overrideReason: s.overrideReason,
+      metadata:      fromJsonObject(s.metadata),
+      showPacing,
+    }
+  })
 
   return NextResponse.json({ scheduleId: schedule.id, slots })
 }

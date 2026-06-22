@@ -51,6 +51,10 @@ export interface PlaybackState {
   inFiller:        boolean
   fillerStartMs:   number | null
   fillerId:        string | null
+
+  // Bumper info (opening/closing idents for the current slot)
+  openBumperId:    string | null  // YouTube video ID for opening bumper
+  closeBumperId:   string | null  // YouTube video ID for closing bumper
 }
 
 interface YoutubePoolItem {
@@ -95,6 +99,8 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
     inFiller:         false,
     fillerStartMs:    null,
     fillerId:         null,
+    openBumperId:     null,
+    closeBumperId:    null,
   }
 
   // ── Find the active schedule for today ──────────────────────────────────
@@ -147,13 +153,13 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
   if (!schedules.length) return offline
 
   const allSlots = schedules
-    .flatMap((schedule) => schedule.slots)
-    .sort((a, b) => a.startTime.getTime() - b.startTime.getTime())
+    .flatMap((schedule: { slots: typeof schedules[0]["slots"] }) => schedule.slots)
+    .sort((a: typeof schedules[0]["slots"][0], b: typeof schedules[0]["slots"][0]) => a.startTime.getTime() - b.startTime.getTime())
 
   if (!allSlots.length) return offline
 
   // ── Find the active slot ────────────────────────────────────────────────
-  const activeSlot = allSlots.reduce<typeof allSlots[number] | null>((latest, slot) => {
+  const activeSlot = allSlots.reduce<typeof allSlots[number] | null>((latest: typeof allSlots[number] | null, slot: typeof allSlots[number]) => {
     const slotStart = slot.startTime.getTime()
     // Ad breaks add to the programme's wall-clock runtime.
     const slotAdMins = fromJsonArray<AdBreakDef>(slot.adBreaks).reduce((sum, ab) => sum + (ab.durationMins || 0), 0)
@@ -187,7 +193,7 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
           OR: [{ station: null }, { station: stationId }],
         },
         select: { videoId: true, durationMins: true },
-      })).filter((item): item is { videoId: string; durationMins: number | null } => Boolean(item.videoId))
+      })).filter((item: any): item is { videoId: string; durationMins: number | null } => Boolean(item.videoId))
     : []
 
   // For a given ad break, return the absolute time at which the last ad video
@@ -200,7 +206,7 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
     const nominalMs = nominalDurationMins * 60_000
     let coveredMs = 0
     for (const item of ordered) {
-      const durMs = Math.max(1, item.durationMins ?? 3) * 60_000
+      const durMs = Math.max(1, (item as typeof adPool[0]).durationMins ?? 3) * 60_000
       cursorMs += durMs
       coveredMs += durMs
       if (coveredMs >= nominalMs) break
@@ -250,6 +256,24 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
   })
   const fillerPools = fromJsonObject<Record<string, string | null>>(station?.fillerPools)
 
+  // Extract filler window info from slot metadata (for filler-only slots/windows)
+  const slotMetadata = fromJsonObject<Record<string, unknown>>(activeSlot.metadata) ?? {}
+
+  let fillerCategories: string[] = ['ads', 'filler', 'music']
+  
+  // Check for new fillerWindows format
+  if (Array.isArray(slotMetadata?.fillerWindows)) {
+    const windows = slotMetadata.fillerWindows as Array<{ category?: string }>
+    const categoriesSet = new Set<string>()
+    for (const w of windows) {
+      if (typeof w.category === 'string') categoriesSet.add(w.category)
+    }
+    if (categoriesSet.size > 0) fillerCategories = Array.from(categoriesSet)
+  } else if (Array.isArray(slotMetadata?.fillerCategories)) {
+    // Legacy support for old fillerCategories field
+    fillerCategories = slotMetadata.fillerCategories as string[]
+  }
+
   const youtubeSelection = await selectYoutubeSelection({
     stationId,
     now,
@@ -260,6 +284,7 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
     currentAdBreak,
     inFiller,
     fallbackId: inAdBreak ? (fillerPools.ads ?? fillerPools.music ?? null) : (activeSlot.fillerId ?? fillerPools.music ?? null),
+    fillerCategories,
   })
 
   // ── Start offset into the content ────────────────────────────────────────
@@ -301,6 +326,10 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
 
   const activeContentRating = activeSlot.mediaItems[0]?.mediaItem?.ratings ?? null
 
+  // ── Extract bumper metadata from slot ──────────────────────────────────────
+  const openBumperId = (slotMetadata.openBumperId as string | null) ?? null
+  const closeBumperId = (slotMetadata.closeBumperId as string | null) ?? null
+
   return {
     stationId,
     serverTimeMs: now,
@@ -317,7 +346,7 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
         ? (youtubeSelection?.currentVideoId ?? fillerPools.ads ?? fillerPools.music ?? null)
         : activeSlot.contentId,
 
-    title: inFiller || inAdBreak ? null : (fromJsonObject<Record<string,unknown>>(activeSlot.metadata)?.title as string ?? activeSlot.showTitle ?? null),
+    title: inFiller || inAdBreak ? null : (slotMetadata.title as string ?? activeSlot.showTitle ?? null),
     showTitle:     activeSlot.showTitle,
     seasonNumber:  activeSlot.seasonNumber,
     episodeNumber: activeSlot.episodeNumber,
@@ -338,6 +367,9 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
     inFiller,
     fillerStartMs: inFiller ? contentEndMs : null,
     fillerId:      activeSlot.fillerId ?? fillerPools.music ?? null,
+
+    openBumperId,
+    closeBumperId,
   }
 }
 
@@ -351,8 +383,9 @@ async function selectYoutubeSelection(params: {
   currentAdBreak: { startsAtMs: number; endsAtMs: number; durationMins: number } | undefined
   inFiller: boolean
   fallbackId: string | null
+  fillerCategories?: string[]
 }): Promise<YoutubeSelection | null> {
-  const { stationId, now, slotStartMs, contentEndMs, fillerDurationMins, inAdBreak, currentAdBreak, inFiller, fallbackId } = params
+  const { stationId, now, slotStartMs, contentEndMs, fillerDurationMins, inAdBreak, currentAdBreak, inFiller, fallbackId, fillerCategories = ['ads', 'filler', 'music', 'news'] } = params
   const segmentStartMs = inAdBreak
     ? (currentAdBreak?.startsAtMs ?? slotStartMs)
     : contentEndMs
@@ -365,7 +398,7 @@ async function selectYoutubeSelection(params: {
   const seed = `${stationId}:${slotStartMs}:${segmentStartMs}:${inAdBreak ? 'ad' : inFiller ? 'filler' : 'youtube'}`
   const selectorCategories = inAdBreak
     ? ['ads', 'filler', 'music']
-    : ['music', 'filler', 'ads']
+    : fillerCategories
 
   const candidates = await prisma.youtubeContent.findMany({
     where: {
@@ -389,15 +422,15 @@ async function selectYoutubeSelection(params: {
   })
 
   const seeded = seededShuffle(
-    candidates.filter((item): item is YoutubePoolItem & { videoId: string } => Boolean(item.videoId)),
+    candidates.filter((item: any): item is YoutubePoolItem & { videoId: string } => Boolean(item.videoId)),
     seed,
   )
 
   const selected: YoutubePoolItem[] = []
   let totalMins = 0
   for (const item of seeded) {
-    selected.push(item)
-    totalMins += Math.max(1, item.durationMins ?? 3)
+    selected.push(item as YoutubePoolItem)
+    totalMins += Math.max(1, (item as any).durationMins ?? 3)
     if (totalMins >= segmentDurationMins) break
   }
 

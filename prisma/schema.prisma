@@ -165,6 +165,8 @@ model HolidayOverride {
   holidayName     String   // "christmas" | "good_friday" | "easter" | "halloween"
   year            Int
   stationId       String?  // null = applies to all stations
+  onceOffEvent    Boolean  @default(false)
+  consumedAt      DateTime?
 
   replaceSchedule Boolean  @default(true)
   adFree          Boolean  @default(false)
@@ -187,6 +189,8 @@ model SpecialEvent {
   durationMins    Int
   priority        String   @default("medium") // "high" | "medium" | "low"
   replaceSchedule Boolean  @default(false)
+  onceOffEvent    Boolean  @default(false)
+  consumedAt      DateTime?
   content         String   // JSON: { source: "plex|youtube", id: "...", description: "..." }
 
   createdAt       DateTime @default(now())

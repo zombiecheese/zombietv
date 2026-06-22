@@ -1,8 +1,9 @@
-# Zombie TV - Feature Test Checklist
+# Project Documentation Moved
 
-Purpose: keep a current, trustworthy test matrix for the present codebase.
+This file has been moved to `docs/test-checklist.md` to centralize all project documentation.
 
-Legend:
+Please refer to [docs/test-checklist.md](docs/test-checklist.md) for the test checklist and validation coverage.
+
 
 - `[ ]` not yet run on current build
 - `[x]` passed on current build

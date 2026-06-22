@@ -16,7 +16,7 @@ const DEFAULT_HOLIDAY_SETTINGS: HolidaySetting[] = [
   { id: 'halloween', name: 'halloween', label: 'Halloween', startMonth: 10, startDay: 31, endMonth: 10, endDay: 31, enabled: true },
 ]
 
-interface HRow { id: string; holidayName: string; year: number; stationId: string | null; replaceSchedule: boolean; adFree: boolean; contentPriority: string }
+interface HRow { id: string; holidayName: string; stationId: string | null; replaceSchedule: boolean; adFree: boolean; contentPriority: string; onceOffEvent: boolean; consumedAt?: string | null }
 interface HolidayTagMap { [holiday: string]: string[] }
 
 export default function HolidaysPage() {
@@ -25,7 +25,7 @@ export default function HolidaysPage() {
   const [stations, setStations] = useState<StationOption[]>([{ id: 'stn', name: 'STN' }, { id: 'zbc', name: 'ZBC' }, { id: 'nnwk', name: 'NNWK' }, { id: 'seven', name: '7' }, { id: 'nine', name: '9' }, { id: 'ten', name: '10' }])
   const [catalogOptions, setCatalogOptions] = useState<CatalogOptionsResponse>({ genres: [], languages: [] })
   const [holidayTagMap, setHolidayTagMap] = useState<HolidayTagMap>({})
-  const [form, setForm] = useState({ holidayName: 'christmas', year: new Date().getFullYear(), stationId: '', replaceSchedule: true, adFree: false, contentPriority: '' })
+  const [form, setForm] = useState({ holidayName: 'christmas', stationId: '', replaceSchedule: true, adFree: false, contentPriority: '', onceOffEvent: false })
   const [editingId, setEditingId] = useState<string | null>(null)
   const [holidayForm, setHolidayForm] = useState({ name: 'christmas', label: 'Christmas Day', startMonth: 12, startDay: 25, endMonth: 12, endDay: 25, enabled: true })
   const [holidayEditingId, setHolidayEditingId] = useState<string | null>(null)
@@ -174,25 +174,25 @@ export default function HolidaysPage() {
     setEditingId(row.id)
     setForm({
       holidayName: row.holidayName,
-      year: row.year,
       stationId: row.stationId ?? '',
       replaceSchedule: row.replaceSchedule,
       adFree: row.adFree,
       contentPriority: row.contentPriority,
+      onceOffEvent: row.onceOffEvent,
     })
     setMsg('Editing holiday override.')
   }
 
   const clearForm = () => {
     setEditingId(null)
-    setForm({ holidayName: 'christmas', year: new Date().getFullYear(), stationId: '', replaceSchedule: true, adFree: false, contentPriority: '' })
+    setForm({ holidayName: 'christmas', stationId: '', replaceSchedule: true, adFree: false, contentPriority: '', onceOffEvent: false })
     setMsg('')
   }
 
   return (
     <AdminShell>
       <h2 style={h2}>Holiday Settings & Overrides</h2>
-      <p style={sub}>Create your own holiday name, set its date range, and then use that holiday in catalog tags and year-specific overrides.</p>
+      <p style={sub}>Create your own holiday name, set its date range, and then use that holiday in catalog tags and recurring overrides.</p>
 
       <div style={{ ...card, marginTop: 16, marginBottom: 18 }}>
         <div style={introGrid}>
@@ -201,7 +201,7 @@ export default function HolidaysPage() {
             <ul style={bulletList}>
               <li>Holiday settings are the named holidays the app can recognize.</li>
               <li>Each setting has a name, a display label, and a start/end date range.</li>
-              <li>Those names are reused for Plex Catalog tags and year-specific overrides.</li>
+              <li>Those names are reused for Plex Catalog tags and recurring holiday overrides.</li>
             </ul>
           </div>
           <div style={{ color: '#a8c4e0', fontSize: '0.75rem', lineHeight: 1.6 }}>
@@ -270,16 +270,13 @@ export default function HolidaysPage() {
       </div>
 
       <div style={{ ...card, marginTop: 18 }}>
-        <h3 style={h3}>Year-Specific Overrides</h3>
-        <p style={panelNote}>Pick one of the holiday definitions above, then decide how that holiday should affect a specific year and station.</p>
+        <h3 style={h3}>Recurring Holiday Overrides</h3>
+        <p style={panelNote}>Pick one of the holiday definitions above, then decide how that holiday should affect every matching date unless you mark it as one-off.</p>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12, marginBottom: 14 }}>
           <Fld label="Holiday">
             <select value={form.holidayName} onChange={e => setForm({...form, holidayName: e.target.value})} style={sel}>
               {holidayOptionItems.map(h => <option key={h.name} value={h.name}>{h.label}</option>)}
             </select>
-          </Fld>
-          <Fld label="Year">
-            <input type="number" value={form.year} onChange={e => setForm({...form, year: Number(e.target.value)})} style={inp} min={2024} max={2040} />
           </Fld>
           <Fld label="Station (optional)">
             <select value={form.stationId} onChange={e => setForm({...form, stationId: e.target.value})} style={sel}>
@@ -299,6 +296,7 @@ export default function HolidaysPage() {
         <div style={{ display: 'flex', gap: 20, marginBottom: 14, flexWrap: 'wrap' }}>
           <label style={checkLabel}><input type="checkbox" checked={form.replaceSchedule} onChange={e => setForm({...form, replaceSchedule: e.target.checked})} /> Replace normal schedule</label>
           <label style={checkLabel}><input type="checkbox" checked={form.adFree} onChange={e => setForm({...form, adFree: e.target.checked})} /> Ad-free day</label>
+          <label style={checkLabel}><input type="checkbox" checked={form.onceOffEvent} onChange={e => setForm({...form, onceOffEvent: e.target.checked})} /> Once-off event</label>
         </div>
         {msg && <p style={{ color: '#4CAF50', fontSize: '0.78rem', margin: '0 0 10px' }}>{msg}</p>}
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
@@ -310,7 +308,7 @@ export default function HolidaysPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid #1e3a5f', color: '#4a7fb5' }}>
-                {['Holiday','Year','Station','Replace','Ad-free','Genres',''].map(h => (
+                {['Holiday','Station','Replace','Ad-free','Once-off','Genres',''].map(h => (
                   <th key={h} style={{ padding: '7px 10px', textAlign: 'left', fontWeight: 600 }}>{h}</th>
                 ))}
               </tr>
@@ -319,10 +317,10 @@ export default function HolidaysPage() {
               {rows.map(r => (
                 <tr key={r.id} style={{ borderBottom: '1px solid #0d1f3c' }}>
                   <td style={td}>{holidayLabel(r.holidayName)}</td>
-                  <td style={td}>{r.year}</td>
                   <td style={td}>{r.stationId ?? 'All'}</td>
                   <td style={td}>{r.replaceSchedule ? '✓' : '—'}</td>
                   <td style={td}>{r.adFree ? '✓ Ad-free' : '—'}</td>
+                  <td style={td}>{r.onceOffEvent ? '✓' : '—'}</td>
                   <td style={td}>{r.contentPriority || '—'}</td>
                   <td style={td}>
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

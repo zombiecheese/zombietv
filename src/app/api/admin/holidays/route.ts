@@ -1,4 +1,4 @@
-// GET  /api/admin/holidays — list all HolidayOverride rows for current + next year
+// GET  /api/admin/holidays — list holiday overrides
 // POST /api/admin/holidays — upsert a holiday override
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -11,11 +11,9 @@ export async function GET(req: NextRequest) {
   const guard = await requireAdmin(req)
   if (!guard.ok) return guard.response
 
-  const thisYear = new Date().getFullYear()
-
   const rows = await prisma.holidayOverride.findMany({
-    where: { year: { gte: thisYear } },
-    orderBy: [{ year: 'asc' }, { holidayName: 'asc' }],
+    where: { consumedAt: null },
+    orderBy: [{ holidayName: 'asc' }, { stationId: 'asc' }],
   })
 
   return NextResponse.json(rows)
@@ -26,26 +24,28 @@ export async function POST(req: NextRequest) {
   if (!guard.ok) return guard.response
 
   const {
-    id, holidayName, year, stationId,
-    replaceSchedule, adFree, contentPriority,
+    id, holidayName, stationId,
+    replaceSchedule, adFree, contentPriority, onceOffEvent,
   } = await req.json().catch(() => ({}))
 
-  if (!holidayName || !year) {
-    return NextResponse.json({ error: 'holidayName and year required' }, { status: 400 })
+  if (!holidayName) {
+    return NextResponse.json({ error: 'holidayName required' }, { status: 400 })
   }
 
   // Normalise contentPriority: accept array or comma string
   const priority = Array.isArray(contentPriority)
     ? contentPriority.join(',')
     : (contentPriority ?? '')
+  const legacyYear = new Date().getFullYear()
 
   const payload = {
     holidayName,
-    year: Number(year),
+    year: legacyYear,
     stationId: stationId ?? null,
     replaceSchedule: replaceSchedule ?? true,
     adFree: adFree ?? false,
     contentPriority: priority,
+    onceOffEvent: Boolean(onceOffEvent),
   }
 
   const existing = id
@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
     : await prisma.holidayOverride.findFirst({
         where: {
           holidayName,
-          year: Number(year),
+          consumedAt: null,
           stationId: stationId ?? null,
         },
       })
@@ -63,11 +63,12 @@ export async function POST(req: NextRequest) {
         where: { id: existing.id },
         data: {
           holidayName,
-          year: Number(year),
+          year: legacyYear,
           stationId: stationId ?? null,
           replaceSchedule: replaceSchedule ?? true,
           adFree: adFree ?? false,
           contentPriority: priority,
+          onceOffEvent: Boolean(onceOffEvent),
         },
       })
     : await prisma.holidayOverride.create({ data: payload })

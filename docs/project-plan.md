@@ -1,9 +1,7 @@
-﻿# Project Documentation Moved
+# Zombie TV - Project Plan
 
-This file has been moved to `docs/project-plan.md` to centralize all project documentation.
-
-Please refer to [docs/project-plan.md](docs/project-plan.md) for the project plan and milestones.
-
+Single source plan for current architecture, completed scope, and next milestones.
+Last reviewed: 2026-06-23.
 
 ## 1. Product Goal
 
@@ -85,26 +83,21 @@ Simulate a shared, always-on 1990s-style TV broadcast where:
 - Scheduler and playback updated for newer slot model and runtime-aware ad handling.
 - Filler Content rename and category narrowing completed.
 - VHS control expansion and live preview completed.
+- Mobile-responsive EPG with 900px viewport breakpoint.
+- Deployment docs and release process hardening.
+- Observability for long-running sync/regeneration jobs with durable status storage.
+- Environment validation at startup with clear error messages.
+- Bumper semantics exposure in PlaybackState API.
+- Show pacing visibility in schedule editor UI.
 
 ## 5. Next Milestones
-
-### Priority A
-
-- Completed: mobile-responsive EPG that works cleanly on smaller screens.
-
-### Priority B
-
-- Completed: deployment docs and release process hardening.
-
-### Priority C
-
-- Completed: observability around long-running sync and regeneration jobs.
 
 ### Later / Backlog
 
 - Build test coverage for scheduler, playback transitions, and admin APIs.
 - Add deterministic fixture-based integration tests for holiday/event precedence.
-- Finalize bumper/ident rendering semantics at playback layer.
+- Implement real-time WebSocket push for scheduler/catalog observability (replace polling).
+- Refine mobile admin page layouts with dedicated responsive design.
 
 ## 6. Constraints and Risks
 
@@ -131,5 +124,3 @@ Simulate a shared, always-on 1990s-style TV broadcast where:
 - **Halloween YouTube IDs:** `zbeYwGANtWM` (list: `RDzbeYwGANtWM`) and `qkVlC2WgEwc` are seeded as Halloween bumpers.
 - **No YouTube Data API:** All YouTube content is manually curated. No API key required.
 - **Admin password:** Default seed is `admin123` — must be changed before any deployment.
-
-

@@ -5,13 +5,19 @@ import AdminShell from '@/components/admin/AdminShell'
 
 interface SlotVideo { enabled: boolean; videoId: string }
 interface SlotLibraryWeights { tv_shows: number; movies: number; animation: number; fitness: number }
+interface FillerWindow {
+  durationMins: number  // Must be multiple of 30
+  category: string      // 'ads', 'filler', 'music', 'news'
+  openVideo: SlotVideo
+  closeVideo: SlotVideo
+}
 interface SlotConfig {
   key: string
   name: string
   start: string   // 'HH:MM' or 'first'
   end: string     // 'HH:MM' or 'until_finished'
   enabled: boolean
-  fillerOnly: boolean
+  fillerWindows: FillerWindow[]  // empty = no filler windows
   openVideo: SlotVideo
   closeVideo: SlotVideo
   libraryWeights: SlotLibraryWeights
@@ -61,7 +67,8 @@ const SLOT_TEMPLATE: Array<{ key: string; name: string; start: string; end: stri
 function defaultSlot(t: { key: string; name: string; start: string; end: string }): SlotConfig {
   return {
     key: t.key, name: t.name, start: t.start, end: t.end,
-    enabled: true, fillerOnly: false,
+    enabled: true,
+    fillerWindows: [],
     openVideo: { enabled: false, videoId: '' },
     closeVideo: { enabled: false, videoId: '' },
     libraryWeights: { tv_shows: 1, movies: 1, animation: 0, fitness: 0 },
@@ -82,6 +89,7 @@ function mergeSlots(saved: unknown): SlotConfig[] {
       openVideo: { ...base.openVideo, ...(found.openVideo ?? {}) },
       closeVideo: { ...base.closeVideo, ...(found.closeVideo ?? {}) },
       libraryWeights: { ...base.libraryWeights, ...(found.libraryWeights ?? {}) },
+      fillerWindows: Array.isArray(found.fillerWindows) ? found.fillerWindows : base.fillerWindows,
       allowGenres: Array.isArray(found.allowGenres) ? found.allowGenres : [],
       allowLanguages: Array.isArray(found.allowLanguages) ? found.allowLanguages : [],
     }
@@ -295,12 +303,11 @@ export default function StationsPage() {
 
                   {slot.enabled && (
                     <>
-                      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 12 }}>
-                        <label style={checkLabel}>
-                          <input type="checkbox" checked={slot.fillerOnly} onChange={e => updateSlot(index, { fillerOnly: e.target.checked })} />
-                          Filler content only
-                        </label>
-                      </div>
+                      <FillerWindowsBuilder
+                        slot={slot}
+                        index={index}
+                        updateSlot={updateSlot}
+                      />
 
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
                         <div style={{ border: '1px solid #1e3a5f', padding: 10 }}>
@@ -323,7 +330,7 @@ export default function StationsPage() {
                         </div>
                       </div>
 
-                      {!slot.fillerOnly && (
+                      {slot.fillerWindows.length === 0 && (
                         <>
                           <div style={{ marginBottom: 12 }}>
                             <div style={{ color: '#4a7fb5', fontSize: '0.65rem', letterSpacing: '0.06em', marginBottom: 6 }}>LIBRARY WEIGHTS</div>
@@ -402,6 +409,103 @@ export default function StationsPage() {
       </div>
     </AdminShell>
   )
+function FillerWindowsBuilder({ slot, index, updateSlot }: { slot: SlotConfig; index: number; updateSlot: (idx: number, patch: Partial<SlotConfig>) => void }) {
+  const FILLER_CATEGORIES = ['ads', 'filler', 'music', 'news'] as const
+  const slotDurationMins = (() => {
+    const start = slot.start === 'first' ? 0 : parseClockToMinutes(slot.start)
+    const end = slot.end === 'until_finished' ? 24 * 60 : parseClockToMinutes(slot.end)
+    return Math.max(0, end - start)
+  })()
+  
+  const totalFillerMins = slot.fillerWindows.reduce((sum, w) => sum + w.durationMins, 0)
+  const canAddMore = totalFillerMins < slotDurationMins
+  
+  const addWindow = () => {
+    if (!canAddMore) return
+    const newWindow: FillerWindow = {
+      durationMins: 30,
+      category: 'music',
+      openVideo: { enabled: false, videoId: '' },
+      closeVideo: { enabled: false, videoId: '' },
+    }
+    updateSlot(index, { fillerWindows: [...slot.fillerWindows, newWindow] })
+  }
+  
+  const removeWindow = (windowIndex: number) => {
+    updateSlot(index, { fillerWindows: slot.fillerWindows.filter((_, i) => i !== windowIndex) })
+  }
+  
+  const updateWindow = (windowIndex: number, patch: Partial<FillerWindow>) => {
+    const updated = slot.fillerWindows.map((w, i) => i === windowIndex ? { ...w, ...patch } : w)
+    updateSlot(index, { fillerWindows: updated })
+  }
+  
+  return (
+    <div style={{ marginBottom: 12, backgroundColor: '#0a1628', border: '1px solid #1e3a5f', padding: 12 }}>
+      <div style={{ color: '#4a7fb5', fontSize: '0.65rem', letterSpacing: '0.06em', marginBottom: 8 }}>FILLER WINDOWS (multiples of 30 mins)</div>
+      <div style={{ color: '#a8c4e0', fontSize: '0.72rem', marginBottom: 10 }}>
+        Slot duration: {slotDurationMins} mins | Used: {totalFillerMins} mins | Available: {slotDurationMins - totalFillerMins} mins
+      </div>
+      
+      {slot.fillerWindows.map((window, windowIndex) => (
+        <div key={windowIndex} style={{ backgroundColor: '#060f1e', border: '1px solid #1e3a5f', padding: 10, marginBottom: 8, borderRadius: 4 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: 10, alignItems: 'center', marginBottom: 8 }}>
+            <div style={{ color: '#4a7fb5', fontSize: '0.65rem', fontWeight: 700 }}>Window {windowIndex + 1}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <Field label="Duration (mins)">
+                <select value={window.durationMins} onChange={e => updateWindow(windowIndex, { durationMins: Number(e.target.value) })} style={sel}>
+                  {[30, 60, 90, 120, 150, 180, 210, 240].filter(d => d <= slotDurationMins).map(d => (
+                    <option key={d} value={d}>{d} min{d === 30 ? '' : 's'} ({(d / 60).toFixed(1)}h)</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Category">
+                <select value={window.category} onChange={e => updateWindow(windowIndex, { category: e.target.value })} style={sel}>
+                  {FILLER_CATEGORIES.map(cat => <option key={cat} value={cat}>{cat.charAt(0).toUpperCase() + cat.slice(1)}</option>)}
+                </select>
+              </Field>
+            </div>
+            <button onClick={() => removeWindow(windowIndex)} style={{ ...btn, padding: '6px 10px', fontSize: '0.65rem', backgroundColor: '#3d0000', height: 'fit-content' }}>Remove</button>
+          </div>
+          
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div style={{ border: '1px solid #1e3a5f', padding: 8, backgroundColor: '#0d1f3c' }}>
+              <label style={checkLabel}>
+                <input type="checkbox" checked={window.openVideo.enabled} onChange={e => updateWindow(windowIndex, { openVideo: { ...window.openVideo, enabled: e.target.checked } })} />
+                Opening video
+              </label>
+              {window.openVideo.enabled && (
+                <input value={window.openVideo.videoId} onChange={e => updateWindow(windowIndex, { openVideo: { ...window.openVideo, videoId: e.target.value } })} style={{ ...inp, marginTop: 6, fontSize: '0.7rem' }} placeholder="YouTube ID" />
+              )}
+            </div>
+            <div style={{ border: '1px solid #1e3a5f', padding: 8, backgroundColor: '#0d1f3c' }}>
+              <label style={checkLabel}>
+                <input type="checkbox" checked={window.closeVideo.enabled} onChange={e => updateWindow(windowIndex, { closeVideo: { ...window.closeVideo, enabled: e.target.checked } })} />
+                Closing video
+              </label>
+              {window.closeVideo.enabled && (
+                <input value={window.closeVideo.videoId} onChange={e => updateWindow(windowIndex, { closeVideo: { ...window.closeVideo, videoId: e.target.value } })} style={{ ...inp, marginTop: 6, fontSize: '0.7rem' }} placeholder="YouTube ID" />
+              )}
+            </div>
+          </div>
+        </div>
+      ))}
+      
+      <button onClick={addWindow} disabled={!canAddMore} style={{ ...btn, fontSize: '0.72rem', opacity: canAddMore ? 1 : 0.5, cursor: canAddMore ? 'pointer' : 'not-allowed' }}>
+        + Add Filler Window
+      </button>
+    </div>
+  )
+}
+
+function parseClockToMinutes(value: string): number {
+  const parts = String(value).split(':')
+  const hours = Number(parts[0]) || 0
+  const mins = Number(parts[1]) || 0
+  return hours * 60 + mins
+}
+
+const h2: React.CSSProperties
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {

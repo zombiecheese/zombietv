@@ -87,6 +87,7 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
   const [nowMs, setNowMs]         = useState(Date.now)
   const [bodyScrollbarPx, setBodyScrollbarPx] = useState(0)
   const [timelineScrollLeft, setTimelineScrollLeft] = useState(0)
+  const [viewportWidth, setViewportWidth] = useState(() => (typeof window === 'undefined' ? 0 : window.innerWidth))
   // Vertical scroller + one representative viewport width for horizontal math
   const bodyScrollRef             = useRef<HTMLDivElement | null>(null)
   const timelineViewportRef       = useRef<HTMLDivElement | null>(null)
@@ -105,7 +106,9 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
   useEffect(() => {
     const handleResize = () => {
       lastWidth = window.innerWidth
+      setViewportWidth(window.innerWidth)
     }
+    handleResize()
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [])
@@ -397,6 +400,194 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
           flexShrink: 0,
         }}>
           {nowLabel}
+        </div>
+      </div>
+    )
+  }
+
+  const isMobile = viewportWidth > 0 && viewportWidth < 900
+
+  if (isMobile) {
+    const nowLabel = new Date(nowMs).toLocaleTimeString('en-AU', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    })
+
+    const mobileStations = stations.map((station) => {
+      const stationSlots = slots[station.id] ?? []
+      const current = stationSlots.find((slot) => {
+        const start = new Date(slot.startTime).getTime()
+        const end = new Date(slot.endTime).getTime()
+        return start <= nowMs && end > nowMs
+      })
+      const next = stationSlots.find((slot) => new Date(slot.startTime).getTime() > nowMs)
+      const upcoming = stationSlots.filter((slot) => new Date(slot.startTime).getTime() >= nowMs).slice(0, 3)
+      return { station, current, next, upcoming }
+    })
+
+    return (
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        backgroundColor: '#0a1628',
+        color: '#fff',
+        fontFamily: 'Arial, sans-serif',
+        overflow: 'hidden',
+      }}>
+        <div style={{
+          display: 'flex',
+          alignItems: 'stretch',
+          minHeight: 56,
+          borderBottom: '1px solid #1e3a5f',
+          backgroundColor: '#060f1e',
+        }}>
+          <button
+            onClick={onToggleCompact}
+            style={{
+              width: 96,
+              border: 'none',
+              borderRight: '1px solid #1e3a5f',
+              background: 'transparent',
+              color: '#4a7fb5',
+              fontSize: '0.62rem',
+              letterSpacing: '0.1em',
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+            title="Collapse guide"
+          >
+            MINIMIZE
+          </button>
+          <div style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'center',
+            padding: '8px 12px',
+            overflow: 'hidden',
+          }}>
+            <div style={{ color: '#4a7fb5', fontSize: '0.58rem', letterSpacing: '0.12em' }}>MOBILE GUIDE</div>
+            <div style={{ color: '#e8f0fe', fontSize: '0.78rem', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {activeMeta?.name ?? activeStation.toUpperCase()} · {currentSlot?.title ?? 'OFF AIR'}
+            </div>
+          </div>
+          <div style={{
+            padding: '8px 12px',
+            display: 'flex',
+            alignItems: 'center',
+            color: '#4a7fb5',
+            fontFamily: 'monospace',
+            fontSize: '0.7rem',
+            borderLeft: '1px solid #1e3a5f',
+          }}>
+            {nowLabel}
+          </div>
+        </div>
+
+        <div style={{
+          flex: 1,
+          overflowY: 'auto',
+          padding: 12,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+        }}>
+          <button
+            type="button"
+            onClick={() => onSelectStation(activeStation)}
+            style={{
+              textAlign: 'left',
+              border: '1px solid #1e3a5f',
+              background: 'linear-gradient(180deg, rgba(26,58,110,0.95), rgba(10,22,40,0.95))',
+              color: '#fff',
+              padding: 14,
+              cursor: 'pointer',
+              boxShadow: '0 12px 24px rgba(0,0,0,0.25)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginBottom: 8 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <span style={{ color: '#8eb4e8', fontSize: '0.62rem', letterSpacing: '0.12em' }}>NOW PLAYING</span>
+                <span style={{ fontSize: '1rem', fontWeight: 900, letterSpacing: '0.04em' }}>{activeMeta?.name ?? activeStation.toUpperCase()}</span>
+              </div>
+              <span style={{ backgroundColor: activeMeta?.colour ?? '#2c3e50', color: '#fff', padding: '6px 10px', borderRadius: 999, fontSize: '0.68rem', fontWeight: 700 }}>
+                ACTIVE
+              </span>
+            </div>
+            <div style={{ color: '#e8f0fe', fontSize: '0.88rem', fontWeight: 700, marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {currentSlot?.title ?? 'OFF AIR'}
+            </div>
+            <div style={{ color: '#a8c4e0', fontSize: '0.72rem', lineHeight: 1.5 }}>
+              {currentSlot ? `Ends ${new Date(currentSlot.endTime).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false })}` : 'No current slot is scheduled yet.'}
+              {nextSlot ? ` Next: ${new Date(nextSlot.startTime).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false })} ${nextSlot.title}` : ''}
+            </div>
+          </button>
+
+          {mobileStations.map(({ station, current, next, upcoming }) => {
+            const isActive = station.id === activeStation
+            return (
+              <button
+                key={station.id}
+                type="button"
+                onClick={() => onSelectStation(station.id)}
+                style={{
+                  textAlign: 'left',
+                  border: `1px solid ${isActive ? station.colour : '#1e3a5f'}`,
+                  backgroundColor: isActive ? 'rgba(13,31,60,0.96)' : '#081526',
+                  color: '#fff',
+                  padding: 12,
+                  cursor: 'pointer',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', marginBottom: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <span style={{ width: 42, height: 42, borderRadius: 999, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', backgroundColor: station.colour, color: '#fff', fontWeight: 900, fontSize: '0.82rem', flexShrink: 0 }}>
+                      {station.name}
+                    </span>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.78rem', color: '#e8f0fe' }}>{station.label}</div>
+                      <div style={{ fontSize: '0.64rem', color: '#4a7fb5' }}>{station.id.toUpperCase()}</div>
+                    </div>
+                  </div>
+                  {isActive ? (
+                    <span style={{ color: '#ffb74d', fontSize: '0.64rem', letterSpacing: '0.08em', fontWeight: 700 }}>TUNED</span>
+                  ) : null}
+                </div>
+                <div style={{ color: '#e8f0fe', fontSize: '0.82rem', fontWeight: 700, marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {current?.title ?? 'OFF AIR'}
+                </div>
+                <div style={{ color: '#a8c4e0', fontSize: '0.7rem', lineHeight: 1.5, marginBottom: 8 }}>
+                  {current ? `Now until ${new Date(current.endTime).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false })}` : 'No current slot.'}
+                  {next ? ` Next: ${new Date(next.startTime).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false })} ${next.title}` : ''}
+                </div>
+                {upcoming.length ? (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {upcoming.map((slot) => (
+                      <span key={slot.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 8px', borderRadius: 999, backgroundColor: 'rgba(30,58,95,0.65)', color: '#dbe9ff', fontSize: '0.62rem' }}>
+                        {new Date(slot.startTime).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false })}
+                        {slot.title}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </button>
+            )
+          })}
+        </div>
+
+        <div style={{
+          borderTop: '1px solid #1e3a5f',
+          backgroundColor: '#060f1e',
+          padding: '8px 12px',
+          color: '#4a7fb5',
+          fontSize: '0.62rem',
+          letterSpacing: '0.08em',
+          textTransform: 'uppercase',
+        }}>
+          Tap a station to switch. The full timeline remains available on larger screens.
         </div>
       </div>
     )

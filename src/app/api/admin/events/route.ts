@@ -13,7 +13,7 @@ export async function GET(req: NextRequest) {
   if (!guard.ok) return guard.response
 
   const events = await prisma.specialEvent.findMany({
-    where: { startTime: { gte: new Date() } },
+    where: { consumedAt: null },
     orderBy: { startTime: 'asc' },
   })
 
@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
 
   const {
     name, type, stationId, startTime, durationMins,
-    priority, replaceSchedule, content,
+    priority, replaceSchedule, onceOffEvent, content,
   } = await req.json().catch(() => ({}))
 
   const untilContentFinished = Boolean(content?.untilContentFinished)
@@ -53,6 +53,7 @@ export async function POST(req: NextRequest) {
       durationMins:   untilContentFinished ? 0 : Number(durationMins),
       priority:       priority        ?? 'medium',
       replaceSchedule: replaceSchedule ?? false,
+      onceOffEvent:   Boolean(onceOffEvent),
       content:        toJson(content  ?? {}),
     },
   })
