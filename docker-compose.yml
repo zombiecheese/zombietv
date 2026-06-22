@@ -28,10 +28,7 @@ services:
       start_period: 45s
     ports:
       - "3000:3000"
-    env_file:
-      - .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-zombietv}:${POSTGRES_PASSWORD:-zombietv_dev_password}@postgres:5432/${POSTGRES_DB:-zombietv}?schema=public
-
-volumes:
-  postgres-data:
+      SESSION_SECRET: ${SESSION_SECRET}
+      PLEX_CLIENT_ID: ${PLEX_CLIENT_ID}
