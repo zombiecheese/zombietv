@@ -142,7 +142,7 @@ export default function SchedulePage() {
 
   const triggerRegen = async () => {
     setRegen(true)
-    const body: Record<string, unknown> = { horizonDays: 14 }
+    const body: Record<string, unknown> = {}
     if (regenScope === 'selected') body.stationId = station
 
     const r = await fetch('/api/scheduler/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
@@ -178,7 +178,7 @@ export default function SchedulePage() {
   }
 
   const refreshProgress = useCallback(async () => {
-    const params = new URLSearchParams({ horizonDays: '14' })
+    const params = new URLSearchParams()
     if (regenScope === 'selected') params.set('stationId', station)
     const r = await fetch(`/api/scheduler/run?${params.toString()}`)
     if (!r.ok) return
@@ -226,7 +226,7 @@ export default function SchedulePage() {
             {regenScope === 'all' ? 'ALL STATIONS' : `SELECTED: ${station.toUpperCase()}`}
           </button>
           <button onClick={triggerRegen} disabled={regen} style={{ ...btn, backgroundColor: regen ? '#333' : '#1a3a6e' }}>
-            {regen ? 'Running…' : '⟳ Regenerate 14-Day Schedule'}
+            {regen ? 'Running…' : '⟳ Regenerate Schedule'}
           </button>
           <button
             onClick={clearSchedules}
