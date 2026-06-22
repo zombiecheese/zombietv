@@ -5,13 +5,6 @@ import { prisma } from './db'
 import { fromJsonObject, toJson } from './json'
 import { getHolidayTagMap, setHolidayTagMap } from './plex-catalog'
 
-export type HolidayName =
-  | 'christmas'
-  | 'christmas_eve'
-  | 'good_friday'
-  | 'easter'
-  | 'halloween'
-
 export interface HolidaySetting {
   id: string
   name: string
@@ -34,20 +27,6 @@ export const DEFAULT_HOLIDAY_SETTINGS: HolidaySetting[] = [
   { id: 'easter', name: 'easter', label: 'Easter Sunday', startMonth: 1, startDay: 1, endMonth: 12, endDay: 31, enabled: true },
   { id: 'halloween', name: 'halloween', label: 'Halloween', startMonth: 10, startDay: 31, endMonth: 10, endDay: 31, enabled: true },
 ]
-
-export interface HolidayInfo {
-  name: HolidayName
-  label: string
-  adFreeByDefault: boolean   // Good Friday — some stations go ad-free
-}
-
-export const HOLIDAY_INFO: Record<HolidayName, HolidayInfo> = {
-  christmas:     { name: 'christmas',     label: 'Christmas Day',  adFreeByDefault: false },
-  christmas_eve: { name: 'christmas_eve', label: 'Christmas Eve',  adFreeByDefault: false },
-  good_friday:   { name: 'good_friday',   label: 'Good Friday',    adFreeByDefault: true  },
-  easter:        { name: 'easter',        label: 'Easter Sunday',  adFreeByDefault: false },
-  halloween:     { name: 'halloween',     label: 'Halloween',      adFreeByDefault: false },
-}
 
 function normalizeHolidaySetting(setting: Partial<HolidaySetting> & { id?: string; name?: string; label?: string }): HolidaySetting | null {
   const name = String(setting.name ?? '').trim().toLowerCase()
@@ -183,19 +162,6 @@ export function getHolidayForDate(date: Date, settings: HolidaySetting[] = DEFAU
     }
   }
 
-  return null
-}
-
-export function getHolidayForMonthDay(date: Date, settings: HolidaySetting[] = DEFAULT_HOLIDAY_SETTINGS): string | null {
-  const month = date.getMonth() + 1
-  const day = date.getDate()
-  for (const holiday of settings) {
-    if (!holiday.enabled || holiday.consumedAt) continue
-    if (holiday.name === 'good_friday' || holiday.name === 'easter') continue
-    if (matchesMonthDayRange(month, day, holiday.startMonth, holiday.startDay, holiday.endMonth, holiday.endDay)) {
-      return holiday.name
-    }
-  }
   return null
 }
 

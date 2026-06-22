@@ -15,6 +15,7 @@ import { getHolidayForDate, loadHolidaySettings }             from './holidays'
 import { PlexClient, type PlexMediaItem }                    from './plex-client'
 import { syncPlexCatalog, shouldSyncCatalog, getCatalogAutoSyncMaxAgeHours, getCatalogCandidates, getCatalogEpisode, getCatalogEpisodeList, applyRatingCeiling, getBlockedPlexKeys, getHolidayTagMap, getActiveClassByPlexKey } from './plex-catalog'
 import { toJson, fromJsonObject }        from './json'
+import { parseClockToMinutes }           from './time'
 import { addDays, startOfDay, getDay, differenceInMinutes, addMinutes, differenceInCalendarDays } from 'date-fns'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -183,8 +184,8 @@ function snapshotEpisode(episode: PlexMediaItem): EpisodeSnapshotItem {
     showTitle: episode.showTitle ?? undefined,
     type: 'episode',
     genres: episode.genres ?? [],
-    seasonNumber: episode.seasonNumber ?? episode.seasonNumber ?? 0,
-    episodeNumber: episode.episodeNumber ?? episode.episodeNumber ?? 0,
+    seasonNumber: episode.seasonNumber ?? 0,
+    episodeNumber: episode.episodeNumber ?? 0,
     showPlexKey: episode.showPlexKey,
     chapters: episode.chapters,
   }
@@ -200,17 +201,6 @@ async function buildEpisodeSnapshotList(showPlexKey: string): Promise<EpisodeSna
   }
 
   return snapshots.sort((a, b) => a.season - b.season || a.episode - b.episode)
-}
-
-function parseClockToMinutes(value: string): number | null {
-  const m = String(value).trim().match(/^(\d{1,2}):(\d{2})$/)
-  if (!m) return null
-  const hh = Number(m[1])
-  const mm = Number(m[2])
-  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null
-  if (hh < 0 || hh > 24 || mm < 0 || mm > 59) return null
-  if (hh === 24 && mm !== 0) return null
-  return hh * 60 + mm
 }
 
 function normalizeDayName(day: string): string {
@@ -1203,7 +1193,6 @@ export async function runScheduler(
             : []
           const dayTitleCounts = new Map<string, number>()
           const daySeriesCounts = new Map<string, number>()
-          const dayEpisodeKeys = new Set<string>()
           // Every exact catalog item (movie or episode) placed today on this
           // station. Guarantees no exact repeat within a single day.
           const dayUsedMediaKeys = new Set<string>()
@@ -1698,7 +1687,6 @@ export async function runScheduler(
 
                     incrementCount(dayTitleCounts, episode.showTitle ?? episode.title)
                     incrementCount(daySeriesCounts, episode.showTitle)
-                    dayEpisodeKeys.add(episode.ratingKey)
                     dayUsedMediaKeys.add(episode.ratingKey)
                     recordAiring(globalAirings, episode.ratingKey, slotStart.getTime(), alignedEnd.getTime())
 

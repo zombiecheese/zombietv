@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import AdminShell from '@/components/admin/AdminShell'
+import { parseClockToMinutes } from '@/lib/time'
 
 interface SlotVideo { enabled: boolean; videoId: string }
 interface SlotLibraryWeights { tv_shows: number; movies: number; animation: number; fitness: number }
@@ -641,8 +642,8 @@ export default function StationsPage() {
 function FillerWindowsBuilder({ slot, index, updateSlot }: { slot: SlotConfig; index: number; updateSlot: (idx: number, patch: Partial<SlotConfig>) => void }) {
   const FILLER_CATEGORIES = ['ads', 'filler', 'music', 'news'] as const
   const slotDurationMins = (() => {
-    const start = slot.start === 'first' ? 0 : parseClockToMinutes(slot.start)
-    const end = slot.end === 'until_finished' ? 24 * 60 : parseClockToMinutes(slot.end)
+    const start = slot.start === 'first' ? 0 : (parseClockToMinutes(slot.start) ?? 0)
+    const end = slot.end === 'until_finished' ? 24 * 60 : (parseClockToMinutes(slot.end) ?? 24 * 60)
     return Math.max(0, end - start)
   })()
   
@@ -795,13 +796,6 @@ function LibraryWeightsEditor({ slot, index, updateSlot }: { slot: SlotConfig; i
   )
 }
 
-function parseClockToMinutes(value: string): number {
-  const parts = String(value).split(':')
-  const hours = Number(parts[0]) || 0
-  const mins = Number(parts[1]) || 0
-  return hours * 60 + mins
-}
-
 const SLOT_LIBS = ['tv_shows', 'movies', 'animation', 'fitness'] as const
 
 function labelForLib(lib: string): string {
@@ -810,8 +804,8 @@ function labelForLib(lib: string): string {
 }
 
 function slotBounds(slot: SlotConfig): { startMins: number; endMins: number } {
-  const startMins = slot.start === 'first' ? 0 : parseClockToMinutes(slot.start)
-  const endMins = slot.end === 'until_finished' ? 24 * 60 : parseClockToMinutes(slot.end)
+  const startMins = slot.start === 'first' ? 0 : (parseClockToMinutes(slot.start) ?? 0)
+  const endMins = slot.end === 'until_finished' ? 24 * 60 : (parseClockToMinutes(slot.end) ?? 24 * 60)
   return { startMins, endMins }
 }
 

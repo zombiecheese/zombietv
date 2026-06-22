@@ -102,5 +102,5 @@ If a deployment regresses playback or scheduling:
 
 - [README](../README.md)
 - [Schedule generation](./schedule-generation.md)
-- [Project plan](../plan.md)
-- [Code state snapshot](../CODE_STATE.md)
+- [Project plan](./project-plan.md)
+- [Code state snapshot](./code-state.md)
