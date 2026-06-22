@@ -94,6 +94,11 @@ jobs:
         with:
           context: .
           push: true
+          build-args: |
+            DATABASE_URL=postgresql://build:build@localhost:5432/build
+            SESSION_SECRET=build-only-placeholder-secret-32chars
+            PLEX_CLIENT_ID=build-only-placeholder-client-id
+            CI_BUILD=true
           tags: |
             ghcr.io/${{ github.repository }}:${{ steps.branch.outputs.branch == 'dev' && 'dev' || 'latest' }}
             ghcr.io/${{ github.repository }}:${{ steps.bump.outputs.new_tag }}

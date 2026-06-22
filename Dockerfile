@@ -4,6 +4,16 @@ WORKDIR /app
 
 ENV NEXT_TELEMETRY_DISABLED=1
 
+ARG DATABASE_URL=postgresql://build:build@localhost:5432/build
+ARG SESSION_SECRET=build-only-placeholder-secret-32chars
+ARG PLEX_CLIENT_ID=build-only-placeholder-client-id
+ARG CI_BUILD=true
+
+ENV DATABASE_URL=$DATABASE_URL \
+	SESSION_SECRET=$SESSION_SECRET \
+	PLEX_CLIENT_ID=$PLEX_CLIENT_ID \
+	CI_BUILD=$CI_BUILD
+
 RUN apt-get update -y && apt-get install -y --no-install-recommends openssl libssl3 \
 	&& rm -rf /var/lib/apt/lists/*
 
