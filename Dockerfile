@@ -45,7 +45,6 @@ COPY --from=build /app/scripts ./scripts
 COPY --from=build /app/next.config.js ./next.config.js
 COPY --from=build /app/instrumentation.ts ./instrumentation.ts
 COPY --from=build /app/src ./src
-COPY --from=build /app/config ./config
 
 RUN npx prisma generate
 

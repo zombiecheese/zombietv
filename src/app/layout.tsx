@@ -5,6 +5,11 @@ import { DEFAULT_VHS_SETTINGS, type VHSSettings } from '@/lib/vhs-defaults'
 import RouteVisualEffects from '@/components/RouteVisualEffects'
 import { getAppName, getAppTagline } from '@/lib/app-settings'
 
+// Metadata and VHS settings are read from the database at request time.
+// Forcing dynamic rendering prevents Next.js from querying the DB during
+// `next build` (which has no database available in CI/container builds).
+export const dynamic = 'force-dynamic'
+
 async function getVHSSettings(): Promise<VHSSettings> {
   try {
     // Absolute URL required for server-side fetch in Next.js
