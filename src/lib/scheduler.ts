@@ -58,7 +58,6 @@ interface EffectiveStationBlock {
   endMins: number
   contentType: TimeBlock['contentType']
   allowGenres?: string[]
-  allowLanguages?: string[]
   fillerWindows?: FillerWindow[]
   libraryWeights?: Record<string, number>
   openVideoId?: string
@@ -80,7 +79,6 @@ interface SlotConfigSpec {
   fillerWindows?: FillerWindow[]
   libraryWeights?: { tv_shows?: number; movies?: number; animation?: number; fitness?: number }
   allowGenres?: string[]
-  allowLanguages?: string[]
   openVideo?: { enabled?: boolean; videoId?: string }
   closeVideo?: { enabled?: boolean; videoId?: string }
 }
@@ -262,7 +260,6 @@ function resolveStationTimeBlocks(
         endMins,
         contentType: slotContentType(slot),
         allowGenres: Array.isArray(slot.allowGenres) && slot.allowGenres.length ? slot.allowGenres : undefined,
-        allowLanguages: Array.isArray(slot.allowLanguages) && slot.allowLanguages.length ? slot.allowLanguages : undefined,
         fillerWindows: Array.isArray(slot.fillerWindows) ? slot.fillerWindows : undefined,
         libraryWeights: slot.libraryWeights as Record<string, number> | undefined,
         openVideoId: slot.openVideo?.enabled && slot.openVideo.videoId ? String(slot.openVideo.videoId).trim() : undefined,
@@ -373,7 +370,7 @@ function getMatchingStationBlock(
   return matches[0] ?? null
 }
 
-// Apply a slot's per-slot allow-genres / allow-languages to a candidate pool.
+// Apply a slot's per-slot allow-genres and library-weight exclusions to a candidate pool.
 // Empty lists mean "any" (no filter). Falls back to the original pool when the
 // filter would leave nothing, so a strict slot never starves the whole day.
 function filterCandidatesBySlot(
@@ -383,16 +380,13 @@ function filterCandidatesBySlot(
 ): PlexMediaItem[] {
   if (!block) return items
   const allowGenres = (block.allowGenres ?? []).map((g) => g.toLowerCase()).filter(Boolean)
-  const allowLanguages = (block.allowLanguages ?? []).map((l) => l.toLowerCase()).filter(Boolean)
   const weights = block.libraryWeights
   const excludeZeroWeight = !!weights && Object.values(weights).some((w) => Number(w) > 0)
-  if (!allowGenres.length && !allowLanguages.length && !excludeZeroWeight) return items
+  if (!allowGenres.length && !excludeZeroWeight) return items
 
   const filtered = items.filter((item) => {
     const genres = (item.genres ?? []).map((g) => String(g).toLowerCase())
-    const languages = (item.languages ?? []).map((l) => String(l).toLowerCase())
     if (allowGenres.length && !allowGenres.some((g) => genres.includes(g))) return false
-    if (allowLanguages.length && !allowLanguages.some((l) => languages.includes(l))) return false
     if (excludeZeroWeight) {
       const cls = classByKey[item.ratingKey]
       if (cls && Number((weights as Record<string, number>)[cls] ?? 1) <= 0) return false

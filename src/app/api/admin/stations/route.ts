@@ -54,8 +54,8 @@ export async function POST(req: NextRequest) {
       rules: toJson({
         allow_genres: '',
         deny_genres: '',
-        allow_languages: '',
-        deny_languages: '',
+        allow_languages: [],
+        deny_languages: [],
         ad_policy: { enabled: true, break_interval_tv: 15, break_interval_movie: 25 },
       }),
       holidayOverrides: toJson({}),

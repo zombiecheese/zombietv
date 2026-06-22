@@ -22,14 +22,13 @@ interface SlotConfig {
   closeVideo: SlotVideo
   libraryWeights: SlotLibraryWeights
   allowGenres: string[]      // empty = any
-  allowLanguages: string[]   // empty = any
 }
 type DayType = 'weekday' | 'weekend'
 interface StationRules {
   ad_policy: { enabled: boolean; break_interval_tv: number; break_interval_movie: number }
   slot_config?: { weekday: SlotConfig[]; weekend: SlotConfig[] }
-  // legacy fields are preserved untouched by this editor
-  allow_genres?: string; deny_genres?: string; allow_languages?: string; deny_languages?: string
+  allow_languages?: string[] | string
+  deny_languages?: string[] | string
   time_blocks?: unknown
 }
 interface StationData {
@@ -49,8 +48,6 @@ interface CatalogOptionsResponse {
   genres: CatalogFilterOption[]
   languages: CatalogFilterOption[]
 }
-
-const BASE_STATION_IDS = new Set(['stn', 'zbc', 'nnwk', 'seven', 'nine', 'ten'])
 
 const SLOT_TEMPLATE: Array<{ key: string; name: string; start: string; end: string }> = [
   { key: 'overnight',    name: 'Overnight',        start: 'first', end: '07:00' },
@@ -72,7 +69,7 @@ function defaultSlot(t: { key: string; name: string; start: string; end: string 
     openVideo: { enabled: false, videoId: '' },
     closeVideo: { enabled: false, videoId: '' },
     libraryWeights: { tv_shows: 1, movies: 1, animation: 0, fitness: 0 },
-    allowGenres: [], allowLanguages: [],
+    allowGenres: [],
   }
 }
 
@@ -91,7 +88,6 @@ function mergeSlots(saved: unknown): SlotConfig[] {
       libraryWeights: { ...base.libraryWeights, ...(found.libraryWeights ?? {}) },
       fillerWindows: Array.isArray(found.fillerWindows) ? found.fillerWindows : base.fillerWindows,
       allowGenres: Array.isArray(found.allowGenres) ? found.allowGenres : [],
-      allowLanguages: Array.isArray(found.allowLanguages) ? found.allowLanguages : [],
     }
   })
 }
@@ -99,6 +95,16 @@ function mergeSlots(saved: unknown): SlotConfig[] {
 function ensureSlotConfig(rules: StationRules | undefined): { weekday: SlotConfig[]; weekend: SlotConfig[] } {
   const sc = rules?.slot_config
   return { weekday: mergeSlots(sc?.weekday), weekend: mergeSlots(sc?.weekend) }
+}
+
+function asRuleTokenArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((v) => normalizeRuleToken(String(v))).filter(Boolean)
+  }
+  if (typeof value === 'string') {
+    return value.split(',').map((v) => normalizeRuleToken(v)).filter(Boolean)
+  }
+  return []
 }
 
 export default function StationsPage() {
@@ -138,6 +144,8 @@ export default function StationsPage() {
     const clone: StationData = JSON.parse(JSON.stringify(s))
     if (!clone.rules) clone.rules = { ad_policy: { enabled: true, break_interval_tv: 15, break_interval_movie: 30 } }
     if (!clone.rules.ad_policy) clone.rules.ad_policy = { enabled: true, break_interval_tv: 15, break_interval_movie: 30 }
+    clone.rules.allow_languages = asRuleTokenArray(clone.rules.allow_languages)
+    clone.rules.deny_languages = asRuleTokenArray(clone.rules.deny_languages)
     clone.rules.slot_config = ensureSlotConfig(clone.rules)
     if (!clone.branding) clone.branding = { colour_theme: '#2c3e50', logo: '' }
     setSelected(s)
@@ -184,10 +192,6 @@ export default function StationsPage() {
 
   const removeStation = async () => {
     if (!selected) return
-    if (BASE_STATION_IDS.has(selected.id)) {
-      setMsg('✗ Base stations cannot be deleted.')
-      return
-    }
     const confirmed = window.confirm(`Delete station ${selected.id.toUpperCase()} and all its schedules/content links?`)
     if (!confirmed) return
 
@@ -205,6 +209,10 @@ export default function StationsPage() {
   }
 
   const setAdPolicy = (key: string, val: unknown) => setForm(f => f ? { ...f, rules: { ...f.rules, ad_policy: { ...f.rules.ad_policy, [key]: val } } } : f)
+  const setStationLanguages = (key: 'allow_languages' | 'deny_languages', next: string[]) => setForm(f => {
+    if (!f) return f
+    return { ...f, rules: { ...f.rules, [key]: next } }
+  })
 
   const updateSlot = (index: number, patch: Partial<SlotConfig>) => setForm(f => {
     if (!f?.rules.slot_config) return f
@@ -353,19 +361,32 @@ export default function StationsPage() {
                             value={slot.allowGenres}
                             onChange={(next) => updateSlot(index, { allowGenres: next })}
                           />
-                          <TokenPicker
-                            label="Allow languages"
-                            anyLabel="Any language"
-                            options={catalogOptions.languages}
-                            value={slot.allowLanguages}
-                            onChange={(next) => updateSlot(index, { allowLanguages: next })}
-                          />
                         </>
                       )}
                     </>
                   )}
                 </div>
               ))}
+            </Section>
+
+            <Section title="Language Filters (station-wide)">
+              <p style={{ color: '#4a7fb5', fontSize: '0.72rem', margin: '0 0 10px' }}>
+                These language filters apply across all slots and windows for this station.
+              </p>
+              <TokenPicker
+                label="Allow languages"
+                anyLabel="Any language"
+                options={catalogOptions.languages}
+                value={asRuleTokenArray(form.rules.allow_languages)}
+                onChange={(next) => setStationLanguages('allow_languages', next)}
+              />
+              <TokenPicker
+                label="Deny languages"
+                anyLabel="Do not deny any language"
+                options={catalogOptions.languages}
+                value={asRuleTokenArray(form.rules.deny_languages)}
+                onChange={(next) => setStationLanguages('deny_languages', next)}
+              />
             </Section>
 
             <Section title="Ad Policy (station-wide)">
@@ -398,11 +419,9 @@ export default function StationsPage() {
             </Section>
 
             <button onClick={save} style={{ ...btn, marginTop: 4 }}>Save Station Config</button>
-            {!BASE_STATION_IDS.has(form.id) && (
-              <button onClick={removeStation} style={{ ...btn, marginTop: 10, backgroundColor: '#8b1c1c' }}>
-                Delete Channel
-              </button>
-            )}
+            <button onClick={removeStation} style={{ ...btn, marginTop: 10, backgroundColor: '#8b1c1c' }}>
+              Delete Channel
+            </button>
           </div>
         )}
         {!form && <p style={{ color: '#4a7fb5', fontSize: '0.78rem' }}>Select a station to edit.</p>}

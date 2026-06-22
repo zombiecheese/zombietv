@@ -36,12 +36,14 @@ Station rules control the slot template used for each day. The scheduler resolve
 Per-slot rules include:
 
 - `allowGenres`
-- `allowLanguages`
 - `libraryWeights`
 - open and close bumper IDs
 - filler windows metadata used by the admin UI and playback layer
 
-Per-station rules also include the ad policy, which controls whether ad breaks are enabled and how often they appear for TV and movie content.
+Per-station rules also include:
+
+- station-wide language allow/deny filters (`allow_languages`, `deny_languages`)
+- the ad policy, which controls whether ad breaks are enabled and how often they appear for TV and movie content
 
 ## Holiday Handling
 

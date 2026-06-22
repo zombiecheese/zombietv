@@ -7,7 +7,6 @@ import { prisma }       from '@/lib/db'
 import { toJson, fromJsonObject } from '@/lib/json'
 
 export const dynamic = 'force-dynamic'
-const BASE_STATION_IDS = new Set(['stn', 'zbc', 'nnwk', 'seven', 'nine', 'ten'])
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -52,10 +51,6 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
   const { id } = await params
   const guard = await requireAdmin(req)
   if (!guard.ok) return guard.response
-
-  if (BASE_STATION_IDS.has(id)) {
-    return NextResponse.json({ error: 'Base stations cannot be deleted' }, { status: 400 })
-  }
 
   const station = await prisma.station.findUnique({ where: { id } })
   if (!station) return NextResponse.json({ error: 'Not found' }, { status: 404 })

@@ -46,7 +46,9 @@ Please refer to [docs/code-state.md](docs/code-state.md) for the current impleme
 	- `fillerOnly`
 	- `openVideo` / `closeVideo` bumper IDs
 	- `libraryWeights`
-	- `allowGenres` / `allowLanguages`
+	- `allowGenres`
+- Per-station language controls are global across all slots/windows:
+	- `allow_languages` / `deny_languages`
 - Hour/half-hour alignment still enforced.
 - Holiday and event precedence flow is active.
 
