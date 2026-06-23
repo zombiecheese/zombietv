@@ -169,6 +169,19 @@ function resolveClosedownContent(raw: Record<string, unknown>): ClosedownContent
   return { type, value }
 }
 
+// Picks the episode a newly scheduled show should start on. Skips Season 0
+// (specials/extras), which sort before Season 1, so a show begins at its first
+// real episode (typically S01E01) rather than a special. Falls back to the
+// earliest episode when a show has no season >= 1.
+function firstRegularEpisode<T extends { season: number; episode: number }>(list: T[]): T | null {
+  if (!list.length) return null
+  const regular = list.filter((e) => e.season >= 1)
+  const pool = regular.length ? regular : list
+  return pool.reduce((best, e) =>
+    (e.season < best.season || (e.season === best.season && e.episode < best.episode)) ? e : best,
+  )
+}
+
 function parseEpisodeSnapshot(value: unknown): EpisodeSnapshotItem[] {
   if (typeof value !== 'string' || !value.trim()) return []
   try {
@@ -1511,6 +1524,8 @@ export async function runScheduler(
                       const pinWeekday = isStrip ? STRIP_WEEKDAY : weekday
                       const cadenceDays = isStrip ? 1 : EPISODE_PROGRESS_INTERVAL_DAYS
                       const fillMode = w.fillMode === 'single' ? 'single' : 'fill'
+                      const pinnedSnapshot = await buildEpisodeSnapshotList(w.plexShowKey)
+                      const pinnedFirst = firstRegularEpisode(pinnedSnapshot)
                       let placed = 0
 
                       while (slotStart.getTime() < windowEndMs && (fillMode === 'fill' || placed < 1)) {
@@ -1522,11 +1537,11 @@ export async function runScheduler(
                             stationId:        station.id,
                             plexShowKey:      w.plexShowKey,
                             showTitle:        w.plexShowTitle ?? 'Pinned Show',
-                            episodeOrderJson: toJson(await buildEpisodeSnapshotList(w.plexShowKey)),
-                            nextSeason:       1,
-                            nextEpisode:      1,
-                            totalSeasons:     1,
-                            totalEpisodes:    1,
+                            episodeOrderJson: toJson(pinnedSnapshot),
+                            nextSeason:       pinnedFirst?.season ?? 1,
+                            nextEpisode:      pinnedFirst?.episode ?? 1,
+                            totalSeasons:     pinnedSnapshot.length ? Math.max(...pinnedSnapshot.map((e) => e.season)) : 1,
+                            totalEpisodes:    pinnedSnapshot.length || 1,
                             airedWeekday:     pinWeekday,
                             airedTime:        timeStr,
                           },
@@ -1741,6 +1756,7 @@ export async function runScheduler(
                     if (!epList.length) {
                       continue
                     }
+                    const firstEp = firstRegularEpisode(epList) ?? epList[0]
 
                     progress = await prisma.showProgress.upsert({
                       where: {
@@ -1759,8 +1775,8 @@ export async function runScheduler(
                         plexShowKey:   show.ratingKey,
                         showTitle:     show.title,
                         episodeOrderJson: toJson(await buildEpisodeSnapshotList(show.ratingKey)),
-                        nextSeason:    epList[0].season,
-                        nextEpisode:   epList[0].episode,
+                        nextSeason:    firstEp.season,
+                        nextEpisode:   firstEp.episode,
                         totalSeasons:  Math.max(...epList.map((e) => e.season)),
                         totalEpisodes: epList.length,
                         airedWeekday:  pinWeekday,
@@ -2001,7 +2017,7 @@ async function advanceShowProgress(
   )
 
   if (currentIdx === -1) {
-    const firstRef = epList[0]
+    const firstRef = firstRegularEpisode(epList) ?? epList[0]
     await prisma.showProgress.update({
       where: { id: progress.id },
       data: { nextSeason: firstRef.season, nextEpisode: firstRef.episode, lastAiredAt: now },
