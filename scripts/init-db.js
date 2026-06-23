@@ -123,24 +123,14 @@ async function main() {
   for (let i = 0; i < stations.length; i++) {
     const s = stations[i]
 
-    // Re-seeding realigns the canonical rules/branding for the built-in base
-    // channels. Done by id so admin renames (id or name) are respected:
-    //  - existing id → update config + order, never the display name
-    //  - missing id  → only create if the display name isn't already taken by
-    //    another (renamed) station, avoiding a unique-name conflict.
+    // Seed-once initialization: only create missing stations, never overwrite
+    // existing ones. This preserves user-customized rules, branding, and order
+    // across redeployments.
     const existingById = await prisma.station.findUnique({ where: { id: s.id } })
 
     if (existingById) {
-      await prisma.station.update({
-        where: { id: s.id },
-        data: {
-          branding:         JSON.stringify(s.branding),
-          rules:            JSON.stringify(s.rules),
-          holidayOverrides: JSON.stringify(s.holidayOverrides),
-          fillerPools:      JSON.stringify(s.fillerPools),
-          sortOrder:        i
-        }
-      })
+      // Station already exists → preserve all user customizations
+      console.log(`✓ Station "${s.id}" exists — skipping (user settings preserved)`)
       continue
     }
 
@@ -150,6 +140,7 @@ async function main() {
       continue
     }
 
+    // New station: create with canonical defaults
     await prisma.station.create({
       data: {
         id:               s.id,
@@ -161,6 +152,7 @@ async function main() {
         sortOrder:        i
       }
     })
+    console.log(`✓ Created new station "${s.id}"`)
   }
 
   console.log('✅ Stations seeded')
