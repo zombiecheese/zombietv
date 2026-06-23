@@ -227,12 +227,16 @@ function snapshotEpisode(episode: PlexMediaItem): EpisodeSnapshotItem {
   }
 }
 
-async function buildEpisodeSnapshotList(showPlexKey: string): Promise<EpisodeSnapshotItem[]> {
-  const refs = await getCatalogEpisodeList(showPlexKey).catch(() => [])
+async function buildEpisodeSnapshotList(
+  showPlexKey: string,
+  allowLanguages?: string[],
+  denyLanguages?: string[],
+): Promise<EpisodeSnapshotItem[]> {
+  const refs = await getCatalogEpisodeList(showPlexKey, allowLanguages, denyLanguages).catch(() => [])
   const snapshots: EpisodeSnapshotItem[] = []
 
   for (const ref of refs) {
-    const episode = await getCatalogEpisode(showPlexKey, ref.season, ref.episode).catch(() => null)
+    const episode = await getCatalogEpisode(showPlexKey, ref.season, ref.episode, allowLanguages, denyLanguages).catch(() => null)
     if (episode) snapshots.push(snapshotEpisode(episode))
   }
 
@@ -506,11 +510,15 @@ function getGenreHintsForBlockName(blockName: string): string[] {
   return Array.from(hints)
 }
 
-async function loadEpisodeSnapshot(progress: { id: string; plexShowKey: string; episodeOrderJson: string | null }): Promise<EpisodeSnapshotItem[]> {
+async function loadEpisodeSnapshot(
+  progress: { id: string; plexShowKey: string; episodeOrderJson: string | null },
+  allowLanguages?: string[],
+  denyLanguages?: string[],
+): Promise<EpisodeSnapshotItem[]> {
   const existing = parseEpisodeSnapshot(progress.episodeOrderJson)
   if (existing.length) return existing
 
-  const snapshot = await buildEpisodeSnapshotList(progress.plexShowKey)
+  const snapshot = await buildEpisodeSnapshotList(progress.plexShowKey, allowLanguages, denyLanguages)
   if (!snapshot.length) return []
 
   await prisma.showProgress.update({
@@ -540,7 +548,7 @@ async function loadStationCandidates(params: {
   return getCatalogCandidates({
     ...params,
     allowGenres: [],
-    allowLanguages: [],
+    // Keep language filters even in fallback tier
   }).catch(() => [])
 }
 
@@ -765,6 +773,17 @@ function ratingAllowed(itemRating: string, ceiling: string): boolean {
   const ceilingIdx = RATINGS_ORDER.indexOf(ceiling)
   if (itemIdx === -1 || ceilingIdx === -1) return true // unknown rating — allow
   return itemIdx <= ceilingIdx
+}
+
+// ─── Random selection utilities ──────────────────────────────────────────────
+
+// Fisher-Yates shuffle: in-place randomization of array order.
+function shuffle<T>(arr: T[]): T[] {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[arr[i], arr[j]] = [arr[j], arr[i]]
+  }
+  return arr
 }
 
 // ─── Weighted random selection ────────────────────────────────────────────────
@@ -1269,6 +1288,10 @@ export async function runScheduler(
             return todayPermittedHolidayKeys.has(show.ratingKey)
           })
 
+          // Randomize pools to avoid deterministic ordering from catalog
+          shuffle(availableMovies)
+          shuffle(availableShows)
+
           const rescueMovies = (await getCatalogCandidates({
             type: 'movie',
             allowGenres: [],
@@ -1276,6 +1299,7 @@ export async function runScheduler(
             allowLanguages: [],
             denyLanguages: [],
           }).catch(() => [])).filter((movie) => !blockedKeys.has(movie.ratingKey))
+          shuffle(rescueMovies)
 
           const holidayTaggedMovies = holidayTaggedKeys
             ? availableMovies.filter((movie) => holidayTaggedKeys.has(movie.ratingKey))
@@ -1592,7 +1616,7 @@ export async function runScheduler(
                       const pinWeekday = isStrip ? STRIP_WEEKDAY : weekday
                       const cadenceDays = isStrip ? 1 : EPISODE_PROGRESS_INTERVAL_DAYS
                       const fillMode = w.fillMode === 'single' ? 'single' : 'fill'
-                      const pinnedSnapshot = await buildEpisodeSnapshotList(w.plexShowKey)
+                      const pinnedSnapshot = await buildEpisodeSnapshotList(w.plexShowKey, rules.allow_languages, rules.deny_languages)
                       const pinnedFirst = firstRegularEpisode(pinnedSnapshot)
                       let placed = 0
 
@@ -1654,7 +1678,7 @@ export async function runScheduler(
                         })
                         await prisma.slotMediaItem.create({ data: { slotId: slot.id, mediaItemId: mediaItem.id, orderIndex: 0 } })
                         await prisma.mediaItem.update({ where: { id: mediaItem.id }, data: { scheduledCount: { increment: 1 }, lastScheduled: new Date() } })
-                        await advanceShowProgress(progress, cadenceDays)
+                        await advanceShowProgress(progress, cadenceDays, rules.allow_languages, rules.deny_languages)
 
                         incrementCount(dayTitleCounts, episode.showTitle ?? episode.title)
                         incrementCount(daySeriesCounts, episode.showTitle)
@@ -1850,7 +1874,7 @@ export async function runScheduler(
                         stationId:     station.id,
                         plexShowKey:   show.ratingKey,
                         showTitle:     show.title,
-                        episodeOrderJson: toJson(await buildEpisodeSnapshotList(show.ratingKey)),
+                        episodeOrderJson: toJson(await buildEpisodeSnapshotList(show.ratingKey, rules.allow_languages, rules.deny_languages)),
                         nextSeason:    firstEp.season,
                         nextEpisode:   firstEp.episode,
                         totalSeasons:  Math.max(...epList.map((e) => e.season)),
@@ -1867,7 +1891,7 @@ export async function runScheduler(
                 }
 
                 if (progress) {
-                  const episodeOrder = await loadEpisodeSnapshot(progress)
+                  const episodeOrder = await loadEpisodeSnapshot(progress, rules.allow_languages, rules.deny_languages)
                   const episode = episodeOrder.find(
                     (ref) => ref.season === progress.nextSeason && ref.episode === progress.nextEpisode,
                   ) ?? null
@@ -1925,7 +1949,7 @@ export async function runScheduler(
                       data: { scheduledCount: { increment: 1 }, lastScheduled: new Date() },
                     })
 
-                    await advanceShowProgress(progress, cadenceDays)
+                    await advanceShowProgress(progress, cadenceDays, rules.allow_languages, rules.deny_languages)
 
                     incrementCount(dayTitleCounts, episode.showTitle ?? episode.title)
                     incrementCount(daySeriesCounts, episode.showTitle)
@@ -2061,6 +2085,8 @@ export async function runScheduler(
 async function advanceShowProgress(
   progress: { id: string; nextSeason: number; nextEpisode: number; plexShowKey: string; totalEpisodes: number; episodeOrderJson?: string | null; lastAiredAt?: Date | null },
   cadenceDays: number = EPISODE_PROGRESS_INTERVAL_DAYS,
+  allowLanguages?: string[],
+  denyLanguages?: string[],
 ): Promise<void> {
   const now = new Date()
   if (!progress.lastAiredAt) {
@@ -2080,7 +2106,7 @@ async function advanceShowProgress(
   }
 
   const storedSnapshot = parseEpisodeSnapshot(progress.episodeOrderJson)
-  const epList = storedSnapshot.length ? storedSnapshot : await buildEpisodeSnapshotList(progress.plexShowKey)
+  const epList = storedSnapshot.length ? storedSnapshot : await buildEpisodeSnapshotList(progress.plexShowKey, allowLanguages, denyLanguages)
   if (!epList.length) {
     await prisma.showProgress.update({
       where: { id: progress.id },

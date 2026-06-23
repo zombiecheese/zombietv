@@ -697,7 +697,11 @@ export async function getCatalogCandidates(filters: CatalogPickFilters): Promise
     .map(mapCatalogRow)
 }
 
-export async function getCatalogEpisodeList(showPlexKey: string): Promise<CatalogEpisodeRef[]> {
+export async function getCatalogEpisodeList(
+  showPlexKey: string,
+  allowLanguages?: string[],
+  denyLanguages?: string[],
+): Promise<CatalogEpisodeRef[]> {
   const activeKeys = await getActiveCatalogPlexKeys()
   const showRow = await prisma.mediaItem.findUnique({
     where: { plexKey: showPlexKey },
@@ -734,9 +738,18 @@ export async function getCatalogEpisodeList(showPlexKey: string): Promise<Catalo
     ORDER BY "seasonNumber" ASC, "episodeNumber" ASC
   `
 
+  const normAllowLanguages = (allowLanguages ?? []).map((l) => l.toLowerCase())
+  const normDenyLanguages = (denyLanguages ?? []).map((l) => l.toLowerCase())
+
   return rows
     .filter((row) => !activeKeys.size || activeKeys.has(row.plexKey))
     .filter((row) => row.seasonNumber != null && row.episodeNumber != null)
+    .filter((row) => {
+      const languages = parseCsvList(row.languages)
+      if (normAllowLanguages.length && !normAllowLanguages.some((l) => languages.includes(l))) return false
+      if (normDenyLanguages.some((l) => languages.includes(l))) return false
+      return true
+    })
     .map((row) => ({
       season: row.seasonNumber as number,
       episode: row.episodeNumber as number,
@@ -748,6 +761,8 @@ export async function getCatalogEpisode(
   showPlexKey: string,
   season: number,
   episode: number,
+  allowLanguages?: string[],
+  denyLanguages?: string[],
 ): Promise<PlexMediaItem | null> {
   const activeKeys = await getActiveCatalogPlexKeys()
   const showRow = await prisma.mediaItem.findUnique({
@@ -787,7 +802,16 @@ export async function getCatalogEpisode(
     LIMIT 1
   `
 
-  const match = rows.find((row) => !activeKeys.size || activeKeys.has(row.plexKey))
+  const normAllowLanguages = (allowLanguages ?? []).map((l) => l.toLowerCase())
+  const normDenyLanguages = (denyLanguages ?? []).map((l) => l.toLowerCase())
+
+  const match = rows.find((row) => {
+    if (!activeKeys.size || !activeKeys.has(row.plexKey)) return false
+    const languages = parseCsvList(row.languages)
+    if (normAllowLanguages.length && !normAllowLanguages.some((l) => languages.includes(l))) return false
+    if (normDenyLanguages.some((l) => languages.includes(l))) return false
+    return true
+  })
   return match ? mapCatalogRow(match) : null
 }
 
