@@ -212,7 +212,7 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
       stations.map(async (s) => {
         try {
           const res = await fetch(
-            `/api/epg/${s.id}?from=${from.toISOString()}&hours=48`,
+            `/api/epg/${s.id}?fromMs=${from.getTime()}&hours=48`,
           )
           if (!res.ok) return { id: s.id, slots: [] }
           const data: EPGSlot[] = await res.json()

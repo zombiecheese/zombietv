@@ -7,7 +7,7 @@ import { prisma }               from '@/lib/db'
 
 export const dynamic = 'force-dynamic'
 import { fromJsonObject, fromJsonArray } from '@/lib/json'
-import { addDays, addHours, startOfDay, startOfHour } from 'date-fns'
+import { addDays, addHours, startOfHour } from 'date-fns'
 
 export interface EPGSlot {
   id:            string
@@ -31,35 +31,34 @@ export async function GET(
   const { stationId } = await params
   const url    = new URL(req.url)
   const hours  = Math.min(Number(url.searchParams.get('hours') ?? 48), 48)
+  const fromMsRaw = url.searchParams.get('fromMs')
   const fromRaw = url.searchParams.get('from')
-  const from   = fromRaw ? new Date(fromRaw) : startOfHour(new Date())
+  const fromMs = fromMsRaw ? Number(fromMsRaw) : NaN
+  const from = Number.isFinite(fromMs)
+    ? new Date(fromMs)
+    : (fromRaw ? new Date(fromRaw) : startOfHour(new Date()))
+
+  if (!Number.isFinite(from.getTime())) {
+    return NextResponse.json({ error: 'Invalid from timestamp' }, { status: 400 })
+  }
+
   const to     = addHours(from, hours)
-  const fromDayStart = startOfDay(from)
-  const toDayStart = startOfDay(to)
 
-  // Pull schedules that overlap the requested window
-  const schedules = await prisma.schedule.findMany({
+  // Pull slots by absolute time range instead of schedule.day boundaries.
+  // This keeps EPG aligned with playback even when local/UTC day edges differ.
+  const allSlots = await prisma.slot.findMany({
     where: {
-      stationId,
-      isActive: true,
-      date: {
-        // Include the previous day so slots that started before `from`
-        // but are still on-air are present in the EPG window.
-        gte: addDays(fromDayStart, -1),
-        lte: toDayStart,
+      startTime: {
+        gte: addDays(from, -1),
+        lt: addDays(to, 1),
+      },
+      schedule: {
+        stationId,
+        isActive: true,
       },
     },
-    include: {
-      slots: {
-        orderBy: { startTime: 'asc' },
-      },
-    },
-    orderBy: { date: 'asc' },
+    orderBy: { startTime: 'asc' },
   })
-
-  const allSlots = schedules
-    .flatMap((schedule) => schedule.slots)
-    .sort((a, b) => a.startTime.getTime() - b.startTime.getTime())
 
   const epgSlots: EPGSlot[] = []
 
