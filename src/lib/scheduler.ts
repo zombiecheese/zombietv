@@ -73,6 +73,7 @@ interface EffectiveStationBlock {
 interface FillerWindow {
   durationMins: number
   category: string
+  displayName?: string
   openVideo?: { enabled?: boolean; videoId?: string }
   closeVideo?: { enabled?: boolean; videoId?: string }
   // Optional pinned Plex show: the window plays this specific series and
@@ -516,7 +517,22 @@ async function loadEpisodeSnapshot(
   denyLanguages?: string[],
 ): Promise<EpisodeSnapshotItem[]> {
   const existing = parseEpisodeSnapshot(progress.episodeOrderJson)
-  if (existing.length) return existing
+  if (existing.length) {
+    // Guard against stale snapshots when language rules change over time.
+    if (!(allowLanguages?.length || denyLanguages?.length)) return existing
+    const allowedRefs = await getCatalogEpisodeList(progress.plexShowKey, allowLanguages, denyLanguages).catch(() => null)
+    if (!allowedRefs) return existing
+    const allowedKeys = new Set(allowedRefs.map((ref) => ref.ratingKey))
+    const filtered = existing.filter((ref) => allowedKeys.has(ref.ratingKey))
+    if (filtered.length === existing.length) return existing
+    if (filtered.length) {
+      await prisma.showProgress.update({
+        where: { id: progress.id },
+        data: { episodeOrderJson: toJson(filtered) },
+      }).catch(() => null)
+      return filtered
+    }
+  }
 
   const snapshot = await buildEpisodeSnapshotList(progress.plexShowKey, allowLanguages, denyLanguages)
   if (!snapshot.length) return []
@@ -758,6 +774,7 @@ export async function getSchedulerRunStatus(): Promise<SchedulerRunStatus> {
 let schedulerIsRunning = false
 const MAX_SERIES_EPISODES_PER_DAY = 2
 const EPISODE_PROGRESS_INTERVAL_DAYS = 7
+const MAX_CONTENT_OVERRUN_MINS = 10
 // Sentinel weekday for weeknight strips: one series owns this slot across all of
 // Monday–Friday (stored instead of a single 0–6 weekday) and advances daily.
 const STRIP_WEEKDAY = 7
@@ -840,7 +857,7 @@ function pickMovieCandidate(
   options?: { excludeKeys?: Set<string>; maxOverrunMins?: number },
 ): PlexMediaItem | null {
   const excludeKeys = options?.excludeKeys
-  const maxOverrunMins = options?.maxOverrunMins ?? 10
+  const maxOverrunMins = options?.maxOverrunMins ?? MAX_CONTENT_OVERRUN_MINS
 
   // Tight runtime fit: content plus ad breaks can overrun a little, but not much.
   const eligible = movies.filter((movie) => {
@@ -1370,10 +1387,11 @@ export async function runScheduler(
             }
             if (durationMins <= 0) durationMins = 60
 
-            const endMs = startTimeMs + durationMins * 60_000
+            const eventAdBreaks = buildAdBreaks(durationMins, evSource === 'plex' ? adIntervalMovie : adIntervalTv, adEnabled)
+            const eventAdMins = eventAdBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
+            const endMs = startTimeMs + (durationMins + eventAdMins) * 60_000
             if (reservedIntervals.some((r) => startTimeMs < r.end && endMs > r.start)) continue
 
-            const eventAdBreaks = buildAdBreaks(durationMins, evSource === 'plex' ? adIntervalMovie : adIntervalTv, adEnabled)
             const eventSlot = await prisma.slot.create({
               data: {
                 scheduleId:     schedule.id,
@@ -1580,7 +1598,14 @@ export async function runScheduler(
                 // close-down blocks the custom loop content (video/playlist) is used
                 // and the close-down descriptor is stamped onto the slot metadata so
                 // playback can show a graphic or loop the configured content.
-                const createFillerSlot = async (startAt: Date, mins: number, categories: string[], titleOverride?: string, bumpers?: { openBumperId?: string; closeBumperId?: string }) => {
+                const createFillerSlot = async (
+                  startAt: Date,
+                  mins: number,
+                  categories: string[],
+                  titleOverride?: string,
+                  bumpers?: { openBumperId?: string; closeBumperId?: string },
+                  showInEpg = false,
+                ) => {
                   if (mins < 1) return
                   const ads = buildAdBreaks(mins, adIntervalTv, adEnabled)
                   const closedownYoutube = closedownContent && (closedownContent.type === 'youtube_video' || closedownContent.type === 'youtube_playlist')
@@ -1601,7 +1626,7 @@ export async function runScheduler(
                       metadata:      toJson({
                         blockName: block.name,
                         title: titleOverride ?? (isClosedownBlock ? 'Close Down' : block.name),
-                        showInEpg: true,
+                        showInEpg,
                         fillerCategories: categories,
                         ...(closedownContent ? { closedown: closedownContent } : {}),
                         ...(bumpers?.openBumperId ? { openBumperId: bumpers.openBumperId } : {}),
@@ -1651,14 +1676,14 @@ export async function runScheduler(
                         }).catch(() => null)
                         if (!progress) break
 
-                        const episodeOrder = await loadEpisodeSnapshot(progress)
+                        const episodeOrder = await loadEpisodeSnapshot(progress, rules.allow_languages, rules.deny_languages)
                         const episode = episodeOrder.find((e) => e.season === progress.nextSeason && e.episode === progress.nextEpisode) ?? null
                         if (!episode) break
 
                         const adBreaks   = buildAdBreaks(episode.durationMins, adIntervalTv, adEnabled)
                         const adMins     = adBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
                         const remainWin = Math.max(0, Math.round((windowEndMs - slotStart.getTime()) / 60_000))
-                        if (dayUsedMediaKeys.has(episode.ratingKey) || episode.durationMins + adMins > remainWin + 10) break
+                        if (dayUsedMediaKeys.has(episode.ratingKey) || episode.durationMins + adMins > remainWin + MAX_CONTENT_OVERRUN_MINS) break
 
                         const slotEnd    = addMinutes(slotStart, episode.durationMins + adMins)
                         const alignedEnd = alignEndTime(slotEnd)
@@ -1709,11 +1734,11 @@ export async function runScheduler(
                         const leftoverBumpers = placed === 0
                           ? wb
                           : (wb.closeBumperId ? { closeBumperId: wb.closeBumperId } : undefined)
-                        await createFillerSlot(slotStart, remAfter, [w.category || 'filler'], undefined, leftoverBumpers)
+                        await createFillerSlot(slotStart, remAfter, [w.category || 'filler'], w.displayName?.trim() || undefined, leftoverBumpers, true)
                         slotStart = addMinutes(slotStart, remAfter)
                       }
                     } else {
-                      await createFillerSlot(slotStart, winMins, [w.category || 'filler'], undefined, fillerWindowBumpers(w))
+                      await createFillerSlot(slotStart, winMins, [w.category || 'filler'], w.displayName?.trim() || undefined, fillerWindowBumpers(w), true)
                       slotStart = addMinutes(slotStart, winMins)
                     }
                   }
@@ -1863,7 +1888,7 @@ export async function runScheduler(
                     const idx = remainingShows.findIndex((entry) => entry.item.ratingKey === show.ratingKey)
                     if (idx >= 0) remainingShows.splice(idx, 1)
 
-                    const epList = await getCatalogEpisodeList(show.ratingKey).catch(() => [])
+                    const epList = await getCatalogEpisodeList(show.ratingKey, rules.allow_languages, rules.deny_languages).catch(() => [])
                     if (!epList.length) {
                       continue
                     }
@@ -1914,7 +1939,7 @@ export async function runScheduler(
                     // progression pointer keeps the series alive for later slots.
                     const episodeAdBreaks = buildAdBreaks(episode.durationMins, adIntervalTv, adEnabled)
                     const episodeAdMins = episodeAdBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
-                    const episodeTooLong = episode.durationMins + episodeAdMins > remainingMins + 10
+                    const episodeTooLong = episode.durationMins + episodeAdMins > remainingMins + MAX_CONTENT_OVERRUN_MINS
                     if (excludeKeys.has(episode.ratingKey) || episodeTooLong) {
                       failedPlacementsAtCurrentStart += 1
                       continue

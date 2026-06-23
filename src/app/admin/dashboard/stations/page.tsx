@@ -9,6 +9,7 @@ interface SlotLibraryWeights { tv_shows: number; movies: number; animation: numb
 interface FillerWindow {
   durationMins: number  // Must be multiple of 30
   category: string      // 'ads', 'filler', 'music', 'news'
+  displayName?: string
   openVideo: SlotVideo
   closeVideo: SlotVideo
   plexShowKey?: string       // optional: pin a specific Plex show to this window
@@ -214,7 +215,7 @@ function buildPresetSlots(preset: NetworkPreset): SlotConfig[] {
         libraryWeights: { tv_shows: 0, movies: 0, animation: 0, fitness: 0 },
         allowGenres: [],
         strip: false,
-        fillerWindows: [{ durationMins: 30, category: o.filler, openVideo: { enabled: false, videoId: '' }, closeVideo: { enabled: false, videoId: '' } }],
+        fillerWindows: [{ durationMins: 30, category: o.filler, displayName: '', openVideo: { enabled: false, videoId: '' }, closeVideo: { enabled: false, videoId: '' } }],
       }
     }
     return {
@@ -818,6 +819,7 @@ function FillerWindowsBuilder({ slot, index, updateSlot }: { slot: SlotConfig; i
     const newWindow: FillerWindow = {
       durationMins: 30,
       category: 'music',
+      displayName: '',
       openVideo: { enabled: false, videoId: '' },
       closeVideo: { enabled: false, videoId: '' },
     }
@@ -858,6 +860,14 @@ function FillerWindowsBuilder({ slot, index, updateSlot }: { slot: SlotConfig; i
                 </select>
               </Field>
             </div>
+            <Field label="EPG display name (optional)">
+              <input
+                value={window.displayName ?? ''}
+                onChange={e => updateWindow(windowIndex, { displayName: e.target.value })}
+                style={inp}
+                placeholder="Shown in EPG for this filler window"
+              />
+            </Field>
             <button onClick={() => removeWindow(windowIndex)} style={{ ...btn, padding: '6px 10px', fontSize: '0.65rem', backgroundColor: '#3d0000', height: 'fit-content' }}>Remove</button>
           </div>
 
@@ -933,7 +943,7 @@ function SlotModeToggle({ slot, index, updateSlot }: { slot: SlotConfig; index: 
       allowGenres: [],
       fillerWindows: slot.fillerWindows.length
         ? slot.fillerWindows
-        : [{ durationMins: 30, category: 'music', openVideo: { enabled: false, videoId: '' }, closeVideo: { enabled: false, videoId: '' } }],
+        : [{ durationMins: 30, category: 'music', displayName: '', openVideo: { enabled: false, videoId: '' }, closeVideo: { enabled: false, videoId: '' } }],
     })
   }
   const tab = (active: boolean): React.CSSProperties => ({ ...btn, padding: '6px 16px', backgroundColor: active ? '#ff6600' : '#1e3a5f', fontSize: '0.7rem' })

@@ -66,34 +66,38 @@ export async function GET(
   for (let index = 0; index < allSlots.length; index++) {
     const slot = allSlots[index]
     const nextSlot = allSlots[index + 1]
-      const meta     = fromJsonObject<Record<string, any>>(slot.metadata)
-      const adBreaks = fromJsonArray(slot.adBreaks)
-      const showInEpg = meta.showInEpg !== false
-      const slotStartMs = slot.startTime.getTime()
-      const slotEndRawMs = slotStartMs + slot.durationMins * 60_000 + (slot.fillerDuration ?? 0) * 60_000
-      const nextStartMs = nextSlot ? nextSlot.startTime.getTime() : null
-      const slotEndMs = nextStartMs == null ? slotEndRawMs : Math.min(slotEndRawMs, nextStartMs)
-      const effectiveDurationMins = Math.max(0, Math.round((slotEndMs - slotStartMs) / 60_000))
+    const meta = fromJsonObject<Record<string, any>>(slot.metadata)
+    const adBreaks = fromJsonArray<{ durationMins?: number }>(slot.adBreaks)
+    const adBreakMins = adBreaks.reduce((sum, ab) => sum + Number(ab?.durationMins ?? 0), 0)
+    const explicitShowInEpg = typeof meta.showInEpg === 'boolean' ? meta.showInEpg : null
+    const isAutoYoutubeFill = slot.contentSource === 'youtube' && !slot.isOverride
+    const showInEpg = explicitShowInEpg ?? !isAutoYoutubeFill
 
-      // Keep any slot that overlaps the requested window.
-      if (slotStartMs >= to.getTime() || slotEndMs <= from.getTime()) continue
-      if (!showInEpg) continue
+    const slotStartMs = slot.startTime.getTime()
+    const slotEndRawMs = slotStartMs + (slot.durationMins + adBreakMins + (slot.fillerDuration ?? 0)) * 60_000
+    const nextStartMs = nextSlot ? nextSlot.startTime.getTime() : null
+    const slotEndMs = nextStartMs == null ? slotEndRawMs : Math.min(slotEndRawMs, nextStartMs)
+    const effectiveDurationMins = Math.max(0, Math.round((slotEndMs - slotStartMs) / 60_000))
 
-      // Main scheduled content segment.
-      epgSlots.push({
-        id:            slot.id,
-        startTime:     slot.startTime.toISOString(),
-        endTime:       new Date(slotEndMs).toISOString(),
-        durationMins:  effectiveDurationMins,
-        title:         meta.title ?? slot.showTitle ?? slot.contentSource ?? 'Programme',
-        showTitle:     slot.showTitle,
-        seasonNumber:  slot.seasonNumber,
-        episodeNumber: slot.episodeNumber,
-        contentSource: slot.contentSource,
-        isOverride:    slot.isOverride,
-        overrideReason: slot.overrideReason,
-        inAdBreak:     adBreaks.length > 0,
-      })
+    // Keep any slot that overlaps the requested window.
+    if (slotStartMs >= to.getTime() || slotEndMs <= from.getTime()) continue
+    if (!showInEpg) continue
+
+    // Main scheduled content segment.
+    epgSlots.push({
+      id:            slot.id,
+      startTime:     slot.startTime.toISOString(),
+      endTime:       new Date(slotEndMs).toISOString(),
+      durationMins:  effectiveDurationMins,
+      title:         meta.title ?? slot.showTitle ?? slot.contentSource ?? 'Programme',
+      showTitle:     slot.showTitle,
+      seasonNumber:  slot.seasonNumber,
+      episodeNumber: slot.episodeNumber,
+      contentSource: slot.contentSource,
+      isOverride:    slot.isOverride,
+      overrideReason: slot.overrideReason,
+      inAdBreak:     adBreaks.length > 0,
+    })
   }
 
   return NextResponse.json(epgSlots, {
