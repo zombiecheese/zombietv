@@ -1104,6 +1104,50 @@ export async function runScheduler(
     // sequentially, so each station can see what earlier stations already placed
     // and avoid broadcasting the same title at the same time on another channel.
     const globalAirings = new Map<string, Airing[]>()
+
+    // Cross-station movie exclusivity over a rolling one-week window. A movie may
+    // air on at most one channel within any 7-day span, so every movie placed by
+    // any station is recorded against its broadcast day and excluded from every
+    // channel whose day falls within a week of that airing. Seeded from
+    // already-persisted movie slots (including the prior week) so the rule also
+    // holds across partial (single-station) regenerations and against schedules
+    // that already aired.
+    const MOVIE_EXCLUSIVITY_MS = 7 * 24 * 60 * 60 * 1000
+    const movieClaimDays = new Map<string, number[]>()
+    const recordMovieClaim = (date: Date, ratingKey: string): void => {
+      if (!ratingKey) return
+      const dayMs = startOfDay(date).getTime()
+      const list = movieClaimDays.get(ratingKey) ?? []
+      list.push(dayMs)
+      movieClaimDays.set(ratingKey, list)
+    }
+    const moviesBlockedForDay = (date: Date): Set<string> => {
+      const dayMs = startOfDay(date).getTime()
+      const blocked = new Set<string>()
+      for (const [ratingKey, days] of movieClaimDays) {
+        if (days.some((d) => Math.abs(d - dayMs) < MOVIE_EXCLUSIVITY_MS)) blocked.add(ratingKey)
+      }
+      return blocked
+    }
+    {
+      const seedDates: Date[] = []
+      for (let dayOffset = -7; dayOffset < horizonDays; dayOffset++) {
+        seedDates.push(startOfDay(addDays(today, dayOffset)))
+      }
+      const existingMovieSlots = await prisma.slot.findMany({
+        where: {
+          contentSource: 'plex',
+          seasonNumber: null,
+          contentId: { not: null },
+          schedule: { date: { in: seedDates } },
+        },
+        select: { contentId: true, schedule: { select: { date: true } } },
+      }).catch(() => [] as Array<{ contentId: string | null; schedule: { date: Date } }>)
+      for (const row of existingMovieSlots) {
+        if (row.contentId) recordMovieClaim(row.schedule.date, row.contentId)
+      }
+    }
+
     const overrideYears = new Set<number>()
     for (let dayOffset = 0; dayOffset < horizonDays; dayOffset++) {
       overrideYears.add(startOfDay(addDays(today, dayOffset)).getFullYear())
@@ -1244,6 +1288,10 @@ export async function runScheduler(
           // Every exact catalog item (movie or episode) placed today on this
           // station. Guarantees no exact repeat within a single day.
           const dayUsedMediaKeys = new Set<string>()
+          // Movies claimed by any channel within a week of this day (rolling
+          // 7-day exclusivity). Computed once per day; same-day/same-station
+          // repeats are additionally covered by dayUsedMediaKeys.
+          const weekBlockedMovies = moviesBlockedForDay(date)
           const windowBumperAssigned = new Set<string>()
 
           const reservedIntervals: Array<{ start: number; end: number }> = []
@@ -1403,10 +1451,15 @@ export async function runScheduler(
               const libMultiplier = (item: PlexMediaItem) => slotLibraryMultiplier(item, slotLibWeights, activeClassByPlexKey)
 
               // Keys to avoid for this slot: anything already used today on this
-              // station, plus anything on air right now on another station.
+              // station, anything on air right now on another station, plus every
+              // movie aired on any channel within a week of this day (movies are
+              // exclusive to one channel per rolling 7-day window).
               const excludeKeys = new Set<string>(dayUsedMediaKeys)
               for (const busyKey of keysAiringAt(globalAirings, slotStart.getTime())) {
                 excludeKeys.add(busyKey)
+              }
+              for (const blockedMovie of weekBlockedMovies) {
+                excludeKeys.add(blockedMovie)
               }
 
               if (failedPlacementsAtCurrentStart >= 6) {
@@ -1452,6 +1505,7 @@ export async function runScheduler(
 
                   incrementCount(dayTitleCounts, rescueMovie.title)
                   dayUsedMediaKeys.add(rescueMovie.ratingKey)
+                  recordMovieClaim(date, rescueMovie.ratingKey)
                   recordAiring(globalAirings, rescueMovie.ratingKey, slotStart.getTime(), rescueAligned.getTime())
                   slotStart = rescueAligned
                   failedPlacementsAtCurrentStart = 0
@@ -1704,6 +1758,7 @@ export async function runScheduler(
 
                 incrementCount(dayTitleCounts, chosen.title)
                 dayUsedMediaKeys.add(chosen.ratingKey)
+                recordMovieClaim(date, chosen.ratingKey)
                 recordAiring(globalAirings, chosen.ratingKey, slotStart.getTime(), alignedEnd.getTime())
 
                 slotStart = alignedEnd
@@ -1936,6 +1991,7 @@ export async function runScheduler(
 
                 incrementCount(dayTitleCounts, rescueMovie.title)
                 dayUsedMediaKeys.add(rescueMovie.ratingKey)
+                recordMovieClaim(date, rescueMovie.ratingKey)
                 recordAiring(globalAirings, rescueMovie.ratingKey, slotStart.getTime(), rescueAligned.getTime())
                 slotStart = rescueAligned
                 failedPlacementsAtCurrentStart = 0
