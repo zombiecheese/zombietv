@@ -464,11 +464,14 @@ async function selectYoutubeSelection(params: {
     seed,
   )
 
-  // Reserve time at the window edges for the opening/closing idents so the
-  // curated filler in the middle does not push them outside the window.
+  // Reserve time at the window edges for opening/closing idents. Bumpers are
+  // only eligible when the current time is actually at the segment edge, so
+  // tuning into a channel mid-slot does not replay edge idents.
   const BUMPER_MINS = 1
-  const wantOpen = !inAdBreak && Boolean(openBumperId)
-  const wantClose = !inAdBreak && Boolean(closeBumperId)
+  const elapsedMins = Math.max(0, (now - segmentStartMs) / 60_000)
+  const remainingMins = Math.max(0, segmentDurationMins - elapsedMins)
+  const wantOpen = !inAdBreak && Boolean(openBumperId) && elapsedMins < BUMPER_MINS
+  const wantClose = !inAdBreak && Boolean(closeBumperId) && remainingMins <= BUMPER_MINS
   const reservedMins = (wantOpen ? BUMPER_MINS : 0) + (wantClose ? BUMPER_MINS : 0)
   const middleTargetMins = Math.max(0, segmentDurationMins - reservedMins)
 
@@ -492,7 +495,6 @@ async function selectYoutubeSelection(params: {
     return { currentVideoId: fallbackId, queue: [fallbackId], startOffsetMs: Math.max(0, now - segmentStartMs) }
   }
 
-  const elapsedMins = Math.max(0, (now - segmentStartMs) / 60_000)
   let currentIndex = 0
   let cursorMins = 0
 
