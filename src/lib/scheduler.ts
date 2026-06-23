@@ -833,32 +833,39 @@ function pickMovieCandidate(
   movies: PlexMediaItem[],
   block: TimeBlock,
   remainingMins: number,
+  adIntervalMovie: number,
+  adEnabled: boolean,
   dayTitleCounts: Map<string, number>,
   libMultiplier: (item: PlexMediaItem) => number = () => 1,
-  options?: { excludeKeys?: Set<string>; maxOvershootMins?: number },
+  options?: { excludeKeys?: Set<string> },
 ): PlexMediaItem | null {
   const excludeKeys = options?.excludeKeys
-  const maxOvershoot = options?.maxOvershootMins ?? 45
 
-  // Runtime-aware eligibility: never pick content that runs well past the time
-  // available, and never repeat an exact title already used today or already on
-  // air elsewhere right now.
+  // Strict runtime fit: content plus ad breaks must fit in the remaining block.
   const eligible = movies.filter((movie) => {
     if (excludeKeys?.has(movie.ratingKey)) return false
-    if (movie.durationMins > remainingMins + maxOvershoot) return false
+    const adBreaks = buildAdBreaks(movie.durationMins, adIntervalMovie, adEnabled)
+    const adMins = adBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
+    if (movie.durationMins + adMins > remainingMins) return false
     return true
   })
   if (!eligible.length) return null
 
   const tolerances = [15, 30, 45, 60]
   const pool = tolerances
-    .map((tolerance) => eligible.filter((movie) => Math.abs(movie.durationMins - remainingMins) <= tolerance))
+    .map((tolerance) => eligible.filter((movie) => {
+      const adBreaks = buildAdBreaks(movie.durationMins, adIntervalMovie, adEnabled)
+      const adMins = adBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
+      return Math.abs(movie.durationMins + adMins - remainingMins) <= tolerance
+    }))
     .find((candidates) => candidates.length)
     ?? eligible
 
   return weightedRandom(
     pool.map((movie) => {
-      const diff = Math.abs(movie.durationMins - remainingMins)
+      const adBreaks = buildAdBreaks(movie.durationMins, adIntervalMovie, adEnabled)
+      const adMins = adBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
+      const diff = Math.abs(movie.durationMins + adMins - remainingMins)
       const repeatPenalty = 1 / (1 + (dayTitleCounts.get(movie.title.toLowerCase()) ?? 0) * 2.5)
       const fitBonus = Math.max(0.2, 2 - diff / 45)
 
@@ -1493,9 +1500,11 @@ export async function runScheduler(
                   rescueCandidates,
                   block,
                   remainingMins,
+                  adIntervalMovie,
+                  adEnabled,
                   dayTitleCounts,
                   () => 1,
-                  { excludeKeys, maxOvershootMins: 30 },
+                  { excludeKeys },
                 )
 
                 if (rescueMovie) {
@@ -1644,11 +1653,11 @@ export async function runScheduler(
                         const episode = episodeOrder.find((e) => e.season === progress.nextSeason && e.episode === progress.nextEpisode) ?? null
                         if (!episode) break
 
-                        const remainWin = Math.max(0, Math.round((windowEndMs - slotStart.getTime()) / 60_000))
-                        if (dayUsedMediaKeys.has(episode.ratingKey) || episode.durationMins > remainWin + 30) break
-
                         const adBreaks   = buildAdBreaks(episode.durationMins, adIntervalTv, adEnabled)
                         const adMins     = adBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
+                        const remainWin = Math.max(0, Math.round((windowEndMs - slotStart.getTime()) / 60_000))
+                        if (dayUsedMediaKeys.has(episode.ratingKey) || episode.durationMins + adMins > remainWin) break
+
                         const slotEnd    = addMinutes(slotStart, episode.durationMins + adMins)
                         const alignedEnd = alignEndTime(slotEnd)
                         const fillerMins = differenceInMinutes(alignedEnd, slotEnd)
@@ -1742,10 +1751,10 @@ export async function runScheduler(
                 }))
 
               if (tryMovieBlock && (slotMovies.length || slotMoviesFallback.length)) {
-                let chosen = pickMovieCandidate(slotMovies, block, remainingMins, dayTitleCounts, libMultiplier, { excludeKeys })
+                let chosen = pickMovieCandidate(slotMovies, block, remainingMins, adIntervalMovie, adEnabled, dayTitleCounts, libMultiplier, { excludeKeys })
                 if (!chosen && holidayTaggedMovies.length) {
                   // Holiday-tagged movies are exhausted for now — fall back to the general pool.
-                  chosen = pickMovieCandidate(slotMoviesFallback, block, remainingMins, dayTitleCounts, libMultiplier, { excludeKeys })
+                  chosen = pickMovieCandidate(slotMoviesFallback, block, remainingMins, adIntervalMovie, adEnabled, dayTitleCounts, libMultiplier, { excludeKeys })
                 }
                 if (!chosen) {
                   failedPlacementsAtCurrentStart += 1
@@ -1901,13 +1910,15 @@ export async function runScheduler(
                     // used today on this station, already on air on another
                     // station, or too long for the time remaining. Preserving the
                     // progression pointer keeps the series alive for later slots.
-                    const episodeTooLong = episode.durationMins > remainingMins + 30
+                    const episodeAdBreaks = buildAdBreaks(episode.durationMins, adIntervalTv, adEnabled)
+                    const episodeAdMins = episodeAdBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
+                    const episodeTooLong = episode.durationMins + episodeAdMins > remainingMins
                     if (excludeKeys.has(episode.ratingKey) || episodeTooLong) {
                       failedPlacementsAtCurrentStart += 1
                       continue
                     }
 
-                    const adBreaks   = buildAdBreaks(episode.durationMins, adIntervalTv, adEnabled)
+                    const adBreaks   = episodeAdBreaks
                     const adMins     = adBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
                     const slotEnd    = addMinutes(slotStart, episode.durationMins + adMins)
                     const alignedEnd = alignEndTime(slotEnd)
@@ -1979,9 +1990,11 @@ export async function runScheduler(
                 rescueCandidates,
                 block,
                 remainingMins,
+                adIntervalMovie,
+                adEnabled,
                 dayTitleCounts,
                 () => 1,
-                { excludeKeys, maxOvershootMins: 30 },
+                { excludeKeys },
               )
 
               if (rescueMovie) {
