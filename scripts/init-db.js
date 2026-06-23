@@ -122,18 +122,36 @@ async function main() {
 
   for (let i = 0; i < stations.length; i++) {
     const s = stations[i]
-    await prisma.station.upsert({
-      where: { id: s.id },
-      // Re-seeding realigns the canonical rules/branding for the built-in base
-      // channels (name is left as-is to preserve any admin rename).
-      update: {
-        branding:         JSON.stringify(s.branding),
-        rules:            JSON.stringify(s.rules),
-        holidayOverrides: JSON.stringify(s.holidayOverrides),
-        fillerPools:      JSON.stringify(s.fillerPools),
-        sortOrder:        i
-      },
-      create: {
+
+    // Re-seeding realigns the canonical rules/branding for the built-in base
+    // channels. Done by id so admin renames (id or name) are respected:
+    //  - existing id → update config + order, never the display name
+    //  - missing id  → only create if the display name isn't already taken by
+    //    another (renamed) station, avoiding a unique-name conflict.
+    const existingById = await prisma.station.findUnique({ where: { id: s.id } })
+
+    if (existingById) {
+      await prisma.station.update({
+        where: { id: s.id },
+        data: {
+          branding:         JSON.stringify(s.branding),
+          rules:            JSON.stringify(s.rules),
+          holidayOverrides: JSON.stringify(s.holidayOverrides),
+          fillerPools:      JSON.stringify(s.fillerPools),
+          sortOrder:        i
+        }
+      })
+      continue
+    }
+
+    const nameTaken = await prisma.station.findFirst({ where: { name: s.name } })
+    if (nameTaken) {
+      console.warn(`⚠️  Skipping seed for "${s.id}" — display name "${s.name}" already exists under station "${nameTaken.id}" (likely renamed).`)
+      continue
+    }
+
+    await prisma.station.create({
+      data: {
         id:               s.id,
         name:             s.name,
         branding:         JSON.stringify(s.branding),
