@@ -385,6 +385,20 @@ export default function StationsPage() {
     else { setSelected(null); setForm(null) }
   }
 
+  const moveStation = async (index: number, dir: -1 | 1) => {
+    const next = index + dir
+    if (next < 0 || next >= stations.length) return
+    const reordered = [...stations]
+    const [moved] = reordered.splice(index, 1)
+    reordered.splice(next, 0, moved)
+    setStations(reordered)
+    await fetch('/api/admin/stations/order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: reordered.map((s) => s.id) }),
+    }).catch(() => {})
+  }
+
   const setAdPolicy = (key: string, val: unknown) => setForm(f => f ? { ...f, rules: { ...f.rules, ad_policy: { ...f.rules.ad_policy, [key]: val } } } : f)
   const setOvernightClosedown = (val: boolean) => setForm(f => f ? { ...f, rules: { ...f.rules, overnight_closedown: val } } : f)
   const setClosedownContent = (val: StationRules['closedown_content']) => setForm(f => f ? { ...f, rules: { ...f.rules, closedown_content: val } } : f)
@@ -453,17 +467,26 @@ export default function StationsPage() {
 
       <div style={{ display: 'flex', gap: 20, marginTop: 20, minHeight: 0 }}>
         {/* Station list */}
-        <div style={{ width: 160, flexShrink: 0 }}>
-          {stations.map(s => (
-            <button key={s.id} onClick={() => select(s)} style={{
-              display: 'block', width: '100%', textAlign: 'left', padding: '9px 14px',
-              backgroundColor: selected?.id === s.id ? '#1a3a6e' : '#0a1628',
-              border: '1px solid', borderColor: selected?.id === s.id ? '#4a7fb5' : '#1e3a5f',
-              color: '#fff', cursor: 'pointer', fontSize: '0.78rem', marginBottom: 6, letterSpacing: '0.05em', fontWeight: selected?.id === s.id ? 700 : 400,
-            }}>
-              {s.id.toUpperCase()}<br />
-              <span style={{ fontSize: '0.6rem', color: '#4a7fb5', fontWeight: 400 }}>{s.name}</span>
-            </button>
+        <div style={{ width: 188, flexShrink: 0 }}>
+          <div style={{ color: '#4a7fb5', fontSize: '0.6rem', letterSpacing: '0.06em', marginBottom: 6 }}>CHANNEL ORDER (drag-free ▲▼ — reflected in the viewer EPG)</div>
+          {stations.map((s, i) => (
+            <div key={s.id} style={{ display: 'flex', gap: 4, marginBottom: 6, alignItems: 'stretch' }}>
+              <button onClick={() => select(s)} style={{
+                display: 'block', flex: 1, textAlign: 'left', padding: '9px 12px',
+                backgroundColor: selected?.id === s.id ? '#1a3a6e' : '#0a1628',
+                border: '1px solid', borderColor: selected?.id === s.id ? '#4a7fb5' : '#1e3a5f',
+                color: '#fff', cursor: 'pointer', fontSize: '0.78rem', letterSpacing: '0.05em', fontWeight: selected?.id === s.id ? 700 : 400,
+              }}>
+                <span style={{ color: '#4a7fb5', fontSize: '0.6rem' }}>{i + 1}. </span>{s.id.toUpperCase()}<br />
+                <span style={{ fontSize: '0.6rem', color: '#4a7fb5', fontWeight: 400 }}>{s.name}</span>
+              </button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                <button type="button" title="Move up" disabled={i === 0} onClick={() => moveStation(i, -1)}
+                  style={{ ...orderBtn, opacity: i === 0 ? 0.3 : 1, cursor: i === 0 ? 'not-allowed' : 'pointer' }}>▲</button>
+                <button type="button" title="Move down" disabled={i === stations.length - 1} onClick={() => moveStation(i, 1)}
+                  style={{ ...orderBtn, opacity: i === stations.length - 1 ? 0.3 : 1, cursor: i === stations.length - 1 ? 'not-allowed' : 'pointer' }}>▼</button>
+              </div>
+            </div>
           ))}
         </div>
 
@@ -1199,6 +1222,7 @@ const chipWrap: React.CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 
 const chipBtn: React.CSSProperties = { backgroundColor: '#1a3a6e', border: '1px solid #4a7fb5', color: '#fff', padding: '5px 10px', fontSize: '0.72rem', cursor: 'pointer' }
 const pickerControls: React.CSSProperties = { display: 'grid', gridTemplateColumns: '1fr auto', gap: 10, marginBottom: 10 }
 const ghostBtn: React.CSSProperties = { backgroundColor: '#0f223c', border: '1px solid #4a7fb5', color: '#dbe9f8', padding: '0 14px', fontSize: '0.74rem', fontWeight: 700, cursor: 'pointer' }
+const orderBtn: React.CSSProperties = { flex: 1, width: 24, backgroundColor: '#0f223c', border: '1px solid #1e3a5f', color: '#dbe9f8', fontSize: '0.6rem', lineHeight: 1, padding: 0 }
 const suggestionsWrap: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8 }
 const suggestionBtn: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, backgroundColor: '#0a1628', border: '1px solid #1e3a5f', color: '#e8f0fe', padding: '8px 10px', fontSize: '0.72rem', cursor: 'pointer', textAlign: 'left' as const }
 const suggestionCount: React.CSSProperties = { color: '#4a7fb5', fontSize: '0.68rem' }

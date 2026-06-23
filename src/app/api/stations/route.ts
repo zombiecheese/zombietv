@@ -7,7 +7,7 @@ import { fromJsonObject } from '@/lib/json'
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
-  const stations = await prisma.station.findMany({ orderBy: { id: 'asc' } })
+  const stations = await prisma.station.findMany({ orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }] })
 
   return NextResponse.json(
     stations.map((s) => ({

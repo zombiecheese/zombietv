@@ -120,7 +120,8 @@ async function main() {
     }
   ]
 
-  for (const s of stations) {
+  for (let i = 0; i < stations.length; i++) {
+    const s = stations[i]
     await prisma.station.upsert({
       where: { id: s.id },
       // Re-seeding realigns the canonical rules/branding for the built-in base
@@ -129,7 +130,8 @@ async function main() {
         branding:         JSON.stringify(s.branding),
         rules:            JSON.stringify(s.rules),
         holidayOverrides: JSON.stringify(s.holidayOverrides),
-        fillerPools:      JSON.stringify(s.fillerPools)
+        fillerPools:      JSON.stringify(s.fillerPools),
+        sortOrder:        i
       },
       create: {
         id:               s.id,
@@ -137,7 +139,8 @@ async function main() {
         branding:         JSON.stringify(s.branding),
         rules:            JSON.stringify(s.rules),
         holidayOverrides: JSON.stringify(s.holidayOverrides),
-        fillerPools:      JSON.stringify(s.fillerPools)
+        fillerPools:      JSON.stringify(s.fillerPools),
+        sortOrder:        i
       }
     })
   }

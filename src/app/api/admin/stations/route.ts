@@ -11,12 +11,13 @@ export async function GET(req: NextRequest) {
   const guard = await requireAdmin(req)
   if (!guard.ok) return guard.response
 
-  const stations = await prisma.station.findMany({ orderBy: { id: 'asc' } })
+  const stations = await prisma.station.findMany({ orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }] })
 
   return NextResponse.json(
     stations.map((s) => ({
       id:               s.id,
       name:             s.name,
+      sortOrder:        s.sortOrder,
       branding:         fromJsonObject(s.branding),
       rules:            fromJsonObject(s.rules),
       holidayOverrides: fromJsonObject(s.holidayOverrides),

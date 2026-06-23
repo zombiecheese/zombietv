@@ -24,6 +24,7 @@ model Station {
   rules             String     // JSON: { allow_genres[], deny_genres[], ad_policy, time_blocks[] }
   holidayOverrides  String?    // JSON: { christmas: { replace_schedule, ad_free, content_priority[] } ... }
   fillerPools       String     // JSON: { ads, music, bumpers } — YouTube IDs
+  sortOrder         Int        @default(0) // Channel ordering for Station Rules + viewer EPG
   createdAt         DateTime   @default(now())
   updatedAt         DateTime   @updatedAt
 

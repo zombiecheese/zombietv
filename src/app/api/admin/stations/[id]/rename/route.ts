@@ -66,6 +66,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         rules:            station.rules,
         holidayOverrides: station.holidayOverrides,
         fillerPools:      station.fillerPools,
+        sortOrder:        station.sortOrder,
       },
     })
 
