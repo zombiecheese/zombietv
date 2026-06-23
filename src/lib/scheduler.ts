@@ -837,16 +837,17 @@ function pickMovieCandidate(
   adEnabled: boolean,
   dayTitleCounts: Map<string, number>,
   libMultiplier: (item: PlexMediaItem) => number = () => 1,
-  options?: { excludeKeys?: Set<string> },
+  options?: { excludeKeys?: Set<string>; maxOverrunMins?: number },
 ): PlexMediaItem | null {
   const excludeKeys = options?.excludeKeys
+  const maxOverrunMins = options?.maxOverrunMins ?? 10
 
-  // Strict runtime fit: content plus ad breaks must fit in the remaining block.
+  // Tight runtime fit: content plus ad breaks can overrun a little, but not much.
   const eligible = movies.filter((movie) => {
     if (excludeKeys?.has(movie.ratingKey)) return false
     const adBreaks = buildAdBreaks(movie.durationMins, adIntervalMovie, adEnabled)
     const adMins = adBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
-    if (movie.durationMins + adMins > remainingMins) return false
+    if (movie.durationMins + adMins > remainingMins + maxOverrunMins) return false
     return true
   })
   if (!eligible.length) return null
@@ -1559,7 +1560,7 @@ export async function runScheduler(
                     adBreaks:      fallbackAdBreaks.length ? toJson(fallbackAdBreaks) : null,
                     fillerId:      fillerPools.music ?? fillerPools.ads ?? null,
                     fillerDuration: null,
-                    metadata:      toJson({ blockName: block.name, title: 'Filler', reason: 'placement_safety_fallback' }),
+                    metadata:      toJson({ blockName: block.name, title: 'Filler', reason: 'placement_safety_fallback', showInEpg: false }),
                   },
                 })
                 slotStart = new Date(blockEnd)
@@ -1600,6 +1601,7 @@ export async function runScheduler(
                       metadata:      toJson({
                         blockName: block.name,
                         title: titleOverride ?? (isClosedownBlock ? 'Close Down' : block.name),
+                        showInEpg: true,
                         fillerCategories: categories,
                         ...(closedownContent ? { closedown: closedownContent } : {}),
                         ...(bumpers?.openBumperId ? { openBumperId: bumpers.openBumperId } : {}),
@@ -1656,7 +1658,7 @@ export async function runScheduler(
                         const adBreaks   = buildAdBreaks(episode.durationMins, adIntervalTv, adEnabled)
                         const adMins     = adBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
                         const remainWin = Math.max(0, Math.round((windowEndMs - slotStart.getTime()) / 60_000))
-                        if (dayUsedMediaKeys.has(episode.ratingKey) || episode.durationMins + adMins > remainWin) break
+                        if (dayUsedMediaKeys.has(episode.ratingKey) || episode.durationMins + adMins > remainWin + 10) break
 
                         const slotEnd    = addMinutes(slotStart, episode.durationMins + adMins)
                         const alignedEnd = alignEndTime(slotEnd)
@@ -1912,7 +1914,7 @@ export async function runScheduler(
                     // progression pointer keeps the series alive for later slots.
                     const episodeAdBreaks = buildAdBreaks(episode.durationMins, adIntervalTv, adEnabled)
                     const episodeAdMins = episodeAdBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
-                    const episodeTooLong = episode.durationMins + episodeAdMins > remainingMins
+                    const episodeTooLong = episode.durationMins + episodeAdMins > remainingMins + 10
                     if (excludeKeys.has(episode.ratingKey) || episodeTooLong) {
                       failedPlacementsAtCurrentStart += 1
                       continue
@@ -2044,7 +2046,7 @@ export async function runScheduler(
                   adBreaks:      fallbackAdBreaks.length ? toJson(fallbackAdBreaks) : null,
                   fillerId:      fillerPools.music ?? fillerPools.ads ?? null,
                   fillerDuration: null,
-                  metadata:      toJson({ blockName: block.name, title: 'Filler', reason: 'fallback_filler' }),
+                  metadata:      toJson({ blockName: block.name, title: 'Filler', reason: 'fallback_filler', showInEpg: false }),
                 },
               })
               slotStart = addMinutes(slotStart, 30)

@@ -68,6 +68,7 @@ export async function GET(
     const nextSlot = allSlots[index + 1]
       const meta     = fromJsonObject<Record<string, any>>(slot.metadata)
       const adBreaks = fromJsonArray(slot.adBreaks)
+      const showInEpg = meta.showInEpg !== false
       const slotStartMs = slot.startTime.getTime()
       const slotEndRawMs = slotStartMs + slot.durationMins * 60_000 + (slot.fillerDuration ?? 0) * 60_000
       const nextStartMs = nextSlot ? nextSlot.startTime.getTime() : null
@@ -76,6 +77,7 @@ export async function GET(
 
       // Keep any slot that overlaps the requested window.
       if (slotStartMs >= to.getTime() || slotEndMs <= from.getTime()) continue
+      if (!showInEpg) continue
 
       // Main scheduled content segment.
       epgSlots.push({
