@@ -59,8 +59,6 @@ export interface PlaybackState {
   // Overnight close-down: a static graphic to display full-screen (looped
   // YouTube video/playlist close-downs come through the normal filler path).
   offlineGraphicUrl: string | null
-  activeBumperId?: string | null
-  bumperPhase?: 'open' | 'close' | null
 }
 
 interface YoutubePoolItem {
@@ -296,6 +294,15 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
     fillerCategories = slotMetadata.fillerCategories as string[]
   }
 
+  // Per-window opening/closing idents (bumpers) live on the filler-window slot
+  // metadata. They are only injected for dedicated youtube filler slots so they
+  // stay strictly bounded to that window: the opener plays at the window start
+  // and the closer plays at the window end.
+  const openBumperId = (slotMetadata.openBumperId as string | null) ?? null
+  const closeBumperId = (slotMetadata.closeBumperId as string | null) ?? null
+  const isYoutubeSlot = activeSlot.contentSource === 'youtube'
+  const hasWindowBumpers = isYoutubeSlot && !inAdBreak && Boolean(openBumperId || closeBumperId)
+
   const youtubeSelection = await selectYoutubeSelection({
     stationId,
     now,
@@ -307,6 +314,9 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
     inFiller,
     fallbackId: inAdBreak ? (fillerPools.ads ?? fillerPools.music ?? null) : (activeSlot.fillerId ?? fillerPools.music ?? null),
     fillerCategories,
+    windowSegment: hasWindowBumpers ? { startMs: slotStartMs, durationMins: activeSlot.durationMins } : null,
+    openBumperId: hasWindowBumpers ? openBumperId : null,
+    closeBumperId: hasWindowBumpers ? closeBumperId : null,
   })
 
   // ── Start offset into the content ────────────────────────────────────────
@@ -348,23 +358,6 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
 
   const activeContentRating = activeSlot.mediaItems[0]?.mediaItem?.ratings ?? null
 
-  // ── Extract bumper metadata from slot ──────────────────────────────────────
-  const activeFillerWindow = resolveActiveFillerWindow(slotMetadata, nowDate)
-  const openBumperId =
-    activeFillerWindow?.openBumperId ??
-    ((slotMetadata.openBumperId as string | null) ?? null)
-  const closeBumperId =
-    activeFillerWindow?.closeBumperId ??
-    ((slotMetadata.closeBumperId as string | null) ?? null)
-  const bumper = selectWindowBumper(
-    now,
-    activeFillerWindow?.windowStartMs ?? slotStartMs,
-    activeFillerWindow?.windowEndMs ?? slotEndMs,
-    openBumperId,
-    closeBumperId,
-    inFiller,
-  )
-
   return {
     stationId,
     serverTimeMs: now,
@@ -376,10 +369,12 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
         : (activeSlot.contentSource as PlaybackState['contentSource']),
 
     contentId: inFiller
-      ? (bumper.activeBumperId ?? youtubeSelection?.currentVideoId ?? activeSlot.fillerId ?? fillerPools.music ?? null)
+      ? (youtubeSelection?.currentVideoId ?? activeSlot.fillerId ?? fillerPools.music ?? null)
       : inAdBreak
         ? (youtubeSelection?.currentVideoId ?? fillerPools.ads ?? fillerPools.music ?? null)
-        : activeSlot.contentId,
+        : hasWindowBumpers
+          ? (youtubeSelection?.currentVideoId ?? activeSlot.fillerId ?? fillerPools.music ?? null)
+          : activeSlot.contentId,
 
     title: inFiller || inAdBreak ? null : (slotMetadata.title as string ?? activeSlot.showTitle ?? null),
     showTitle:     activeSlot.showTitle,
@@ -387,9 +382,7 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
     episodeNumber: activeSlot.episodeNumber,
     contentRating: inFiller || inAdBreak ? null : activeContentRating,
 
-    startOffsetMs: inAdBreak || inFiller
-      ? (bumper.activeBumperId ? 0 : youtubeStartOffsetMs)
-      : startOffsetMs,
+    startOffsetMs: inAdBreak || inFiller || hasWindowBumpers ? youtubeStartOffsetMs : startOffsetMs,
     slotStartMs,
     slotEndMs,
 
@@ -407,103 +400,10 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
 
     openBumperId,
     closeBumperId,
-    activeBumperId: bumper.activeBumperId,
-    bumperPhase: bumper.bumperPhase,
     offlineGraphicUrl: null,
   }
 }
 
-  function selectWindowBumper(
-  nowMs: number,
-  slotStartMs: number,
-  slotEndMs: number,
-    openBumperId: string | null,
-    closeBumperId: string | null,
-  inFiller: boolean,
-  ): { activeBumperId: string | null; bumperPhase: 'open' | 'close' | null } {
-  if (!inFiller) {
-    return { activeBumperId: null, bumperPhase: null }
-  }
-
-  function parseClockMinutes(value: unknown): number | null {
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      return Math.max(0, Math.min(24 * 60, Math.floor(value)))
-    }
-    if (typeof value !== 'string') return null
-    const m = value.trim().match(/^(\d{1,2}):(\d{2})$/)
-    if (!m) return null
-    const hours = Number(m[1])
-    const mins = Number(m[2])
-    if (Number.isNaN(hours) || Number.isNaN(mins) || hours < 0 || hours > 24 || mins < 0 || mins > 59) {
-      return null
-    }
-    return Math.max(0, Math.min(24 * 60, hours * 60 + mins))
-  }
-
-  function resolveActiveFillerWindow(
-    slotMetadata: Record<string, unknown>,
-    nowDate: Date,
-  ): {
-    openBumperId: string | null
-    closeBumperId: string | null
-    windowStartMs: number
-    windowEndMs: number
-  } | null {
-    if (!Array.isArray(slotMetadata.fillerWindows)) return null
-
-    const nowMinutes = nowDate.getHours() * 60 + nowDate.getMinutes()
-    const localMidnight = new Date(
-      nowDate.getFullYear(),
-      nowDate.getMonth(),
-      nowDate.getDate(),
-      0,
-      0,
-      0,
-      0,
-    ).getTime()
-
-    for (const rawWindow of slotMetadata.fillerWindows as Array<Record<string, unknown>>) {
-      const start = parseClockMinutes(rawWindow.start ?? rawWindow.startTime ?? rawWindow.startMins)
-      const end = parseClockMinutes(rawWindow.end ?? rawWindow.endTime ?? rawWindow.endMins)
-      if (start === null || end === null || start === end) continue
-
-      const wrapsMidnight = end < start
-      const inWindow = wrapsMidnight
-        ? nowMinutes >= start || nowMinutes < end
-        : nowMinutes >= start && nowMinutes < end
-      if (!inWindow) continue
-
-      let windowStartMs = localMidnight + start * 60_000
-      let windowEndMs = localMidnight + end * 60_000
-      if (wrapsMidnight) {
-        if (nowMinutes < end) {
-          windowStartMs -= 24 * 60 * 60_000
-        } else {
-          windowEndMs += 24 * 60 * 60_000
-        }
-      }
-
-      return {
-        openBumperId: typeof rawWindow.openVideoId === 'string' ? rawWindow.openVideoId : null,
-        closeBumperId: typeof rawWindow.closeVideoId === 'string' ? rawWindow.closeVideoId : null,
-        windowStartMs,
-        windowEndMs,
-      }
-    }
-
-    return null
-  }
-
-  if (openBumperId && nowMs >= slotStartMs && nowMs < slotStartMs + 60_000) {
-      return { activeBumperId: openBumperId, bumperPhase: 'open' }
-    }
-
-  if (closeBumperId && nowMs >= Math.max(slotStartMs, slotEndMs - 60_000) && nowMs < slotEndMs) {
-      return { activeBumperId: closeBumperId, bumperPhase: 'close' }
-    }
-
-    return { activeBumperId: null, bumperPhase: null }
-  }
 async function selectYoutubeSelection(params: {
   stationId: string
   now: number
@@ -515,18 +415,25 @@ async function selectYoutubeSelection(params: {
   inFiller: boolean
   fallbackId: string | null
   fillerCategories?: string[]
+  windowSegment?: { startMs: number; durationMins: number } | null
+  openBumperId?: string | null
+  closeBumperId?: string | null
 }): Promise<YoutubeSelection | null> {
-  const { stationId, now, slotStartMs, contentEndMs, fillerDurationMins, inAdBreak, currentAdBreak, inFiller, fallbackId, fillerCategories = ['ads', 'filler', 'music', 'news'] } = params
+  const { stationId, now, slotStartMs, contentEndMs, fillerDurationMins, inAdBreak, currentAdBreak, inFiller, fallbackId, fillerCategories = ['ads', 'filler', 'music', 'news'], windowSegment = null, openBumperId = null, closeBumperId = null } = params
   const segmentStartMs = inAdBreak
     ? (currentAdBreak?.startsAtMs ?? slotStartMs)
-    : contentEndMs
+    : windowSegment
+      ? windowSegment.startMs
+      : contentEndMs
   const segmentDurationMins = inAdBreak
     ? (currentAdBreak?.durationMins ?? 0)
-    : fillerDurationMins
+    : windowSegment
+      ? windowSegment.durationMins
+      : fillerDurationMins
 
   if (segmentDurationMins <= 0) return null
 
-  const seed = `${stationId}:${slotStartMs}:${segmentStartMs}:${inAdBreak ? 'ad' : inFiller ? 'filler' : 'youtube'}`
+  const seed = `${stationId}:${slotStartMs}:${segmentStartMs}:${inAdBreak ? 'ad' : (inFiller || windowSegment) ? 'filler' : 'youtube'}`
   const selectorCategories = inAdBreak
     ? ['ads', 'filler', 'music']
     : fillerCategories
@@ -557,13 +464,28 @@ async function selectYoutubeSelection(params: {
     seed,
   )
 
-  const selected: YoutubePoolItem[] = []
+  // Reserve time at the window edges for the opening/closing idents so the
+  // curated filler in the middle does not push them outside the window.
+  const BUMPER_MINS = 1
+  const wantOpen = !inAdBreak && Boolean(openBumperId)
+  const wantClose = !inAdBreak && Boolean(closeBumperId)
+  const reservedMins = (wantOpen ? BUMPER_MINS : 0) + (wantClose ? BUMPER_MINS : 0)
+  const middleTargetMins = Math.max(0, segmentDurationMins - reservedMins)
+
+  const middle: YoutubePoolItem[] = []
   let totalMins = 0
-  for (const item of seeded) {
-    selected.push(item as YoutubePoolItem)
-    totalMins += Math.max(1, (item as any).durationMins ?? 3)
-    if (totalMins >= segmentDurationMins) break
+  if (middleTargetMins >= 1) {
+    for (const item of seeded) {
+      middle.push(item as YoutubePoolItem)
+      totalMins += Math.max(1, (item as any).durationMins ?? 3)
+      if (totalMins >= middleTargetMins) break
+    }
   }
+
+  const selected: YoutubePoolItem[] = []
+  if (wantOpen) selected.push({ videoId: String(openBumperId), title: 'Opening', durationMins: BUMPER_MINS, category: 'bumper', station: stationId })
+  selected.push(...middle)
+  if (wantClose) selected.push({ videoId: String(closeBumperId), title: 'Closing', durationMins: BUMPER_MINS, category: 'bumper', station: stationId })
 
   if (!selected.length) {
     if (!fallbackId) return null

@@ -460,6 +460,18 @@ function bumperMetaForWindow(
   return meta
 }
 
+// Per-window opening/closing idents configured on a filler window. These are
+// stamped onto the window's own youtube filler slot so playback can play them
+// strictly bounded to that window (opening at the start, closing at the end).
+function fillerWindowBumpers(w: FillerWindow): { openBumperId?: string; closeBumperId?: string } {
+  const out: { openBumperId?: string; closeBumperId?: string } = {}
+  const o = w.openVideo?.enabled && w.openVideo.videoId ? String(w.openVideo.videoId).trim() : ''
+  const c = w.closeVideo?.enabled && w.closeVideo.videoId ? String(w.closeVideo.videoId).trim() : ''
+  if (o) out.openBumperId = o
+  if (c) out.closeBumperId = c
+  return out
+}
+
 function getGenreHintsForBlockName(blockName: string): string[] {
   const name = String(blockName || '').toLowerCase()
   const hints = new Set<string>()
@@ -1480,7 +1492,7 @@ export async function runScheduler(
                 // close-down blocks the custom loop content (video/playlist) is used
                 // and the close-down descriptor is stamped onto the slot metadata so
                 // playback can show a graphic or loop the configured content.
-                const createFillerSlot = async (startAt: Date, mins: number, categories: string[], titleOverride?: string) => {
+                const createFillerSlot = async (startAt: Date, mins: number, categories: string[], titleOverride?: string, bumpers?: { openBumperId?: string; closeBumperId?: string }) => {
                   if (mins < 1) return
                   const ads = buildAdBreaks(mins, adIntervalTv, adEnabled)
                   const closedownYoutube = closedownContent && (closedownContent.type === 'youtube_video' || closedownContent.type === 'youtube_playlist')
@@ -1503,6 +1515,8 @@ export async function runScheduler(
                         title: titleOverride ?? (isClosedownBlock ? 'Close Down' : block.name),
                         fillerCategories: categories,
                         ...(closedownContent ? { closedown: closedownContent } : {}),
+                        ...(bumpers?.openBumperId ? { openBumperId: bumpers.openBumperId } : {}),
+                        ...(bumpers?.closeBumperId ? { closeBumperId: bumpers.closeBumperId } : {}),
                       }),
                     },
                   })
@@ -1596,14 +1610,21 @@ export async function runScheduler(
                         placed += 1
                       }
 
-                      // Fill any leftover window time with filler.
+                      // Fill any leftover window time with filler. When the window
+                      // played no pinned episodes it behaves like a plain filler
+                      // window (open + close idents); otherwise only the closing
+                      // ident rides the trailing filler at the window's end.
                       const remAfter = Math.min(differenceInMinutes(blockEnd, slotStart), Math.max(0, Math.round((windowEndMs - slotStart.getTime()) / 60_000)))
                       if (remAfter >= 1) {
-                        await createFillerSlot(slotStart, remAfter, [w.category || 'filler'])
+                        const wb = fillerWindowBumpers(w)
+                        const leftoverBumpers = placed === 0
+                          ? wb
+                          : (wb.closeBumperId ? { closeBumperId: wb.closeBumperId } : undefined)
+                        await createFillerSlot(slotStart, remAfter, [w.category || 'filler'], undefined, leftoverBumpers)
                         slotStart = addMinutes(slotStart, remAfter)
                       }
                     } else {
-                      await createFillerSlot(slotStart, winMins, [w.category || 'filler'])
+                      await createFillerSlot(slotStart, winMins, [w.category || 'filler'], undefined, fillerWindowBumpers(w))
                       slotStart = addMinutes(slotStart, winMins)
                     }
                   }
