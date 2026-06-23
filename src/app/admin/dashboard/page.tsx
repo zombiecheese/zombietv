@@ -4,6 +4,22 @@ import { useEffect, useState } from 'react'
 
 import AdminShell from '@/components/admin/AdminShell'
 
+// IANA zones for the timezone picker datalist. Prefer the runtime-supported list
+// when available, falling back to a representative set for older environments.
+const TIMEZONE_OPTIONS: string[] = (() => {
+  try {
+    const supported = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf
+    if (typeof supported === 'function') return supported('timeZone')
+  } catch { /* ignore */ }
+  return [
+    'UTC',
+    'Australia/Sydney', 'Australia/Melbourne', 'Australia/Brisbane', 'Australia/Adelaide', 'Australia/Perth',
+    'Pacific/Auckland', 'Europe/London', 'Europe/Paris', 'Europe/Berlin',
+    'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+    'Asia/Tokyo', 'Asia/Singapore', 'Asia/Hong_Kong', 'Asia/Kolkata', 'Asia/Dubai',
+  ]
+})()
+
 export default function AdminDashboard() {
   const [mounted, setMounted] = useState(false)
   const [isCatalogSyncing, setIsCatalogSyncing] = useState(false)
@@ -61,6 +77,9 @@ export default function AdminDashboard() {
   const [schedulerIntervalHours, setSchedulerIntervalHours]   = useState('24')
   const [isSavingSchedulerSettings, setIsSavingSchedulerSettings] = useState(false)
   const [schedulerSettingsMsg, setSchedulerSettingsMsg]       = useState('')
+  const [broadcastTimezone, setBroadcastTimezone]             = useState('')
+  const [isSavingTimezone, setIsSavingTimezone]               = useState(false)
+  const [timezoneMsg, setTimezoneMsg]                         = useState('')
   const [schedulerStatus, setSchedulerStatus] = useState<{
     isRunning: boolean
     status?: {
@@ -132,6 +151,20 @@ export default function AdminDashboard() {
     setSchedulerSettingsMsg('Scheduler settings saved. Next auto-run rescheduled.')
   }
 
+  const saveBroadcastTimezone = async () => {
+    setIsSavingTimezone(true)
+    const r = await fetch('/api/app-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ broadcastTimezone }),
+    })
+    const data = await r.json().catch(() => ({}))
+    setIsSavingTimezone(false)
+    if (!r.ok) { setTimezoneMsg(data?.error || 'Could not save timezone.'); return }
+    setBroadcastTimezone(data.broadcastTimezone ?? broadcastTimezone)
+    setTimezoneMsg(`Broadcast timezone saved: ${data.broadcastTimezone}. Regenerate schedules so existing days adopt the new zone.`)
+  }
+
   const refreshPlexStatus = async () => {
     const data = await fetch('/api/admin/plex').then((r) => (r.ok ? r.json() : null)).catch(() => null)
     if (!data) return
@@ -168,6 +201,7 @@ export default function AdminDashboard() {
       if (!d) return
       if (d.schedulerHorizonDays  != null) setSchedulerHorizonDays(String(d.schedulerHorizonDays))
       if (d.schedulerIntervalHours != null) setSchedulerIntervalHours(String(d.schedulerIntervalHours))
+      if (typeof d.broadcastTimezone === 'string') setBroadcastTimezone(d.broadcastTimezone)
     }).catch(() => {})
   }, [])
 
@@ -391,6 +425,38 @@ export default function AdminDashboard() {
           </button>
         </div>
         {schedulerSettingsMsg && <div style={{ fontSize: '0.72rem', color: '#4caf50', marginTop: 4 }}>{schedulerSettingsMsg}</div>}
+      </div>
+
+      {/* ── Broadcast Timezone ──────────────────────────────────────────────── */}
+      <div style={{ ...card, marginBottom: 18 }}>
+        <div style={{ fontSize: '1.2rem', marginBottom: 8 }}>🌏</div>
+        <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#e8f0fe', marginBottom: 6 }}>Broadcast Timezone</div>
+        <div style={{ fontSize: '0.72rem', color: '#4a7fb5', lineHeight: 1.5, marginBottom: 10 }}>
+          The single timezone all broadcast times are authored and displayed in. Times are stored as UTC and
+          aligned to this zone across the schedule editor, the EPG, and live playback — so the guide matches the
+          schedule regardless of where the server or a viewer is located. After changing this, click
+          &ldquo;Regenerate Schedule&rdquo; so existing days adopt the new zone.
+        </div>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 6 }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.72rem', color: '#a8c4e0', minWidth: 280, flex: 1 }}>
+            IANA timezone (e.g. Australia/Sydney)
+            <input
+              type="text"
+              list="timezone-options"
+              placeholder="Australia/Sydney"
+              value={broadcastTimezone}
+              onChange={(e) => setBroadcastTimezone(e.target.value)}
+              style={numberInput}
+            />
+            <datalist id="timezone-options">
+              {TIMEZONE_OPTIONS.map((tz) => <option key={tz} value={tz} />)}
+            </datalist>
+          </label>
+          <button onClick={saveBroadcastTimezone} style={secondaryBtn} disabled={isSavingTimezone || !broadcastTimezone.trim()}>
+            {isSavingTimezone ? 'SAVING...' : 'SAVE TIMEZONE'}
+          </button>
+        </div>
+        {timezoneMsg && <div style={{ fontSize: '0.72rem', color: '#4caf50', marginTop: 4 }}>{timezoneMsg}</div>}
       </div>
 
       {/* ── Scheduler Status ──────────────────────────────────────────────── */}

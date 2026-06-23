@@ -32,3 +32,5 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-zombietv}:${POSTGRES_PASSWORD:-zombietv_dev_password}@postgres:5432/${POSTGRES_DB:-zombietv}?schema=public
       SESSION_SECRET: ${SESSION_SECRET}
       PLEX_CLIENT_ID: ${PLEX_CLIENT_ID}
+      # Default broadcast timezone used until the admin sets one in the dashboard.
+      TZ: ${TZ:-Australia/Sydney}

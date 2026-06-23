@@ -10,6 +10,17 @@
 export async function register() {
   // Only run in the Node.js runtime (not in Edge runtime or during build)
   if (process.env.NEXT_RUNTIME === 'nodejs') {
+    // Apply the configured broadcast timezone to the process BEFORE the
+    // scheduler runs, so all schedule generation and playback day math operate
+    // in the broadcast zone rather than the container's default (UTC).
+    try {
+      const { initBroadcastTimezone } = await import('./src/lib/app-settings')
+      const tz = await initBroadcastTimezone()
+      console.log(`[Instrumentation] Broadcast timezone applied: ${tz}`)
+    } catch (err) {
+      console.error('[Instrumentation] Failed to apply broadcast timezone:', err)
+    }
+
     // Dynamically import to avoid bundling scheduler code into the Edge runtime
     const { startScheduler } = await import('./src/lib/scheduler')
     startScheduler()

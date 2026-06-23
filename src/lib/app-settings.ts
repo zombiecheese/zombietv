@@ -2,16 +2,23 @@
 // Covers: app name, scheduler horizon days, scheduler interval hours.
 
 import { prisma } from './db'
+import { isValidTimeZone } from './time'
 
 const APP_NAME_KEY              = 'app_name'
 const APP_TAGLINE_KEY          = 'app_tagline'
 const SCHEDULER_HORIZON_KEY     = 'scheduler_horizon_days'
 const SCHEDULER_INTERVAL_KEY    = 'scheduler_interval_hours'
+const BROADCAST_TIMEZONE_KEY    = 'broadcast_timezone'
 
 export const DEFAULT_APP_NAME               = 'Zombie TV'
 export const DEFAULT_APP_TAGLINE            = '1990s Broadcast Simulator'
 export const DEFAULT_SCHEDULER_HORIZON_DAYS  = 7
 export const DEFAULT_SCHEDULER_INTERVAL_HOURS = 24
+
+// Falls back to the container/host TZ, then to an Australian default to match
+// the broadcast simulator's intent. Always a valid IANA zone.
+export const DEFAULT_BROADCAST_TIMEZONE =
+  isValidTimeZone(process.env.TZ) ? (process.env.TZ as string) : 'Australia/Sydney'
 
 export async function getAppName(): Promise<string> {
   try {
@@ -124,3 +131,63 @@ export const getSchedulerIntervalHours = () => getNumericSetting(SCHEDULER_INTER
 
 export const saveSchedulerHorizonDays   = (v: unknown) => saveNumericSetting(SCHEDULER_HORIZON_KEY,  v, 1, 60,  DEFAULT_SCHEDULER_HORIZON_DAYS)
 export const saveSchedulerIntervalHours = (v: unknown) => saveNumericSetting(SCHEDULER_INTERVAL_KEY, v, 1, 168, DEFAULT_SCHEDULER_INTERVAL_HOURS)
+
+// ─── Broadcast timezone ───────────────────────────────────────────────────────
+// The single IANA timezone all schedule generation, the EPG, the schedule
+// editor, and live playback are expressed in. Stored as UTC under the hood; this
+// setting only governs how those instants are authored and displayed.
+
+export async function getBroadcastTimezone(): Promise<string> {
+  try {
+    const row = await prisma.adminPreference.findFirst({
+      where: { stationId: null, settingKey: BROADCAST_TIMEZONE_KEY },
+    })
+    if (!row?.settingValue) return DEFAULT_BROADCAST_TIMEZONE
+    const parsed = JSON.parse(row.settingValue)
+    return isValidTimeZone(parsed) ? parsed : DEFAULT_BROADCAST_TIMEZONE
+  } catch {
+    return DEFAULT_BROADCAST_TIMEZONE
+  }
+}
+
+export async function saveBroadcastTimezone(tz: unknown): Promise<string> {
+  if (!isValidTimeZone(tz)) {
+    throw new Error('Invalid timezone. Expected an IANA identifier such as "Australia/Sydney".')
+  }
+  const value = tz
+
+  const existing = await prisma.adminPreference.findFirst({
+    where: { stationId: null, settingKey: BROADCAST_TIMEZONE_KEY },
+  })
+  if (existing) {
+    await prisma.adminPreference.update({
+      where: { id: existing.id },
+      data: { settingValue: JSON.stringify(value) },
+    })
+  } else {
+    await prisma.adminPreference.create({
+      data: { stationId: null, settingKey: BROADCAST_TIMEZONE_KEY, settingValue: JSON.stringify(value) },
+    })
+  }
+
+  // Apply immediately so subsequent server-side Date math (scheduler generation,
+  // playback day resolution) uses the new broadcast zone within this process.
+  applyProcessTimezone(value)
+  return value
+}
+
+// Sets process.env.TZ so the existing local-time Date logic across the scheduler
+// and playback engine operates in the broadcast zone. Node honours runtime TZ
+// changes for subsequent Date operations.
+export function applyProcessTimezone(tz: string): void {
+  if (!isValidTimeZone(tz)) return
+  process.env.TZ = tz
+}
+
+// Loads the persisted broadcast timezone and applies it to the process. Called
+// once at server startup before the scheduler runs.
+export async function initBroadcastTimezone(): Promise<string> {
+  const tz = await getBroadcastTimezone()
+  applyProcessTimezone(tz)
+  return tz
+}

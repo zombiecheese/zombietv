@@ -88,6 +88,7 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
   const [bodyScrollbarPx, setBodyScrollbarPx] = useState(0)
   const [timelineScrollLeft, setTimelineScrollLeft] = useState(0)
   const [viewportWidth, setViewportWidth] = useState(() => (typeof window === 'undefined' ? 0 : window.innerWidth))
+  const [tz, setTz] = useState<string | undefined>(undefined)
   // Vertical scroller + one representative viewport width for horizontal math
   const bodyScrollRef             = useRef<HTMLDivElement | null>(null)
   const timelineViewportRef       = useRef<HTMLDivElement | null>(null)
@@ -191,6 +192,17 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
     return () => clearInterval(t)
   }, [clockOffsetMs])
 
+  // Load the configured broadcast timezone so every displayed time aligns to it,
+  // regardless of the viewer's own browser timezone.
+  useEffect(() => {
+    let alive = true
+    fetch('/api/app-settings')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (alive && d && typeof d.broadcastTimezone === 'string') setTz(d.broadcastTimezone) })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [])
+
   useEffect(() => {
     const measureScrollbar = () => {
       const el = bodyScrollRef.current
@@ -228,6 +240,19 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
     })
   }, [nowMs, stations])
 
+  // Zone-aware display helpers — all times render in the configured broadcast
+  // timezone (falls back to the viewer's local zone until it loads).
+  const tzTime = (value: number | string, withSeconds = false) =>
+    new Date(value).toLocaleTimeString('en-AU', {
+      hour: '2-digit',
+      minute: '2-digit',
+      ...(withSeconds ? { second: '2-digit' as const } : {}),
+      hour12: false,
+      timeZone: tz,
+    })
+  const tzWeekday = (value: number | string) =>
+    new Date(value).toLocaleDateString('en-AU', { weekday: 'short', timeZone: tz })
+
   // ── Time axis ─────────────────────────────────────────────────────────────
   const startMs      = nowMs - (nowMs % (60 * 60 * 1000))  // floor to hour
   const nowOffsetPx  = ((nowMs - startMs) / 3_600_000) * SLOT_HOUR_PX
@@ -237,7 +262,7 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
   const timeLabels = Array.from({ length: totalHours }, (_, i) => {
     const t = new Date(startMs + i * 3_600_000)
     return {
-      label:    t.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false }),
+      label:    tzTime(t.getTime()),
       offsetPx: i * SLOT_HOUR_PX,
     }
   })
@@ -259,12 +284,7 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
   }, [startMs])
 
   if (compact) {
-    const nowLabel = new Date(nowMs).toLocaleTimeString('en-AU', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    })
+    const nowLabel = tzTime(nowMs, true)
 
     return (
       <div style={{
@@ -332,7 +352,7 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
           </span>
           {nextSlot && (
               <span style={{ color: '#4a7fb5', flexShrink: 0, fontSize: scaleFontSize(0.65, scale) }}>
-              NEXT {new Date(nextSlot.startTime).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false })} {nextSlot.title}
+              NEXT {tzTime(nextSlot.startTime)} {nextSlot.title}
             </span>
           )}
         </div>
@@ -408,12 +428,7 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
   const isMobile = viewportWidth > 0 && viewportWidth < 900
 
   if (isMobile) {
-    const nowLabel = new Date(nowMs).toLocaleTimeString('en-AU', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    })
+    const nowLabel = tzTime(nowMs, true)
 
     const mobileStations = stations.map((station) => {
       const stationSlots = slots[station.id] ?? []
@@ -521,8 +536,8 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
               {currentSlot?.title ?? 'OFF AIR'}
             </div>
             <div style={{ color: '#a8c4e0', fontSize: '0.72rem', lineHeight: 1.5 }}>
-              {currentSlot ? `Ends ${new Date(currentSlot.endTime).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false })}` : 'No current slot is scheduled yet.'}
-              {nextSlot ? ` Next: ${new Date(nextSlot.startTime).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false })} ${nextSlot.title}` : ''}
+              {currentSlot ? `Ends ${tzTime(currentSlot.endTime)}` : 'No current slot is scheduled yet.'}
+              {nextSlot ? ` Next: ${tzTime(nextSlot.startTime)} ${nextSlot.title}` : ''}
             </div>
           </button>
 
@@ -560,14 +575,14 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
                   {current?.title ?? 'OFF AIR'}
                 </div>
                 <div style={{ color: '#a8c4e0', fontSize: '0.7rem', lineHeight: 1.5, marginBottom: 8 }}>
-                  {current ? `Now until ${new Date(current.endTime).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false })}` : 'No current slot.'}
-                  {next ? ` Next: ${new Date(next.startTime).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false })} ${next.title}` : ''}
+                  {current ? `Now until ${tzTime(current.endTime)}` : 'No current slot.'}
+                  {next ? ` Next: ${tzTime(next.startTime)} ${next.title}` : ''}
                 </div>
                 {upcoming.length ? (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                     {upcoming.map((slot) => (
                       <span key={slot.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 8px', borderRadius: 999, backgroundColor: 'rgba(30,58,95,0.65)', color: '#dbe9ff', fontSize: '0.62rem' }}>
-                        {new Date(slot.startTime).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false })}
+                        {tzTime(slot.startTime)}
                         {slot.title}
                       </span>
                     ))}
@@ -823,7 +838,7 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
                     const episodeLabel = slot.seasonNumber != null
                       ? `S${slot.seasonNumber}E${slot.episodeNumber}`
                       : null
-                    const dayLabel = new Date(slot.startTime).toLocaleDateString('en-AU', { weekday: 'short' }).toUpperCase()
+                    const dayLabel = tzWeekday(slot.startTime).toUpperCase()
                     const titleWithEpisode = episodeLabel
                       ? `${slot.title} · ${episodeLabel}`
                       : slot.title

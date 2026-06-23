@@ -83,6 +83,12 @@ export default function SchedulePage() {
   const [msg,     setMsg]     = useState('')
   const [regen,   setRegen]   = useState(false)
   const [progress, setProgress] = useState<ScheduleProgress | null>(null)
+  const [tz, setTz] = useState<string | undefined>(undefined)
+
+  // Render slot times in the configured broadcast timezone so the editor matches
+  // the live EPG and playback regardless of the admin's own browser timezone.
+  const tzTime = (value: number | string) =>
+    new Date(value).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
 
   // Drag/drop state
   const dragId   = useRef<string | null>(null)
@@ -111,6 +117,15 @@ export default function SchedulePage() {
   }, [station, date])
 
   useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    let alive = true
+    fetch('/api/app-settings')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (alive && d && typeof d.broadcastTimezone === 'string') setTz(d.broadcastTimezone) })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [])
 
   const openEdit = (s: Slot) => {
     setEditing(s)
@@ -335,7 +350,7 @@ export default function SchedulePage() {
                     }}
                   >
                     <td style={{ ...td, color: '#2a4a6e', userSelect: 'none' }}>⠿</td>
-                    <td style={td}>{new Date(s.startTime).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',hour12:false})}</td>
+                    <td style={td}>{tzTime(s.startTime)}</td>
                     <td style={td}>{s.durationMins}m</td>
                     <td style={{ ...td, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {(s.metadata?.title as string) ?? s.showTitle ?? '—'}
@@ -372,7 +387,7 @@ export default function SchedulePage() {
           <div style={modal}>
             <h3 style={{ margin: '0 0 16px', color: '#ff6600', fontSize: '0.9rem' }}>Override Slot</h3>
             <p style={{ margin: '0 0 12px', color: '#4a7fb5', fontSize: '0.72rem' }}>
-              {new Date(editing.startTime).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',hour12:false})}
+              {tzTime(editing.startTime)}
               {' · '}{editing.durationMins}m
             </p>
             <Field label="Content Source">

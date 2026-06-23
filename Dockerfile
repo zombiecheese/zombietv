@@ -31,8 +31,11 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+# Default broadcast timezone. Overridable via the docker-compose `TZ` env and,
+# at runtime, by the admin "Broadcast Timezone" setting (applied on startup).
+ENV TZ=Australia/Sydney
 
-RUN apt-get update -y && apt-get install -y --no-install-recommends openssl libssl3 \
+RUN apt-get update -y && apt-get install -y --no-install-recommends openssl libssl3 tzdata \
 	&& rm -rf /var/lib/apt/lists/*
 
 COPY package*.json ./

@@ -13,19 +13,22 @@ import {
   getSchedulerIntervalHours,
   saveSchedulerHorizonDays,
   saveSchedulerIntervalHours,
+  getBroadcastTimezone,
+  saveBroadcastTimezone,
 } from '@/lib/app-settings'
 import { restartScheduler } from '@/lib/scheduler'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
-  const [appName, appTagline, schedulerHorizonDays, schedulerIntervalHours] = await Promise.all([
+  const [appName, appTagline, schedulerHorizonDays, schedulerIntervalHours, broadcastTimezone] = await Promise.all([
     getAppName(),
     getAppTagline(),
     getSchedulerHorizonDays(),
     getSchedulerIntervalHours(),
+    getBroadcastTimezone(),
   ])
-  return NextResponse.json({ appName, appTagline, schedulerHorizonDays, schedulerIntervalHours }, {
+  return NextResponse.json({ appName, appTagline, schedulerHorizonDays, schedulerIntervalHours, broadcastTimezone }, {
     headers: { 'Cache-Control': 'public, max-age=30' },
   })
 }
@@ -67,7 +70,23 @@ export async function POST(req: NextRequest) {
     schedulerSettingsChanged = true
   }
 
-  if (!result.appName && result.appTagline === undefined && !result.schedulerHorizonDays && !result.schedulerIntervalHours) {
+  if (body?.broadcastTimezone !== undefined) {
+    try {
+      result.broadcastTimezone = await saveBroadcastTimezone(body.broadcastTimezone)
+      // Regenerate against the new broadcast zone on the next cycle.
+      schedulerSettingsChanged = true
+    } catch (err: any) {
+      return NextResponse.json({ error: String(err?.message ?? 'Invalid timezone.') }, { status: 400 })
+    }
+  }
+
+  if (
+    !result.appName &&
+    result.appTagline === undefined &&
+    !result.schedulerHorizonDays &&
+    !result.schedulerIntervalHours &&
+    result.broadcastTimezone === undefined
+  ) {
     return NextResponse.json({ error: 'No valid settings provided.' }, { status: 400 })
   }
 
