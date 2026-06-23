@@ -55,6 +55,10 @@ export interface PlaybackState {
   // Bumper info (opening/closing idents for the current slot)
   openBumperId:    string | null  // YouTube video ID for opening bumper
   closeBumperId:   string | null  // YouTube video ID for closing bumper
+
+  // Overnight close-down: a static graphic to display full-screen (looped
+  // YouTube video/playlist close-downs come through the normal filler path).
+  offlineGraphicUrl: string | null
 }
 
 interface YoutubePoolItem {
@@ -101,6 +105,7 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
     fillerId:         null,
     openBumperId:     null,
     closeBumperId:    null,
+    offlineGraphicUrl: null,
   }
 
   // ── Find the active schedule for today ──────────────────────────────────
@@ -259,6 +264,21 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
   // Extract filler window info from slot metadata (for filler-only slots/windows)
   const slotMetadata = fromJsonObject<Record<string, unknown>>(activeSlot.metadata) ?? {}
 
+  // Overnight close-down with a static graphic: show it full-screen on the
+  // offline layer. (Video/playlist close-downs carry their id in fillerId and
+  // fall through to the normal looped-filler path below.)
+  const closedown = slotMetadata.closedown as { type?: string; value?: string } | undefined
+  if (closedown && closedown.type === 'graphic' && closedown.value) {
+    return {
+      ...offline,
+      serverTimeMs:     now,
+      slotStartMs,
+      slotEndMs,
+      nextTransitionMs: slotEndMs,
+      offlineGraphicUrl: String(closedown.value),
+    }
+  }
+
   let fillerCategories: string[] = ['ads', 'filler', 'music']
   
   // Check for new fillerWindows format
@@ -370,6 +390,7 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
 
     openBumperId,
     closeBumperId,
+    offlineGraphicUrl: null,
   }
 }
 

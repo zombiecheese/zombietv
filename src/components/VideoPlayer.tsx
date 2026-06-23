@@ -130,6 +130,7 @@ export default function VideoPlayer({
   isLoading,
 }: Props) {
   const [layer, setLayer]               = useState<ActiveLayer>('offline')
+  const [offlineGraphic, setOfflineGraphic] = useState('')
   const [plexHlsUrl, setPlexHlsUrl]     = useState('')
   const [plexOffsetMs, setPlexOffsetMs] = useState(0)
   const [youtubeSrc, setYoutubeSrc]     = useState('')
@@ -249,6 +250,7 @@ export default function VideoPlayer({
       setShowRating(false)
       setYoutubeSrc('')
       youtubeSrcRef.current = ''
+      setOfflineGraphic(s.offlineGraphicUrl ?? '')
       setLayer('offline')
       return
     }
@@ -576,7 +578,7 @@ export default function VideoPlayer({
   if (layer === 'offline') {
     return (
       <>
-        <OfflineScreen message="OFF AIR" />
+        <OfflineScreen message="OFF AIR" graphicUrl={offlineGraphic} />
         <div style={{
           position:   'fixed',
           top:        'auto',
@@ -1026,7 +1028,22 @@ export default function VideoPlayer({
 
 // ── Offline / test-card screen ────────────────────────────────────────────────
 
-function OfflineScreen({ message }: { message: string }) {
+function OfflineScreen({ message, graphicUrl }: { message: string; graphicUrl?: string }) {
+  if (graphicUrl) {
+    return (
+      <div style={{
+        width:           '100%',
+        height:          '100%',
+        backgroundColor: '#000',
+        display:         'flex',
+        alignItems:      'center',
+        justifyContent:  'center',
+      }}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={graphicUrl} alt="Close down" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+      </div>
+    )
+  }
   return (
     <div style={{
       width:           '100%',

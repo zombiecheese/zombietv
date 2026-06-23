@@ -75,6 +75,17 @@ interface FillerWindow {
   category: string
   openVideo?: { enabled?: boolean; videoId?: string }
   closeVideo?: { enabled?: boolean; videoId?: string }
+  // Optional pinned Plex show: the window plays this specific series and
+  // advances its episode progression normally instead of YouTube filler.
+  plexShowKey?: string
+  plexShowTitle?: string
+  fillMode?: 'fill' | 'single'   // fill the window with back-to-back episodes, or one episode then filler
+  strip?: boolean                 // weeknight strip (daily Mon–Fri) vs weekly cadence
+}
+
+interface ClosedownContent {
+  type: 'graphic' | 'youtube_video' | 'youtube_playlist'
+  value: string
 }
 interface SlotConfigSpec {
   key: string
@@ -144,6 +155,18 @@ function normalizeStationRules(raw: unknown): StationRules {
       break_interval_movie: Number(ad.break_interval_movie ?? 30),
     },
   }
+}
+
+// Resolves the optional close-down loop content (graphic / YouTube video /
+// playlist) configured on a station's rules. Returns null when unset/invalid.
+function resolveClosedownContent(raw: Record<string, unknown>): ClosedownContent | null {
+  const c = raw.closedown_content as Record<string, unknown> | undefined
+  if (!c || typeof c !== 'object') return null
+  const type = String(c.type ?? '')
+  const value = String(c.value ?? '').trim()
+  if (!value) return null
+  if (type !== 'graphic' && type !== 'youtube_video' && type !== 'youtube_playlist') return null
+  return { type, value }
 }
 
 function parseEpisodeSnapshot(value: unknown): EpisodeSnapshotItem[] {
@@ -1433,37 +1456,164 @@ export async function runScheduler(
               }
 
               if (effectiveContentType === 'filler' || effectiveContentType === 'news') {
-                const fillerDuration = remainingMins
-                const fillerAdBreaks = buildAdBreaks(fillerDuration, adIntervalTv, adEnabled)
-
                 const isNews = effectiveContentType === 'news'
-                const isClosedown = overnightClosedown && /infomercial/i.test(block.name)
-                // Drive the playback filler selector to the right YouTube category:
-                // news bulletins for news slots, a transmission-pause loop when the
-                // station closes down overnight, otherwise general filler.
+                const isClosedownBlock = overnightClosedown && /infomercial/i.test(block.name)
+                const closedownContent = isClosedownBlock ? resolveClosedownContent(rawRules) : null
+                const windows: FillerWindow[] = (!isNews && activeStationSlot?.fillerWindows?.length)
+                  ? activeStationSlot.fillerWindows
+                  : []
+
+                // Creates a single YouTube filler slot for the given duration. For
+                // close-down blocks the custom loop content (video/playlist) is used
+                // and the close-down descriptor is stamped onto the slot metadata so
+                // playback can show a graphic or loop the configured content.
+                const createFillerSlot = async (startAt: Date, mins: number, categories: string[], titleOverride?: string) => {
+                  if (mins < 1) return
+                  const ads = buildAdBreaks(mins, adIntervalTv, adEnabled)
+                  const closedownYoutube = closedownContent && (closedownContent.type === 'youtube_video' || closedownContent.type === 'youtube_playlist')
+                  const fid = categories.includes('news')
+                    ? (fillerPools.news ?? fillerPools.ads ?? fillerPools.music ?? null)
+                    : closedownYoutube
+                      ? closedownContent!.value
+                      : (fillerPools.ads ?? fillerPools.music ?? null)
+                  await prisma.slot.create({
+                    data: {
+                      scheduleId:    schedule.id,
+                      startTime:     startAt,
+                      durationMins:  mins,
+                      contentSource: 'youtube',
+                      adBreaks:      ads.length ? toJson(ads) : null,
+                      fillerId:      fid,
+                      fillerDuration: null,
+                      metadata:      toJson({
+                        blockName: block.name,
+                        title: titleOverride ?? (isClosedownBlock ? 'Close Down' : block.name),
+                        fillerCategories: categories,
+                        ...(closedownContent ? { closedown: closedownContent } : {}),
+                      }),
+                    },
+                  })
+                }
+
+                if (windows.length) {
+                  // Honour each configured window in order.
+                  for (const w of windows) {
+                    const remain = differenceInMinutes(blockEnd, slotStart)
+                    if (remain < 1) break
+                    const winMins = Math.min(Math.max(0, Math.round(w.durationMins || 0)), remain)
+                    if (winMins < 1) continue
+                    const windowEndMs = addMinutes(slotStart, winMins).getTime()
+
+                    if (w.plexShowKey) {
+                      // Pinned Plex show: place its episodes, advancing progression.
+                      const weekday = getDay(slotStart)
+                      const isStrip = Boolean(w.strip) && weekday >= 1 && weekday <= 5
+                      const pinWeekday = isStrip ? STRIP_WEEKDAY : weekday
+                      const cadenceDays = isStrip ? 1 : EPISODE_PROGRESS_INTERVAL_DAYS
+                      const fillMode = w.fillMode === 'single' ? 'single' : 'fill'
+                      let placed = 0
+
+                      while (slotStart.getTime() < windowEndMs && (fillMode === 'fill' || placed < 1)) {
+                        const timeStr = `${String(slotStart.getHours()).padStart(2, '0')}:${String(slotStart.getMinutes()).padStart(2, '0')}`
+                        const progress = await prisma.showProgress.upsert({
+                          where: { stationId_plexShowKey: { stationId: station.id, plexShowKey: w.plexShowKey } },
+                          update: {},
+                          create: {
+                            stationId:        station.id,
+                            plexShowKey:      w.plexShowKey,
+                            showTitle:        w.plexShowTitle ?? 'Pinned Show',
+                            episodeOrderJson: toJson(await buildEpisodeSnapshotList(w.plexShowKey)),
+                            nextSeason:       1,
+                            nextEpisode:      1,
+                            totalSeasons:     1,
+                            totalEpisodes:    1,
+                            airedWeekday:     pinWeekday,
+                            airedTime:        timeStr,
+                          },
+                        }).catch(() => null)
+                        if (!progress) break
+
+                        const episodeOrder = await loadEpisodeSnapshot(progress)
+                        const episode = episodeOrder.find((e) => e.season === progress.nextSeason && e.episode === progress.nextEpisode) ?? null
+                        if (!episode) break
+
+                        const remainWin = Math.max(0, Math.round((windowEndMs - slotStart.getTime()) / 60_000))
+                        if (dayUsedMediaKeys.has(episode.ratingKey) || episode.durationMins > remainWin + 30) break
+
+                        const adBreaks   = buildAdBreaks(episode.durationMins, adIntervalTv, adEnabled)
+                        const adMins     = adBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
+                        const slotEnd    = addMinutes(slotStart, episode.durationMins + adMins)
+                        const alignedEnd = alignEndTime(slotEnd)
+                        const fillerMins = differenceInMinutes(alignedEnd, slotEnd)
+
+                        const mediaItem = await upsertMediaItem(episode)
+                        const slot = await prisma.slot.create({
+                          data: {
+                            scheduleId:    schedule.id,
+                            startTime:     slotStart,
+                            durationMins:  episode.durationMins,
+                            contentSource: 'plex',
+                            contentId:     episode.ratingKey,
+                            showTitle:     episode.showTitle ?? progress.showTitle,
+                            seasonNumber:  episode.seasonNumber,
+                            episodeNumber: episode.episodeNumber,
+                            adBreaks:      adBreaks.length ? toJson(adBreaks) : null,
+                            fillerId:      fillerMins > 0 ? (fillerPools.ads ?? fillerPools.music ?? null) : null,
+                            fillerDuration: fillerMins > 0 ? fillerMins : null,
+                            metadata:      toJson({
+                              blockName: block.name,
+                              showTitle: episode.showTitle ?? progress.showTitle,
+                              season:    episode.seasonNumber,
+                              episode:   episode.episodeNumber,
+                              reason:    'pinned_filler_show',
+                            }),
+                          },
+                        })
+                        await prisma.slotMediaItem.create({ data: { slotId: slot.id, mediaItemId: mediaItem.id, orderIndex: 0 } })
+                        await prisma.mediaItem.update({ where: { id: mediaItem.id }, data: { scheduledCount: { increment: 1 }, lastScheduled: new Date() } })
+                        await advanceShowProgress(progress, cadenceDays)
+
+                        incrementCount(dayTitleCounts, episode.showTitle ?? episode.title)
+                        incrementCount(daySeriesCounts, episode.showTitle)
+                        dayUsedMediaKeys.add(episode.ratingKey)
+                        recordAiring(globalAirings, episode.ratingKey, slotStart.getTime(), alignedEnd.getTime())
+                        slotStart = alignedEnd
+                        placed += 1
+                      }
+
+                      // Fill any leftover window time with filler.
+                      const remAfter = Math.min(differenceInMinutes(blockEnd, slotStart), Math.max(0, Math.round((windowEndMs - slotStart.getTime()) / 60_000)))
+                      if (remAfter >= 1) {
+                        await createFillerSlot(slotStart, remAfter, [w.category || 'filler'])
+                        slotStart = addMinutes(slotStart, remAfter)
+                      }
+                    } else {
+                      await createFillerSlot(slotStart, winMins, [w.category || 'filler'])
+                      slotStart = addMinutes(slotStart, winMins)
+                    }
+                  }
+
+                  // Any remaining block time after all windows → filler.
+                  const rem = differenceInMinutes(blockEnd, slotStart)
+                  if (rem >= 1) {
+                    await createFillerSlot(slotStart, rem, isClosedownBlock ? ['closedown'] : ['filler', 'music'])
+                  }
+                  slotStart = new Date(blockEnd)
+                  failedPlacementsAtCurrentStart = 0
+                  continue
+                }
+
+                // No per-window config (engine filler/news block or close-down) →
+                // a single filler block for the remainder.
+                const fillerDuration = remainingMins
                 const fillerCategories = isNews
                   ? ['news']
-                  : isClosedown
+                  : isClosedownBlock
                     ? ['closedown']
                     : /infomercial/i.test(block.name)
                       ? ['ads']
                       : ['filler', 'music']
-                const fillerId = isNews
-                  ? (fillerPools.news ?? fillerPools.ads ?? fillerPools.music ?? null)
-                  : (fillerPools.ads ?? fillerPools.music ?? null)
-
-                await prisma.slot.create({
-                  data: {
-                    scheduleId:    schedule.id,
-                    startTime:     slotStart,
-                    durationMins:  fillerDuration,
-                    contentSource: 'youtube',
-                    adBreaks:      fillerAdBreaks.length ? toJson(fillerAdBreaks) : null,
-                    fillerId,
-                    fillerDuration: null,
-                    metadata:      toJson({ blockName: block.name, title: isClosedown ? 'Close Down' : block.name, fillerCategories }),
-                  },
-                })
+                await createFillerSlot(slotStart, fillerDuration, fillerCategories)
                 slotStart = new Date(blockEnd)
                 failedPlacementsAtCurrentStart = 0
                 continue

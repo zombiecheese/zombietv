@@ -11,6 +11,10 @@ interface FillerWindow {
   category: string      // 'ads', 'filler', 'music', 'news'
   openVideo: SlotVideo
   closeVideo: SlotVideo
+  plexShowKey?: string       // optional: pin a specific Plex show to this window
+  plexShowTitle?: string
+  fillMode?: 'fill' | 'single'
+  strip?: boolean
 }
 interface SlotConfig {
   key: string
@@ -32,6 +36,7 @@ interface StationRules {
   allow_languages?: string[] | string
   deny_languages?: string[] | string
   overnight_closedown?: boolean
+  closedown_content?: { type: 'graphic' | 'youtube_video' | 'youtube_playlist'; value: string }
   time_blocks?: unknown
 }
 interface StationData {
@@ -244,6 +249,8 @@ export default function StationsPage() {
   const [newStationId, setNewStationId] = useState('')
   const [newStationName, setNewStationName] = useState('')
   const [savedSnapshot, setSavedSnapshot] = useState('')
+  const [renameId, setRenameId] = useState('')
+  const [renameName, setRenameName] = useState('')
 
   const snapshotOf = (f: StationData) => JSON.stringify({ rules: f.rules, branding: f.branding })
   const dirty = !!form && snapshotOf(form) !== savedSnapshot
@@ -281,8 +288,8 @@ export default function StationsPage() {
     return () => window.removeEventListener('beforeunload', handler)
   }, [dirty])
 
-  const select = (s: StationData) => {
-    if (dirty && !window.confirm('You have unsaved changes. Discard them and switch station?')) return
+  const select = (s: StationData, force = false) => {
+    if (!force && dirty && !window.confirm('You have unsaved changes. Discard them and switch station?')) return
     const clone: StationData = JSON.parse(JSON.stringify(s))
     if (!clone.rules) clone.rules = { ad_policy: { enabled: true, break_interval_tv: 15, break_interval_movie: 30 } }
     if (!clone.rules.ad_policy) clone.rules.ad_policy = { enabled: true, break_interval_tv: 15, break_interval_movie: 30 }
@@ -293,6 +300,8 @@ export default function StationsPage() {
     setSelected(s)
     setForm(clone)
     setSavedSnapshot(snapshotOf(clone))
+    setRenameId(s.id)
+    setRenameName(s.name)
     setDayType('weekday')
     setMsg('')
   }
@@ -351,8 +360,34 @@ export default function StationsPage() {
     await loadStations()
   }
 
+  const renameStation = async () => {
+    if (!selected) return
+    const nextId = renameId.trim().toLowerCase()
+    const nextName = renameName.trim()
+    if (!nextId || !nextName) { setMsg('✗ Provide both a channel ID and display name.'); return }
+    if (nextId === selected.id && nextName === selected.name) { setMsg('No changes to apply.'); return }
+    if (dirty && !window.confirm('You have unsaved slot/rule edits that will be discarded by a rename. Continue?')) return
+    if (nextId !== selected.id && !window.confirm(`Rename channel ID "${selected.id}" → "${nextId}"? This re-points all of its schedules, episode progress, events and settings.`)) return
+
+    const r = await fetch(`/api/admin/stations/${selected.id}/rename`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newId: nextId, newName: nextName }),
+    })
+    const payload = await r.json().catch(() => ({}))
+    if (!r.ok) { setMsg(`✗ ${payload.error ?? 'Could not rename station.'}`); return }
+
+    setMsg('✓ Channel renamed.')
+    const list = await fetch('/api/admin/stations').then((res) => res.json()).catch(() => [])
+    setStations(Array.isArray(list) ? list : [])
+    const updated = Array.isArray(list) ? list.find((s: StationData) => s.id === nextId) : null
+    if (updated) select(updated, true)
+    else { setSelected(null); setForm(null) }
+  }
+
   const setAdPolicy = (key: string, val: unknown) => setForm(f => f ? { ...f, rules: { ...f.rules, ad_policy: { ...f.rules.ad_policy, [key]: val } } } : f)
   const setOvernightClosedown = (val: boolean) => setForm(f => f ? { ...f, rules: { ...f.rules, overnight_closedown: val } } : f)
+  const setClosedownContent = (val: StationRules['closedown_content']) => setForm(f => f ? { ...f, rules: { ...f.rules, closedown_content: val } } : f)
   const setStationLanguages = (key: 'allow_languages' | 'deny_languages', next: string[]) => setForm(f => {
     if (!f) return f
     return { ...f, rules: { ...f.rules, [key]: next } }
@@ -436,6 +471,21 @@ export default function StationsPage() {
         {form && (
           <div style={{ flex: 1, overflowY: 'auto' }}>
             {msg && <p style={{ color: '#4CAF50', fontSize: '0.78rem', margin: '0 0 12px' }}>{msg}</p>}
+
+            <Section title="Channel Identity">
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr auto', gap: 10, alignItems: 'end' }}>
+                <Field label="Channel ID">
+                  <input value={renameId} onChange={e => setRenameId(e.target.value.replace(/\s+/g, '').toLowerCase())} style={inp} placeholder="lowercase id" />
+                </Field>
+                <Field label="Display Name">
+                  <input value={renameName} onChange={e => setRenameName(e.target.value)} style={inp} placeholder="Display name" />
+                </Field>
+                <button onClick={renameStation} style={{ ...btn, height: 38, alignSelf: 'end', padding: '0 18px', whiteSpace: 'nowrap', marginBottom: 0 }}>Rename</button>
+              </div>
+              <p style={{ color: '#4a7fb5', fontSize: '0.68rem', margin: '6px 0 0' }}>
+                Changing the ID re-points all of this channel&apos;s schedules, episode progress, events and settings. Rename before making unsaved slot/rule edits.
+              </p>
+            </Section>
 
             <Section title="Network Presets">
               <p style={{ color: '#4a7fb5', fontSize: '0.72rem', margin: '0 0 10px' }}>
@@ -611,6 +661,40 @@ export default function StationsPage() {
               <p style={{ color: '#4a7fb5', fontSize: '0.7rem', margin: '6px 0 0' }}>
                 When on, the deep-overnight infomercial windows play a transmission-pause (test pattern) loop instead of programming — the way ABC/SBS-style channels closed down overnight in the 1990s.
               </p>
+
+              {form.rules.overnight_closedown && (
+                <div style={{ marginTop: 12 }}>
+                  <Field label="Close-down loop content">
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 10 }}>
+                      <select
+                        value={form.rules.closedown_content?.type ?? 'none'}
+                        onChange={e => {
+                          const t = e.target.value
+                          if (t === 'none') setClosedownContent(undefined)
+                          else setClosedownContent({ type: t as 'graphic' | 'youtube_video' | 'youtube_playlist', value: form.rules.closedown_content?.value ?? '' })
+                        }}
+                        style={sel}
+                      >
+                        <option value="none">Test pattern (default)</option>
+                        <option value="graphic">Static graphic (image URL)</option>
+                        <option value="youtube_video">YouTube video (looped)</option>
+                        <option value="youtube_playlist">YouTube playlist (looped)</option>
+                      </select>
+                      {form.rules.closedown_content && (
+                        <input
+                          value={form.rules.closedown_content.value}
+                          onChange={e => setClosedownContent({ type: form.rules.closedown_content!.type, value: e.target.value })}
+                          style={inp}
+                          placeholder={form.rules.closedown_content.type === 'graphic' ? 'https://…/closedown.png' : 'YouTube video / playlist ID or URL'}
+                        />
+                      )}
+                    </div>
+                  </Field>
+                  <p style={{ color: '#4a7fb5', fontSize: '0.68rem', margin: '4px 0 0' }}>
+                    Plays on a loop during the overnight close-down windows until the station opens again.
+                  </p>
+                </div>
+              )}
             </Section>
 
             <Section title="Branding">
@@ -636,6 +720,62 @@ export default function StationsPage() {
         {!form && <p style={{ color: '#4a7fb5', fontSize: '0.78rem' }}>Select a station to edit.</p>}
       </div>
     </AdminShell>
+  )
+}
+
+function PlexShowPicker({ plexShowKey, plexShowTitle, onSelect, onClear }: {
+  plexShowKey?: string
+  plexShowTitle?: string
+  onSelect: (key: string, title: string) => void
+  onClear: () => void
+}) {
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<Array<{ plexKey: string; title: string; year?: number }>>([])
+  const [loading, setLoading] = useState(false)
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    if (query.trim().length < 2) { setResults([]); return }
+    let active = true
+    setLoading(true)
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/admin/blocked-media?type=show&limit=15&q=${encodeURIComponent(query.trim())}`)
+        const data = await r.json().catch(() => ({}))
+        if (active) setResults(Array.isArray(data?.results) ? data.results : [])
+      } finally {
+        if (active) setLoading(false)
+      }
+    }, 300)
+    return () => { active = false; clearTimeout(t) }
+  }, [query])
+
+  if (plexShowKey) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ color: '#cfe0f5', fontSize: '0.72rem' }}>📺 {plexShowTitle || plexShowKey}</span>
+        <button type="button" style={ghostBtn} onClick={onClear}>Clear</button>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <input value={query} onChange={e => { setQuery(e.target.value); setOpen(true) }} onFocus={() => setOpen(true)} style={inp} placeholder="Search Plex shows…" />
+      {open && query.trim().length >= 2 && (
+        <div style={{ ...suggestionsWrap, marginTop: 6 }}>
+          {loading
+            ? <div style={pickerEmpty}>Searching…</div>
+            : results.length
+              ? results.map(r => (
+                <button key={r.plexKey} type="button" style={suggestionBtn} onClick={() => { onSelect(r.plexKey, r.title); setQuery(''); setOpen(false) }}>
+                  <span>{r.title}{r.year ? ` (${r.year})` : ''}</span>
+                </button>
+              ))
+              : <div style={pickerEmpty}>No matching shows.</div>}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -684,7 +824,7 @@ function FillerWindowsBuilder({ slot, index, updateSlot }: { slot: SlotConfig; i
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
               <Field label="Duration (mins)">
                 <select value={window.durationMins} onChange={e => updateWindow(windowIndex, { durationMins: Number(e.target.value) })} style={sel}>
-                  {[30, 60, 90, 120, 150, 180, 210, 240].filter(d => d <= slotDurationMins).map(d => (
+                  {Array.from({ length: Math.max(1, Math.floor(slotDurationMins / 30)) }, (_, i) => (i + 1) * 30).map(d => (
                     <option key={d} value={d}>{d} min{d === 30 ? '' : 's'} ({(d / 60).toFixed(1)}h)</option>
                   ))}
                 </select>
@@ -697,7 +837,32 @@ function FillerWindowsBuilder({ slot, index, updateSlot }: { slot: SlotConfig; i
             </div>
             <button onClick={() => removeWindow(windowIndex)} style={{ ...btn, padding: '6px 10px', fontSize: '0.65rem', backgroundColor: '#3d0000', height: 'fit-content' }}>Remove</button>
           </div>
-          
+
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ color: '#4a7fb5', fontSize: '0.62rem', letterSpacing: '0.06em', marginBottom: 6 }}>PINNED PLEX SHOW (optional — plays &amp; advances a specific series)</div>
+            <PlexShowPicker
+              plexShowKey={window.plexShowKey}
+              plexShowTitle={window.plexShowTitle}
+              onSelect={(key, title) => updateWindow(windowIndex, { plexShowKey: key, plexShowTitle: title, fillMode: window.fillMode ?? 'fill' })}
+              onClear={() => updateWindow(windowIndex, { plexShowKey: undefined, plexShowTitle: undefined })}
+            />
+            {window.plexShowKey && (
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, color: '#a8c4e0', fontSize: '0.68rem' }}>
+                  Fill mode
+                  <select value={window.fillMode ?? 'fill'} onChange={e => updateWindow(windowIndex, { fillMode: e.target.value as 'fill' | 'single' })} style={{ ...sel, width: 'auto' }}>
+                    <option value="fill">Fill window with episodes</option>
+                    <option value="single">Single episode, then filler</option>
+                  </select>
+                </label>
+                <label style={checkLabel}>
+                  <input type="checkbox" checked={Boolean(window.strip)} onChange={e => updateWindow(windowIndex, { strip: e.target.checked })} />
+                  Weeknight strip (daily)
+                </label>
+              </div>
+            )}
+          </div>
+
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <div style={{ border: '1px solid #1e3a5f', padding: 8, backgroundColor: '#0d1f3c' }}>
               <label style={checkLabel}>
@@ -829,7 +994,9 @@ function slotSummary(slot: SlotConfig): string {
   if (slotMode(slot) === 'filler') {
     const totalMins = slot.fillerWindows.reduce((sum, w) => sum + w.durationMins, 0)
     const cats = Array.from(new Set(slot.fillerWindows.map((w) => w.category)))
-    return `Filler · ${(totalMins / 60).toFixed(1)}h · ${cats.join(', ') || 'unset'}`
+    const pinned = slot.fillerWindows.filter((w) => w.plexShowKey).length
+    const pinnedNote = pinned ? ` · ${pinned} pinned show${pinned > 1 ? 's' : ''}` : ''
+    return `Filler · ${(totalMins / 60).toFixed(1)}h · ${cats.join(', ') || 'unset'}${pinnedNote}`
   }
   const mix = weightBreakdown(slot).filter((b) => b.weight > 0).map((b) => `${labelForLib(b.lib)} ${b.pct}%`)
   const parts = mix.length ? [mix.join(' · ')] : ['No library weight — will fall back to filler']
