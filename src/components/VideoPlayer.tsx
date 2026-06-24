@@ -28,7 +28,6 @@ interface Props {
   plexToken:      string | null
   clockOffsetMs:  number
   isLoading:      boolean
-  controlsBottomOffset?: number
 }
 
 type ActiveLayer = 'plex' | 'youtube' | 'offline'
@@ -129,7 +128,6 @@ export default function VideoPlayer({
   plexToken,
   clockOffsetMs,
   isLoading,
-  controlsBottomOffset = 4,
 }: Props) {
   const [layer, setLayer]               = useState<ActiveLayer>('offline')
   const [offlineGraphic, setOfflineGraphic] = useState('')
@@ -234,17 +232,6 @@ export default function VideoPlayer({
       if (defaultSub) setSelectedSub(defaultSub.id)
     } catch {
       // Keep playback resilient if track metadata cannot be loaded.
-    }
-  }, [])
-
-  const handleLogout = useCallback(async () => {
-    try {
-      await fetch('/api/auth/logout', {
-        method: 'POST',
-        credentials: 'include',
-      })
-    } finally {
-      window.location.assign('/')
     }
   }, [])
 
@@ -620,61 +607,11 @@ export default function VideoPlayer({
   // ── Render ────────────────────────────────────────────────────────────────
 
   if (isLoading) {
-    return (
-      <>
-        <OfflineScreen message="TUNING..." />
-        <div style={{
-          position:   'fixed',
-          top:        'auto',
-          left:       'auto',
-          bottom:     controlsBottomOffset,
-          right:      4,
-          zIndex:     10010,
-          display:    'flex',
-          gap:        8,
-          alignItems: 'center',
-          height:     28,
-          padding:    '0 4px',
-          background: 'rgba(6, 20, 44, 0.88)',
-          border:     '1px solid rgba(74,127,181,0.9)',
-          borderRadius: 6,
-          opacity:    0.65,
-        }}>
-          <button type="button" onClick={handleLogout} title="Sign out of Plex" style={{ order: 0, flexShrink: 0, background: 'rgba(255,102,0,0.18)', border: '1px solid rgba(255,102,0,0.55)', color: '#fff', borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', lineHeight: 1, opacity: 0.55 }}>LOG OUT</button>
-          <button type="button" title="Subtitles (available for Plex playback only)" disabled style={{ order: 1, flexShrink: 0, padding: '4px 10px', fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', opacity: 0.55, cursor: 'not-allowed', color: '#dbe9ff', background: 'rgba(0,0,0,0.45)', border: '1px solid rgba(74,127,181,0.8)', borderRadius: 4 }}>CC</button>
-          <button type="button" title="Audio language (available for Plex playback only)" disabled style={{ order: 2, flexShrink: 0, padding: '4px 10px', fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', opacity: 0.55, cursor: 'not-allowed', color: '#dbe9ff', background: 'rgba(0,0,0,0.45)', border: '1px solid rgba(74,127,181,0.8)', borderRadius: 4 }}>AUDIO</button>
-        </div>
-      </>
-    )
+    return <OfflineScreen message="TUNING..." />
   }
 
   if (layer === 'offline') {
-    return (
-      <>
-        <OfflineScreen message="OFF AIR" graphicUrl={offlineGraphic} />
-        <div style={{
-          position:   'fixed',
-          top:        'auto',
-          left:       'auto',
-          bottom:     controlsBottomOffset,
-          right:      4,
-          zIndex:     10010,
-          display:    'flex',
-          gap:        8,
-          alignItems: 'center',
-          height:     28,
-          padding:    '0 4px',
-          background: 'rgba(6, 20, 44, 0.88)',
-          border:     '1px solid rgba(74,127,181,0.9)',
-          borderRadius: 6,
-          opacity:    0.65,
-        }}>
-          <button type="button" onClick={handleLogout} title="Sign out of Plex" style={{ order: 0, flexShrink: 0, background: 'rgba(255,102,0,0.18)', border: '1px solid rgba(255,102,0,0.55)', color: '#fff', borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', lineHeight: 1, opacity: 0.55 }}>LOG OUT</button>
-          <button type="button" title="Subtitles (available for Plex playback only)" disabled style={{ order: 1, flexShrink: 0, padding: '4px 10px', fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', opacity: 0.55, cursor: 'not-allowed', color: '#dbe9ff', background: 'rgba(0,0,0,0.45)', border: '1px solid rgba(74,127,181,0.8)', borderRadius: 4 }}>CC</button>
-          <button type="button" title="Audio language (available for Plex playback only)" disabled style={{ order: 2, flexShrink: 0, padding: '4px 10px', fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', opacity: 0.55, cursor: 'not-allowed', color: '#dbe9ff', background: 'rgba(0,0,0,0.45)', border: '1px solid rgba(74,127,181,0.8)', borderRadius: 4 }}>AUDIO</button>
-        </div>
-      </>
-    )
+    return <OfflineScreen message="OFF AIR" graphicUrl={offlineGraphic} />
   }
 
   const correctedNowMs = debugNowMs + clockOffsetMs
@@ -859,192 +796,92 @@ export default function VideoPlayer({
         </div>
       )}
 
-      {/* Audio / Subtitle track selectors — shown for Plex content, options populate from track metadata */}
-      <div style={{
-        position:   'fixed',
-        top:        'auto',
-        left:       'auto',
-        bottom:     controlsBottomOffset,
-        right:      4,
-        zIndex:     10010,
-        display:    'flex',
-        gap:        8,
-        alignItems: 'center',
-        height:     28,
-        padding:    '0 4px',
-        background: 'rgba(6, 20, 44, 0.88)',
-        border:     '1px solid rgba(74,127,181,0.9)',
-        borderRadius: 6,
-        opacity:    trackControlsEnabled ? 1 : 0.65,
-      }}>
-        <button
-          type="button"
-          onClick={handleLogout}
-          title="Sign out of Plex"
+      {/* Track menus only (buttons live in NowBar) */}
+      {showSubMenu && trackControlsEnabled && (
+        <div
+          ref={subMenuRef}
           style={{
-            order:        0,
-            flexShrink:   0,
-            background:   'rgba(255,102,0,0.18)',
-            border:       '1px solid rgba(255,102,0,0.55)',
-            color:        '#fff',
+            position: 'fixed',
+            bottom: 42,
+            right: 142,
+            minWidth: 260,
+            zIndex: 10020,
+            background: 'rgba(10,14,24,0.97)',
+            border: '1px solid rgba(255,255,255,0.2)',
             borderRadius: 4,
-            padding:      '4px 10px',
-            cursor:       'pointer',
-            fontSize:     '11px',
-            fontWeight:   700,
-            letterSpacing:'0.03em',
-            lineHeight:   1,
-            opacity:      trackControlsEnabled ? 0.85 : 0.45,
+            overflow: 'hidden',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.6)',
           }}
         >
-          LOG OUT
-        </button>
-
-        {/* Subtitle track selector */}
-        <div style={{ position: 'relative' }}>
+          <div style={{ padding: '7px 10px', color: '#4a7fb5', fontSize: '0.64rem', letterSpacing: '0.08em', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+            SUBTITLES (CHOOSE ONE)
+          </div>
+          {(subtitleTracks.length ? subtitleTracks : [{ id: 'none', title: 'No subtitles available for this video', selected: false, index: -1, language: '', languageCode: '' } as PlexTrack]).map((t) => (
             <button
+              key={t.id}
               type="button"
-              onClick={() => {
-                if (!trackControlsEnabled || !state?.contentId) return
-                if (subtitleTracks.length === 0) loadTracks(state.contentId)
-                setShowSubMenu((v) => !v)
-                setShowAudioMenu(false)
-              }}
-              title={trackControlsEnabled ? 'Subtitles' : 'Subtitles (available for Plex playback only)'}
-              disabled={!trackControlsEnabled}
+              onClick={() => t.id !== 'none' && handleSelectSub(t.id)}
               style={{
-                order:        1,
-                flexShrink:   0,
-                background:   selectedSub && selectedSub !== '0' ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.55)',
-                border:       selectedSub && selectedSub !== '0' ? '1px solid rgba(255,255,255,0.6)' : '1px solid rgba(255,255,255,0.25)',
-                color:        '#fff',
-                borderRadius: 4,
-                padding:      '4px 10px',
-                cursor:       trackControlsEnabled ? 'pointer' : 'not-allowed',
-                fontSize:     '11px',
-                fontWeight:   700,
-                letterSpacing:'0.03em',
-                lineHeight:   1,
-                opacity:      trackControlsEnabled ? 0.85 : 0.45,
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
+                padding: '7px 12px',
+                background: t.id === selectedSub ? 'rgba(255,255,255,0.12)' : 'transparent',
+                border: 'none',
+                color: t.id === selectedSub ? '#fff' : '#a8c4e0',
+                fontSize: '0.72rem',
+                cursor: t.id === 'none' ? 'default' : 'pointer',
+                borderBottom: '1px solid rgba(255,255,255,0.05)',
               }}
             >
-              CC
+              {t.id === selectedSub ? '✓ Current: ' : ''}{getReadableTrackLabel(t, 'subtitle')}
             </button>
-            {showSubMenu && trackControlsEnabled && (
-              <div
-                ref={subMenuRef}
-                style={{
-                position:   'absolute',
-                bottom:     '110%',
-                right:      0,
-                minWidth:   260,
-                background: 'rgba(10,14,24,0.97)',
-                border:     '1px solid rgba(255,255,255,0.2)',
-                borderRadius: 4,
-                overflow:   'hidden',
-                boxShadow:  '0 4px 16px rgba(0,0,0,0.6)',
-              }}>
-                <div style={{ padding: '7px 10px', color: '#4a7fb5', fontSize: '0.64rem', letterSpacing: '0.08em', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                  SUBTITLES (CHOOSE ONE)
-                </div>
-                {(subtitleTracks.length ? subtitleTracks : [{ id: 'none', title: 'No subtitles available for this video', selected: false, index: -1, language: '', languageCode: '' } as PlexTrack]).map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => t.id !== 'none' && handleSelectSub(t.id)}
-                    style={{
-                      display:    'block',
-                      width:      '100%',
-                      textAlign:  'left',
-                      padding:    '7px 12px',
-                      background: t.id === selectedSub ? 'rgba(255,255,255,0.12)' : 'transparent',
-                      border:     'none',
-                      color:      t.id === selectedSub ? '#fff' : '#a8c4e0',
-                      fontSize:   '0.72rem',
-                      cursor:     t.id === 'none' ? 'default' : 'pointer',
-                      borderBottom: '1px solid rgba(255,255,255,0.05)',
-                    }}
-                  >
-                    {t.id === selectedSub ? '✓ Current: ' : ''}{getReadableTrackLabel(t, 'subtitle')}
-                  </button>
-                ))}
-              </div>
-            )}
+          ))}
         </div>
+      )}
 
-        {/* Audio track selector */}
-        <div style={{ position: 'relative' }}>
+      {showAudioMenu && trackControlsEnabled && (
+        <div
+          ref={audioMenuRef}
+          style={{
+            position: 'fixed',
+            bottom: 42,
+            right: 70,
+            minWidth: 260,
+            zIndex: 10020,
+            background: 'rgba(10,14,24,0.97)',
+            border: '1px solid rgba(255,255,255,0.2)',
+            borderRadius: 4,
+            overflow: 'hidden',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.6)',
+          }}
+        >
+          <div style={{ padding: '7px 10px', color: '#4a7fb5', fontSize: '0.64rem', letterSpacing: '0.08em', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+            AUDIO LANGUAGE (CHOOSE ONE)
+          </div>
+          {(audioTracks.length ? audioTracks : [{ id: 'none', title: 'No alternate audio available', selected: false, index: -1, language: '', languageCode: '' } as PlexTrack]).map((t) => (
             <button
+              key={t.id}
               type="button"
-              onClick={() => {
-                if (!trackControlsEnabled || !state?.contentId) return
-                if (audioTracks.length === 0) loadTracks(state.contentId)
-                setShowAudioMenu((v) => !v)
-                setShowSubMenu(false)
-              }}
-              title={trackControlsEnabled ? 'Audio language' : 'Audio language (available for Plex playback only)'}
-              disabled={!trackControlsEnabled}
+              onClick={() => t.id !== 'none' && handleSelectAudio(t.id)}
               style={{
-                order:        2,
-                flexShrink:   0,
-                background:   'rgba(0,0,0,0.55)',
-                border:       '1px solid rgba(255,255,255,0.25)',
-                color:        '#fff',
-                borderRadius: 4,
-                padding:      '4px 10px',
-                cursor:       trackControlsEnabled ? 'pointer' : 'not-allowed',
-                fontSize:     '11px',
-                fontWeight:   700,
-                letterSpacing:'0.03em',
-                lineHeight:   1,
-                opacity:      trackControlsEnabled ? 0.85 : 0.45,
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
+                padding: '7px 12px',
+                background: t.id === selectedAudio ? 'rgba(255,255,255,0.12)' : 'transparent',
+                border: 'none',
+                color: t.id === selectedAudio ? '#fff' : '#a8c4e0',
+                fontSize: '0.72rem',
+                cursor: t.id === 'none' ? 'default' : 'pointer',
+                borderBottom: '1px solid rgba(255,255,255,0.05)',
               }}
             >
-              AUDIO
+              {t.id === selectedAudio ? '✓ Current: ' : ''}{getReadableTrackLabel(t, 'audio')}
             </button>
-            {showAudioMenu && trackControlsEnabled && (
-              <div
-                ref={audioMenuRef}
-                style={{
-                position:   'absolute',
-                bottom:     '110%',
-                right:      0,
-                minWidth:   260,
-                background: 'rgba(10,14,24,0.97)',
-                border:     '1px solid rgba(255,255,255,0.2)',
-                borderRadius: 4,
-                overflow:   'hidden',
-                boxShadow:  '0 4px 16px rgba(0,0,0,0.6)',
-              }}>
-                <div style={{ padding: '7px 10px', color: '#4a7fb5', fontSize: '0.64rem', letterSpacing: '0.08em', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                  AUDIO LANGUAGE (CHOOSE ONE)
-                </div>
-                {(audioTracks.length ? audioTracks : [{ id: 'none', title: 'No alternate audio available', selected: false, index: -1, language: '', languageCode: '' } as PlexTrack]).map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => t.id !== 'none' && handleSelectAudio(t.id)}
-                    style={{
-                      display:    'block',
-                      width:      '100%',
-                      textAlign:  'left',
-                      padding:    '7px 12px',
-                      background: t.id === selectedAudio ? 'rgba(255,255,255,0.12)' : 'transparent',
-                      border:     'none',
-                      color:      t.id === selectedAudio ? '#fff' : '#a8c4e0',
-                      fontSize:   '0.72rem',
-                      cursor:     t.id === 'none' ? 'default' : 'pointer',
-                      borderBottom: '1px solid rgba(255,255,255,0.05)',
-                    }}
-                  >
-                    {t.id === selectedAudio ? '✓ Current: ' : ''}{getReadableTrackLabel(t, 'audio')}
-                  </button>
-                ))}
-              </div>
-            )}
+          ))}
         </div>
-      </div>
-
+      )}
 
       {/* Debug HUD: technical details for current playback state */}
       {debugAllowed && (

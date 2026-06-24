@@ -21,9 +21,10 @@ interface Props {
   clockOffsetMs: number
   isLoggedIn:    boolean
   onLoginClick:  () => void
+  onLogoutClick: () => void
 }
 
-export default function NowBar({ state, clockOffsetMs, isLoggedIn, onLoginClick }: Props) {
+export default function NowBar({ state, clockOffsetMs, isLoggedIn, onLoginClick, onLogoutClick }: Props) {
   const [clockStr, setClockStr] = useState('')
   const [stations, setStations] = useState<Record<string, { name: string; colour: string }>>(DEFAULT_STATIONS)
 
@@ -167,6 +168,28 @@ export default function NowBar({ state, clockOffsetMs, isLoggedIn, onLoginClick 
         gap:          6,
         paddingRight: 8,
       }}>
+        {isLoggedIn && (
+          <button
+            type="button"
+            title="Sign out of Plex"
+            onClick={onLogoutClick}
+            style={{
+              height:       22,
+              minWidth:     70,
+              padding:      '0 8px',
+              borderRadius: 4,
+              border:       '1px solid rgba(255,102,0,0.65)',
+              background:   'rgba(255,102,0,0.18)',
+              color:        '#fff',
+              fontSize:     '0.64rem',
+              fontWeight:   700,
+              letterSpacing:'0.03em',
+              cursor:       'pointer',
+            }}
+          >
+            LOG OUT
+          </button>
+        )}
         <button
           type="button"
           title="Subtitles"

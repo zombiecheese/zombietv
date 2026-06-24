@@ -205,6 +205,17 @@ export default function Home() {
     } catch { /* ignore */ }
   }, [])
 
+  const handleLogoutClick = useCallback(async () => {
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'include',
+      })
+    } finally {
+      window.location.assign('/')
+    }
+  }, [])
+
   // ── Render ───────────────────────────────────────────────────────────────
   const epgHeight = epgMinimized ? EPG_BAR_HEIGHT_PX : EPG_HEIGHT_PX
   const nowBarHeight = epgMinimized ? 0 : NOWBAR_HEIGHT_PX  // Hide NowBar when EPG is minimized (buttons are in compact EPG bar)
@@ -325,7 +336,6 @@ export default function Home() {
               plexToken={session.plexToken}
               clockOffsetMs={clockOffsetMs}
               isLoading={isLoading}
-              controlsBottomOffset={epgMinimized ? 4 : (NOWBAR_HEIGHT_PX + 4)}
             />
           </div>
 
@@ -355,6 +365,7 @@ export default function Home() {
               clockOffsetMs={clockOffsetMs}
               isLoggedIn={session.isLoggedIn}
               onLoginClick={handleLoginClick}
+              onLogoutClick={handleLogoutClick}
             />
           )}
         </>
