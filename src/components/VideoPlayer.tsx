@@ -594,8 +594,9 @@ export default function VideoPlayer({
           borderRadius: 6,
           opacity:    0.65,
         }}>
-          <button type="button" title="Subtitles (available for Plex playback only)" disabled style={{ padding: '4px 10px', fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', opacity: 0.55, cursor: 'not-allowed', color: '#dbe9ff', background: 'rgba(0,0,0,0.45)', border: '1px solid rgba(74,127,181,0.8)', borderRadius: 4 }}>CC</button>
-          <button type="button" title="Audio language (available for Plex playback only)" disabled style={{ padding: '4px 10px', fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', opacity: 0.55, cursor: 'not-allowed', color: '#dbe9ff', background: 'rgba(0,0,0,0.45)', border: '1px solid rgba(74,127,181,0.8)', borderRadius: 4 }}>AUDIO</button>
+          <button type="button" onClick={handleLogout} title="Sign out of Plex" style={{ order: 0, flexShrink: 0, background: 'rgba(255,102,0,0.18)', border: '1px solid rgba(255,102,0,0.55)', color: '#fff', borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', lineHeight: 1, opacity: 0.9 }}>LOG OUT</button>
+          <button type="button" title="Subtitles (available for Plex playback only)" disabled style={{ order: 1, flexShrink: 0, padding: '4px 10px', fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', opacity: 0.55, cursor: 'not-allowed', color: '#dbe9ff', background: 'rgba(0,0,0,0.45)', border: '1px solid rgba(74,127,181,0.8)', borderRadius: 4 }}>CC</button>
+          <button type="button" title="Audio language (available for Plex playback only)" disabled style={{ order: 2, flexShrink: 0, padding: '4px 10px', fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', opacity: 0.55, cursor: 'not-allowed', color: '#dbe9ff', background: 'rgba(0,0,0,0.45)', border: '1px solid rgba(74,127,181,0.8)', borderRadius: 4 }}>AUDIO</button>
         </div>
       </>
     )
@@ -622,8 +623,9 @@ export default function VideoPlayer({
           borderRadius: 6,
           opacity:    0.65,
         }}>
-          <button type="button" title="Subtitles (available for Plex playback only)" disabled style={{ padding: '4px 10px', fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', opacity: 0.55, cursor: 'not-allowed', color: '#dbe9ff', background: 'rgba(0,0,0,0.45)', border: '1px solid rgba(74,127,181,0.8)', borderRadius: 4 }}>CC</button>
-          <button type="button" title="Audio language (available for Plex playback only)" disabled style={{ padding: '4px 10px', fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', opacity: 0.55, cursor: 'not-allowed', color: '#dbe9ff', background: 'rgba(0,0,0,0.45)', border: '1px solid rgba(74,127,181,0.8)', borderRadius: 4 }}>AUDIO</button>
+          <button type="button" onClick={handleLogout} title="Sign out of Plex" style={{ order: 0, flexShrink: 0, background: 'rgba(255,102,0,0.18)', border: '1px solid rgba(255,102,0,0.55)', color: '#fff', borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', lineHeight: 1, opacity: 0.9 }}>LOG OUT</button>
+          <button type="button" title="Subtitles (available for Plex playback only)" disabled style={{ order: 1, flexShrink: 0, padding: '4px 10px', fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', opacity: 0.55, cursor: 'not-allowed', color: '#dbe9ff', background: 'rgba(0,0,0,0.45)', border: '1px solid rgba(74,127,181,0.8)', borderRadius: 4 }}>CC</button>
+          <button type="button" title="Audio language (available for Plex playback only)" disabled style={{ order: 2, flexShrink: 0, padding: '4px 10px', fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', opacity: 0.55, cursor: 'not-allowed', color: '#dbe9ff', background: 'rgba(0,0,0,0.45)', border: '1px solid rgba(74,127,181,0.8)', borderRadius: 4 }}>AUDIO</button>
         </div>
       </>
     )
@@ -834,6 +836,8 @@ export default function VideoPlayer({
           onClick={handleLogout}
           title="Sign out of Plex"
           style={{
+            order:        0,
+            flexShrink:   0,
             background:   'rgba(255,102,0,0.18)',
             border:       '1px solid rgba(255,102,0,0.55)',
             color:        '#fff',
@@ -863,6 +867,8 @@ export default function VideoPlayer({
               title={trackControlsEnabled ? 'Subtitles' : 'Subtitles (available for Plex playback only)'}
               disabled={!trackControlsEnabled}
               style={{
+                order:        1,
+                flexShrink:   0,
                 background:   selectedSub && selectedSub !== '0' ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.55)',
                 border:       selectedSub && selectedSub !== '0' ? '1px solid rgba(255,255,255,0.6)' : '1px solid rgba(255,255,255,0.25)',
                 color:        '#fff',
@@ -933,6 +939,8 @@ export default function VideoPlayer({
               title={trackControlsEnabled ? 'Audio language' : 'Audio language (available for Plex playback only)'}
               disabled={!trackControlsEnabled}
               style={{
+                order:        2,
+                flexShrink:   0,
                 background:   'rgba(0,0,0,0.55)',
                 border:       '1px solid rgba(255,255,255,0.25)',
                 color:        '#fff',
