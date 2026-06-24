@@ -161,6 +161,7 @@ export default function VideoPlayer({
   const videoRef                        = useRef<HTMLVideoElement | null>(null)
   const hlsRef                          = useRef<Hls | null>(null)
   const clientSessionIdRef              = useRef(`zombietv-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`)
+  const isPageVisibleRef                = useRef(true)
   // Refs so applyState never needs to depend on derived state, avoiding reload loops
   const youtubeSrcRef                   = useRef<string>('')
   const hasUserInteractionRef           = useRef(false)
@@ -275,6 +276,15 @@ export default function VideoPlayer({
       youtubeSrcRef.current = ''
       setOfflineGraphic(s.offlineGraphicUrl ?? '')
       setLayer('offline')
+      return
+    }
+
+    if (!isPageVisibleRef.current) {
+      if (s.contentSource !== 'plex') {
+        setYoutubeSrc('')
+        youtubeSrcRef.current = ''
+        setLayer('offline')
+      }
       return
     }
 
@@ -412,6 +422,40 @@ export default function VideoPlayer({
     scheduleTransition(state)
     return () => { transitionTimerRef.current && clearTimeout(transitionTimerRef.current) }
   }, [state, applyState, scheduleTransition])
+
+  useEffect(() => {
+    const stopYoutubeIfNeeded = () => {
+      if (layer !== 'youtube') return
+      setYoutubeSrc('')
+      youtubeSrcRef.current = ''
+      setLayer('offline')
+    }
+
+    const handleVisibilityChange = () => {
+      const visible = document.visibilityState !== 'hidden'
+      isPageVisibleRef.current = visible
+
+      if (!visible) {
+        stopYoutubeIfNeeded()
+        return
+      }
+
+      if (state) applyState(state)
+    }
+
+    const handlePageHide = () => {
+      isPageVisibleRef.current = false
+      stopYoutubeIfNeeded()
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('pagehide', handlePageHide)
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('pagehide', handlePageHide)
+    }
+  }, [layer, state, applyState])
 
   useEffect(() => {
     if (layer !== 'plex' || !plexHlsUrl) return
@@ -594,7 +638,7 @@ export default function VideoPlayer({
           borderRadius: 6,
           opacity:    0.65,
         }}>
-          <button type="button" onClick={handleLogout} title="Sign out of Plex" style={{ order: 0, flexShrink: 0, background: 'rgba(255,102,0,0.18)', border: '1px solid rgba(255,102,0,0.55)', color: '#fff', borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', lineHeight: 1, opacity: 0.9 }}>LOG OUT</button>
+          <button type="button" onClick={handleLogout} title="Sign out of Plex" style={{ order: 0, flexShrink: 0, background: 'rgba(255,102,0,0.18)', border: '1px solid rgba(255,102,0,0.55)', color: '#fff', borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', lineHeight: 1, opacity: 0.55 }}>LOG OUT</button>
           <button type="button" title="Subtitles (available for Plex playback only)" disabled style={{ order: 1, flexShrink: 0, padding: '4px 10px', fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', opacity: 0.55, cursor: 'not-allowed', color: '#dbe9ff', background: 'rgba(0,0,0,0.45)', border: '1px solid rgba(74,127,181,0.8)', borderRadius: 4 }}>CC</button>
           <button type="button" title="Audio language (available for Plex playback only)" disabled style={{ order: 2, flexShrink: 0, padding: '4px 10px', fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', opacity: 0.55, cursor: 'not-allowed', color: '#dbe9ff', background: 'rgba(0,0,0,0.45)', border: '1px solid rgba(74,127,181,0.8)', borderRadius: 4 }}>AUDIO</button>
         </div>
@@ -623,7 +667,7 @@ export default function VideoPlayer({
           borderRadius: 6,
           opacity:    0.65,
         }}>
-          <button type="button" onClick={handleLogout} title="Sign out of Plex" style={{ order: 0, flexShrink: 0, background: 'rgba(255,102,0,0.18)', border: '1px solid rgba(255,102,0,0.55)', color: '#fff', borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', lineHeight: 1, opacity: 0.9 }}>LOG OUT</button>
+          <button type="button" onClick={handleLogout} title="Sign out of Plex" style={{ order: 0, flexShrink: 0, background: 'rgba(255,102,0,0.18)', border: '1px solid rgba(255,102,0,0.55)', color: '#fff', borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', lineHeight: 1, opacity: 0.55 }}>LOG OUT</button>
           <button type="button" title="Subtitles (available for Plex playback only)" disabled style={{ order: 1, flexShrink: 0, padding: '4px 10px', fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', opacity: 0.55, cursor: 'not-allowed', color: '#dbe9ff', background: 'rgba(0,0,0,0.45)', border: '1px solid rgba(74,127,181,0.8)', borderRadius: 4 }}>CC</button>
           <button type="button" title="Audio language (available for Plex playback only)" disabled style={{ order: 2, flexShrink: 0, padding: '4px 10px', fontSize: '11px', fontWeight: 700, letterSpacing: '0.03em', opacity: 0.55, cursor: 'not-allowed', color: '#dbe9ff', background: 'rgba(0,0,0,0.45)', border: '1px solid rgba(74,127,181,0.8)', borderRadius: 4 }}>AUDIO</button>
         </div>
@@ -848,7 +892,7 @@ export default function VideoPlayer({
             fontWeight:   700,
             letterSpacing:'0.03em',
             lineHeight:   1,
-            opacity:      0.9,
+            opacity:      trackControlsEnabled ? 0.85 : 0.45,
           }}
         >
           LOG OUT

@@ -3,11 +3,15 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getIronSession } from 'iron-session'
-import { sessionOptions, SessionData, defaultSession } from '@/lib/session'
+import { sessionOptions, SessionData } from '@/lib/session'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET(req: NextRequest) {
+  if (process.env.NODE_ENV !== 'development') {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  }
+
   try {
     const response = new NextResponse(JSON.stringify({ message: 'Test successful' }))
     const session = await getIronSession<SessionData>(req, response, sessionOptions)

@@ -18,7 +18,7 @@ Complacency is earned.
 
 | Layer | Choice |
 |---|---|
-| App | Next.js 14 (App Router, TypeScript, React 18) |
+| App | Next.js 16 (App Router, TypeScript, React 18) |
 | Database | PostgreSQL via Prisma |
 | Viewer auth | Plex OAuth |
 | Admin auth | Email/password login (bcrypt hash in admin user preferences) |
@@ -29,7 +29,7 @@ Complacency is earned.
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 24.x
 - A reachable Plex server
 - Plex client ID for viewer OAuth flow
 
@@ -93,6 +93,7 @@ Docker compose starts both PostgreSQL and the app. Container startup runs `prism
 ## Authentication Model
 
 - Viewer auth uses Plex OAuth routes under `/api/auth/plex/*`.
+- Viewer auth finalization uses `/auth/plex/finish` and `/api/auth/plex/complete` to recover from cross-site redirect/cookie races.
 - Admin auth uses `/api/admin/login` with bcrypt password check.
 - Admin logout (`/api/admin/logout`) drops admin privileges only and keeps the base user session intact.
 - Full session logout (`/api/auth/logout`) signs out the session entirely.

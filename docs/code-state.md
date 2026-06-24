@@ -6,7 +6,7 @@ This file is a concise implementation snapshot for active development.
 
 ## Runtime Overview
 
-- Next.js 14 App Router project with API routes and client admin pages.
+- Next.js 16 App Router project with API routes and client admin pages.
 - PostgreSQL + Prisma storage.
 - Viewer authentication through Plex OAuth.
 - Admin authentication through email/password (bcrypt hash stored in admin user preferences).
@@ -25,6 +25,7 @@ This file is a concise implementation snapshot for active development.
 ### Auth and Session
 
 - Viewer: Plex auth routes under `/api/auth/plex/init` and `/api/auth/plex/callback`.
+- Viewer auth finalization can continue through `/auth/plex/finish` and `/api/auth/plex/complete` when cross-site redirect cookie persistence is unreliable.
 - Viewer callback requires a remote Plex endpoint for playback-capable sessions.
 - Admin: `/api/admin/login` and `/api/admin/password`.
 - Admin dashboard protection is server-enforced in `src/app/admin/dashboard/layout.tsx`.
