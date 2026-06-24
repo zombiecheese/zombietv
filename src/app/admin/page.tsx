@@ -22,11 +22,36 @@ export default function Admin() {
 
   // If already logged in as admin, skip straight to dashboard
   useEffect(() => {
-    fetch('/api/auth/session')
-      .then((r) => r.ok ? r.json() : null)
-      .then((d) => { if (d?.isLoggedIn && d?.isAdmin) router.replace('/admin/dashboard') })
-      .catch(() => {})
-      .finally(() => setCheck(false))
+    let cancelled = false
+    const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+    const probeSession = async () => {
+      const delays = [0, 250, 750]
+      for (const delay of delays) {
+        if (delay > 0) await wait(delay)
+        try {
+          const res = await fetch('/api/auth/session', {
+            credentials: 'include',
+            cache: 'no-store',
+            headers: { 'Cache-Control': 'no-cache' },
+          })
+          if (!res.ok) continue
+          const d = await res.json()
+          if (cancelled) return
+          if (d?.isLoggedIn && d?.isAdmin) {
+            router.replace('/admin/dashboard')
+            return
+          }
+        } catch {
+          // Retry once the cookie write settles.
+        }
+      }
+
+      if (!cancelled) setCheck(false)
+    }
+
+    probeSession()
+    return () => { cancelled = true }
   }, [router])
 
   const handleLogin = async (e: React.FormEvent) => {

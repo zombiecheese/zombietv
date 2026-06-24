@@ -77,19 +77,41 @@ export default function Home() {
 
   // ── Fetch session on mount ────────────────────────────────────────────────
   useEffect(() => {
-    fetch('/api/auth/session')
-      .then((r) => r.ok ? r.json() : null)
-      .then((data) => {
-        if (data?.isLoggedIn) {
-          setSession({
-            isLoggedIn:    true,
-            plexToken:     data.plexToken ?? null,
-            plexServerUrl: data.plexServerUrl ?? null,
+    let cancelled = false
+    const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+    const probeSession = async () => {
+      const delays = [0, 250, 750]
+      for (const delay of delays) {
+        if (delay > 0) await wait(delay)
+        try {
+          const res = await fetch('/api/auth/session', {
+            credentials: 'include',
+            cache: 'no-store',
+            headers: { 'Cache-Control': 'no-cache' },
           })
+          if (!res.ok) continue
+          const data = await res.json()
+          if (cancelled) return
+          if (data?.isLoggedIn) {
+            setSession({
+              isLoggedIn:    true,
+              plexToken:     data.plexToken ?? null,
+              plexServerUrl: data.plexServerUrl ?? null,
+            })
+            setCheckingSession(false)
+            return
+          }
+        } catch {
+          // Retry once the redirect/cookie write settles.
         }
-      })
-      .catch(() => {})
-      .finally(() => setCheckingSession(false))
+      }
+
+      if (!cancelled) setCheckingSession(false)
+    }
+
+    probeSession()
+    return () => { cancelled = true }
   }, [])
 
   // ── Channel switching: fire static burst, then switch ────────────────────
@@ -110,7 +132,7 @@ export default function Home() {
   // ── Plex login ───────────────────────────────────────────────────────────
   const handleLoginClick = useCallback(async () => {
     try {
-      const res  = await fetch('/api/auth/plex/init', { method: 'POST' })
+      const res  = await fetch('/api/auth/plex/init', { method: 'POST', credentials: 'include', cache: 'no-store' })
       const data = await res.json()
       if (data.authUrl) window.location.href = data.authUrl
     } catch { /* ignore */ }

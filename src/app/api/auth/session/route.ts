@@ -1,6 +1,6 @@
 // GET /api/auth/session
 // Returns the current session data so client components know who is logged in.
-// Returns 401 if not authenticated.
+// Returns a normal JSON payload even when not authenticated.
 // Must be dynamic — reads cookies and SESSION_SECRET at request time.
 export const dynamic = 'force-dynamic'
 
@@ -11,18 +11,26 @@ import { sessionOptions, SessionData, defaultSession } from '@/lib/session'
 export async function GET(req: NextRequest) {
   const response = new NextResponse()
   const session  = await getIronSession<SessionData>(req, response, sessionOptions)
+  response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+  response.headers.set('Pragma', 'no-cache')
 
   if (!session.isLoggedIn) {
-    return NextResponse.json({ isLoggedIn: false }, { status: 401 })
+    return NextResponse.json(
+      { isLoggedIn: false },
+      { headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' } },
+    )
   }
 
-  return NextResponse.json({
-    isLoggedIn: true,
-    userId:     session.userId,
-    username:   session.username,
-    email:      session.email,
-    isAdmin:    session.isAdmin,
-    plexToken:  session.plexToken || null,
-    plexServerUrl: session.plexServerUrl || null,
-  })
+  return NextResponse.json(
+    {
+      isLoggedIn: true,
+      userId:     session.userId,
+      username:   session.username,
+      email:      session.email,
+      isAdmin:    session.isAdmin,
+      plexToken:  session.plexToken || null,
+      plexServerUrl: session.plexServerUrl || null,
+    },
+    { headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' } },
+  )
 }
