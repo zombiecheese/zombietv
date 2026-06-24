@@ -13,7 +13,7 @@
 import { prisma }                        from './db'
 import { getHolidayForDate, loadHolidaySettings }             from './holidays'
 import { PlexClient, type PlexMediaItem }                    from './plex-client'
-import { syncPlexCatalog, shouldSyncCatalog, getCatalogAutoSyncMaxAgeHours, getCatalogCandidates, getCatalogEpisode, getCatalogEpisodeList, applyRatingCeiling, getBlockedPlexKeys, getHolidayTagMap, getActiveClassByPlexKey } from './plex-catalog'
+import { syncPlexCatalog, shouldSyncCatalog, getCatalogAutoSyncMaxAgeHours, getCatalogCandidates, getCatalogEpisode, getCatalogEpisodeList, applyRatingCeiling, getBlockedPlexKeys, getHolidayTagMap, getActiveClassByPlexKey, getCatalogLibraryClassifications } from './plex-catalog'
 import { toJson, fromJsonObject }        from './json'
 import { parseClockToMinutes }           from './time'
 import { addDays, startOfDay, getDay, differenceInMinutes, addMinutes, differenceInCalendarDays } from 'date-fns'
@@ -413,6 +413,29 @@ function getMatchingStationBlock(
   return matches[0] ?? null
 }
 
+function normalizeDisabledLibraryToken(value: unknown): string {
+  const raw = String(value ?? '').trim().toLowerCase()
+  if (!raw) return ''
+  const collapsed = raw.replace(/[\s-]+/g, '_')
+  if (collapsed === 'tv' || collapsed === 'tvshow' || collapsed === 'tvshows' || collapsed === 'shows') return 'tv_shows'
+  if (collapsed === 'movie') return 'movies'
+  if (collapsed === 'anime') return 'animation'
+  if (collapsed === 'workout') return 'fitness'
+  return collapsed
+}
+
+function resolveItemLibraryClass(
+  item: PlexMediaItem,
+  classByKey: Record<string, string>,
+  classBySectionKey: Record<string, string>,
+): string {
+  const byKey = String(classByKey[item.ratingKey] ?? '').trim().toLowerCase()
+  if (byKey) return byKey
+  const sectionKey = String(item.sourceSectionKey ?? '').trim().toLowerCase()
+  if (!sectionKey) return ''
+  return String(classBySectionKey[sectionKey] ?? '').trim().toLowerCase()
+}
+
 // Apply a slot's per-slot allow-genres and library-weight exclusions to a candidate pool.
 // Empty lists mean "any" (no filter). Falls back to the original pool when the
 // filter would leave nothing, so a strict slot never starves the whole day.
@@ -420,17 +443,18 @@ function filterCandidatesBySlot(
   items: PlexMediaItem[],
   block: EffectiveStationBlock | null,
   classByKey: Record<string, string>,
+  classBySectionKey: Record<string, string>,
 ): PlexMediaItem[] {
   if (!block) return items
   const disabledLibraries = new Set(
     (block.disabledLibraries ?? [])
-      .map((key) => String(key).trim().toLowerCase())
+      .map((key) => normalizeDisabledLibraryToken(key))
       .filter(Boolean),
   )
   const afterLibraryExclusions = disabledLibraries.size
     ? items.filter((item) => {
       const sectionKey = String(item.sourceSectionKey ?? '').trim().toLowerCase()
-      const libraryType = String(classByKey[item.ratingKey] ?? '').trim().toLowerCase()
+      const libraryType = resolveItemLibraryClass(item, classByKey, classBySectionKey)
       if (sectionKey && disabledLibraries.has(sectionKey)) return false
       if (libraryType && disabledLibraries.has(libraryType)) return false
       return true
@@ -447,7 +471,7 @@ function filterCandidatesBySlot(
     const genres = (item.genres ?? []).map((g) => String(g).toLowerCase())
     if (allowGenres.length && !allowGenres.some((g) => genres.includes(g))) return false
     if (excludeZeroWeight) {
-      const cls = classByKey[item.ratingKey]
+      const cls = resolveItemLibraryClass(item, classByKey, classBySectionKey)
       if (cls && Number((weights as Record<string, number>)[cls] ?? 1) <= 0) return false
     }
     return true
@@ -461,9 +485,10 @@ function slotLibraryMultiplier(
   item: PlexMediaItem,
   weights: Record<string, number> | undefined,
   classByKey: Record<string, string>,
+  classBySectionKey: Record<string, string>,
 ): number {
   if (!weights) return 1
-  const cls = classByKey[item.ratingKey]
+  const cls = resolveItemLibraryClass(item, classByKey, classBySectionKey)
   if (!cls) return 1
   const w = Number(weights[cls] ?? 1)
   if (!Number.isFinite(w)) return 1
@@ -1164,6 +1189,13 @@ export async function runScheduler(
     const holidaySettings = await loadHolidaySettings()
     const showOwnership = await buildShowOwnershipMap()
     const activeClassByPlexKey = await getActiveClassByPlexKey()
+    const catalogClassifications = await getCatalogLibraryClassifications()
+    const activeClassBySectionKey: Record<string, string> = {}
+    for (const [sectionKey, className] of Object.entries(catalogClassifications)) {
+      const normalizedSectionKey = String(sectionKey).trim().toLowerCase()
+      if (!normalizedSectionKey) continue
+      activeClassBySectionKey[normalizedSectionKey] = String(className ?? '').trim().toLowerCase()
+    }
 
     // Cross-station airing ledger for the whole run. Stations are processed
     // sequentially, so each station can see what earlier stations already placed
@@ -1514,12 +1546,12 @@ export async function runScheduler(
               const effCeiling = stricterRating(block.ratingCeiling, classificationCeiling(date, slotMinsOfDay))
               const ceil = (items: PlexMediaItem[]) => items.filter((i) => ratingAllowed(i.contentRating, effCeiling))
 
-              const slotMovies = ceil(applySlotFilter ? filterCandidatesBySlot(validMovies, activeStationSlot, activeClassByPlexKey) : validMovies)
-              const slotShows  = ceil(applySlotFilter ? filterCandidatesBySlot(validShows, activeStationSlot, activeClassByPlexKey) : validShows)
-              const slotMoviesFallback = ceil(applySlotFilter ? filterCandidatesBySlot(generalMovies, activeStationSlot, activeClassByPlexKey) : generalMovies)
-              const slotShowsFallback  = ceil(applySlotFilter ? filterCandidatesBySlot(generalShows, activeStationSlot, activeClassByPlexKey) : generalShows)
+              const slotMovies = ceil(applySlotFilter ? filterCandidatesBySlot(validMovies, activeStationSlot, activeClassByPlexKey, activeClassBySectionKey) : validMovies)
+              const slotShows  = ceil(applySlotFilter ? filterCandidatesBySlot(validShows, activeStationSlot, activeClassByPlexKey, activeClassBySectionKey) : validShows)
+              const slotMoviesFallback = ceil(applySlotFilter ? filterCandidatesBySlot(generalMovies, activeStationSlot, activeClassByPlexKey, activeClassBySectionKey) : generalMovies)
+              const slotShowsFallback  = ceil(applySlotFilter ? filterCandidatesBySlot(generalShows, activeStationSlot, activeClassByPlexKey, activeClassBySectionKey) : generalShows)
               const slotLibWeights = applySlotFilter ? activeStationSlot?.libraryWeights : undefined
-              const libMultiplier = (item: PlexMediaItem) => slotLibraryMultiplier(item, slotLibWeights, activeClassByPlexKey)
+              const libMultiplier = (item: PlexMediaItem) => slotLibraryMultiplier(item, slotLibWeights, activeClassByPlexKey, activeClassBySectionKey)
 
               // Keys to avoid for this slot: anything already used today on this
               // station, anything on air right now on another station, plus every

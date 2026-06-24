@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getIronSession } from 'iron-session'
 import { sessionOptions, type SessionData } from '@/lib/session'
-import { prisma } from '@/lib/db'
-import { fromJsonObject } from '@/lib/json'
 import { getPlexServerUrlWithOptions, isPrivateHost } from '@/lib/plex-auth'
 
 // Mark this route as dynamic since it uses request.headers
@@ -23,19 +21,8 @@ export interface TracksResponse {
 }
 
 async function resolvePlexCredentials(session: SessionData) {
-  if (session.plexToken && session.plexServerUrl) {
+  if (session.isLoggedIn && session.plexToken && session.plexServerUrl) {
     return { plexToken: session.plexToken, plexServerUrl: session.plexServerUrl }
-  }
-  // Fall back to first admin user with Plex credentials
-  const admins = await prisma.user.findMany({
-    where: { isAdmin: true },
-    select: { preferences: true },
-  })
-  for (const admin of admins) {
-    const prefs = fromJsonObject<Record<string, string>>(admin.preferences)
-    if (prefs?.plexToken && prefs?.plexServerUrl) {
-      return { plexToken: prefs.plexToken, plexServerUrl: prefs.plexServerUrl }
-    }
   }
   return null
 }

@@ -157,6 +157,7 @@ export default function VideoPlayer({
   const prevStationIdRef                = useRef<string | null>(null)
   const prevSlotStartMsRef              = useRef<number | null>(null)
   const prevYoutubeQueueRef             = useRef<string>('')
+  const timelineAuthFailedRef            = useRef(false)
   const videoRef                        = useRef<HTMLVideoElement | null>(null)
   const hlsRef                          = useRef<Hls | null>(null)
   const clientSessionIdRef              = useRef(`zombietv-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`)
@@ -181,6 +182,7 @@ export default function VideoPlayer({
     timelineState: 'playing' | 'paused' | 'stopped' | 'buffering' = 'playing',
   ) => {
     if (s.contentSource !== 'plex' || !s.contentId) return
+    if (timelineAuthFailedRef.current) return
 
     const video = videoRef.current
     const videoTimeMs = video && Number.isFinite(video.currentTime) ? Math.max(0, Math.floor(video.currentTime * 1000)) : null
@@ -196,6 +198,7 @@ export default function VideoPlayer({
       await fetch('/api/plex-stream/timeline', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           contentId: s.contentId,
           offsetMs,
@@ -203,6 +206,10 @@ export default function VideoPlayer({
           state: timelineState,
           clientSessionId: clientSessionIdRef.current,
         }),
+      }).then((res) => {
+        if (res.status === 401) {
+          timelineAuthFailedRef.current = true
+        }
       })
     } catch {
       // Keep playback resilient even if timeline relay fails.
@@ -227,6 +234,9 @@ export default function VideoPlayer({
 
   // Derive current layer and URLs from playback state
   const applyState = useCallback((s: PlaybackState) => {
+    if (s.contentSource !== 'plex') {
+      timelineAuthFailedRef.current = false
+    }
     const correctedNow  = Date.now() + clockOffsetMs
     const offsetMs      = Math.max(0, s.startOffsetMs + (correctedNow - s.serverTimeMs))
 

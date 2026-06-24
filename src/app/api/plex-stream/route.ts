@@ -274,6 +274,17 @@ export async function GET(req: NextRequest) {
       metadataUrl = `${base}/library/metadata/${contentId}?X-Plex-Token=${plexToken}`
       metadataRes = await fetch(metadataUrl, { cache: 'no-store' })
     }
+
+    if (!metadataRes.ok && (metadataRes.status === 401 || metadataRes.status === 403)) {
+      // Endpoint or token-scoped route may have rotated; refresh once and retry.
+      const refreshed = await getPlexServerUrlWithOptions(plexToken, { allowLanFallback: false }).catch(() => '')
+      const refreshedBase = refreshed.replace(/\/$/, '')
+      if (refreshedBase && refreshedBase !== base) {
+        base = refreshedBase
+        metadataUrl = `${base}/library/metadata/${contentId}?X-Plex-Token=${plexToken}`
+        metadataRes = await fetch(metadataUrl, { cache: 'no-store' })
+      }
+    }
     
     if (!metadataRes.ok) {
       console.error(`Plex metadata fetch failed: ${metadataRes.status}`)

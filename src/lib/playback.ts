@@ -312,7 +312,7 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
     inAdBreak,
     currentAdBreak,
     inFiller,
-    fallbackId: inAdBreak ? (fillerPools.ads ?? fillerPools.music ?? null) : (activeSlot.fillerId ?? fillerPools.music ?? null),
+    fallbackId: inAdBreak ? (fillerPools.ads ?? null) : (activeSlot.fillerId ?? fillerPools.music ?? null),
     fillerCategories,
     windowSegment: hasWindowBumpers ? { startMs: slotStartMs, durationMins: activeSlot.durationMins } : null,
     openBumperId: hasWindowBumpers ? openBumperId : null,
@@ -371,7 +371,7 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
     contentId: inFiller
       ? (youtubeSelection?.currentVideoId ?? activeSlot.fillerId ?? fillerPools.music ?? null)
       : inAdBreak
-        ? (youtubeSelection?.currentVideoId ?? fillerPools.ads ?? fillerPools.music ?? null)
+        ? (youtubeSelection?.currentVideoId ?? fillerPools.ads ?? null)
         : hasWindowBumpers
           ? (youtubeSelection?.currentVideoId ?? activeSlot.fillerId ?? fillerPools.music ?? null)
           : activeSlot.contentId,
@@ -435,7 +435,7 @@ async function selectYoutubeSelection(params: {
 
   const seed = `${stationId}:${slotStartMs}:${segmentStartMs}:${inAdBreak ? 'ad' : (inFiller || windowSegment) ? 'filler' : 'youtube'}`
   const selectorCategories = inAdBreak
-    ? ['ads', 'filler', 'music']
+    ? ['ads']
     : fillerCategories
 
   const candidates = await prisma.youtubeContent.findMany({

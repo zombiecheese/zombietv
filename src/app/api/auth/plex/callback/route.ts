@@ -17,8 +17,18 @@ import { getPlexAuthRedirectBaseUrl } from '@/lib/plex-auth-redirect'
 import { prisma }   from '@/lib/db'
 import { toJson }   from '@/lib/json'
 
+function getRequestOrigin(req: NextRequest): string {
+  const xfHost = req.headers.get('x-forwarded-host')?.trim()
+  const xfProto = req.headers.get('x-forwarded-proto')?.trim()
+  if (xfHost) {
+    const proto = xfProto || 'https'
+    return `${proto}://${xfHost}`
+  }
+  return req.nextUrl.origin
+}
+
 export async function GET(req: NextRequest) {
-  const redirectBaseUrl = (await getPlexAuthRedirectBaseUrl()) ?? req.url
+  const redirectBaseUrl = (await getPlexAuthRedirectBaseUrl()) ?? getRequestOrigin(req)
   const url = new URL(req.url)
 
   // Pin ID comes from cookie (preferred) or query string (Plex appends ?pinID=)
@@ -85,13 +95,13 @@ export async function GET(req: NextRequest) {
     })
     console.log('[Auth/Callback] User upserted:', user.id)
 
-    // Create a generic Response that iron-session can modify
-    // Don't use NextResponse — use the base Response class for full control
-    const response = new Response()
-    
+    // Create redirect response first so iron-session writes cookies directly on
+    // the final response object returned to the browser/proxy chain.
+    const finalResponse = NextResponse.redirect(new URL('/', redirectBaseUrl))
+
     // Create the iron-session
     console.log('[Auth/Callback] Creating iron-session')
-    const session = await getIronSession<SessionData>(req, response as any, sessionOptions)
+    const session = await getIronSession<SessionData>(req, finalResponse, sessionOptions)
     session.isLoggedIn = true
     session.userId = user.id
     session.plexToken = authToken
@@ -104,39 +114,14 @@ export async function GET(req: NextRequest) {
     await session.save()
     console.log('[Auth/Callback] Session.save() completed')
 
-    // Get the session cookie from response headers
-    const setCookie = response.headers.get('set-cookie')
-    console.log('[Auth/Callback] Set-Cookie header:', setCookie ? 'FOUND' : 'MISSING')
-
-    // Create the redirect response with all necessary headers
-    const redirectHeaders = new Headers({
-      'Location': new URL('/', redirectBaseUrl).toString(),
+    console.log('[Auth/Callback] Session cookie written to redirect response')
+    finalResponse.cookies.set('plex_pin_id', '', {
+      httpOnly: true,
+      secure: shouldUseSecureCookies(),
+      sameSite: 'lax',
+      maxAge: 0,
+      path: '/',
     })
-    
-    // Add the session cookie if present
-    if (setCookie) {
-      redirectHeaders.set('set-cookie', setCookie)
-    }
-
-    // Create final response with status 307 (Temporary Redirect)
-    const finalResponse = new Response(null, {
-      status: 307,
-      headers: redirectHeaders,
-    })
-    
-    // Clear the pin cookie using the Set-Cookie header
-    // Format: Set-Cookie: name=; Max-Age=0; Path=/
-    const existingSetCookie = finalResponse.headers.get('set-cookie') || ''
-    const pinClearCookie = `plex_pin_id=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax${shouldUseSecureCookies() ? '; Secure' : ''}`
-    
-    // Append the pin clear cookie
-    if (existingSetCookie) {
-      // If there's already a Set-Cookie, we need to add both
-      // This is a bit tricky — we need to handle multiple Set-Cookie headers
-      finalResponse.headers.append('set-cookie', pinClearCookie)
-    } else {
-      finalResponse.headers.set('set-cookie', pinClearCookie)
-    }
     
     console.log('[Auth/Callback] Returning redirect response with session cookie')
     return finalResponse
