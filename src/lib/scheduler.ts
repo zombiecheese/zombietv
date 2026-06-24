@@ -422,11 +422,18 @@ function filterCandidatesBySlot(
   classByKey: Record<string, string>,
 ): PlexMediaItem[] {
   if (!block) return items
-  const disabledLibraries = new Set((block.disabledLibraries ?? []).map((key) => String(key).trim()).filter(Boolean))
+  const disabledLibraries = new Set(
+    (block.disabledLibraries ?? [])
+      .map((key) => String(key).trim().toLowerCase())
+      .filter(Boolean),
+  )
   const afterLibraryExclusions = disabledLibraries.size
     ? items.filter((item) => {
-      const sectionKey = String(item.sourceSectionKey ?? '').trim()
-      return !sectionKey || !disabledLibraries.has(sectionKey)
+      const sectionKey = String(item.sourceSectionKey ?? '').trim().toLowerCase()
+      const libraryType = String(classByKey[item.ratingKey] ?? '').trim().toLowerCase()
+      if (sectionKey && disabledLibraries.has(sectionKey)) return false
+      if (libraryType && disabledLibraries.has(libraryType)) return false
+      return true
     })
     : items
   if (!afterLibraryExclusions.length) return []

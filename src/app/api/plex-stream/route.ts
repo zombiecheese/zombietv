@@ -13,6 +13,10 @@ import { getIronSession } from 'iron-session'
 import { sessionOptions, SessionData } from '@/lib/session'
 import { getPlexRemoteOrigins, getPlexServerUrlWithOptions, isPrivateHost } from '@/lib/plex-auth'
 
+const REMOTE_ORIGINS_TTL_MS = 60_000
+const MAX_REMOTE_ORIGIN_CACHE_ENTRIES = 64
+const remoteOriginsCache = new Map<string, { expiresAt: number; origins: string[] }>()
+
 async function resolvePlexCredentials(session: SessionData): Promise<{ plexServerUrl: string; plexToken: string } | null> {
   if (session.isLoggedIn && session.plexServerUrl && session.plexToken) {
     return {
@@ -53,7 +57,12 @@ function isLanBaseUrl(url: string): boolean {
   }
 }
 
-async function resolveAllowedRemoteOrigins(plexToken: string, fallbackBase: string): Promise<Set<string>> {
+async function resolveAllowedRemoteOrigins(
+  plexToken: string,
+  fallbackBase: string,
+  options: { forceRefresh?: boolean } = {},
+): Promise<Set<string>> {
+  const now = Date.now()
   const allowed = new Set<string>()
   try {
     const fallbackOrigin = new URL(fallbackBase).origin
@@ -64,11 +73,34 @@ async function resolveAllowedRemoteOrigins(plexToken: string, fallbackBase: stri
     // Ignore invalid fallback URL.
   }
 
+  if (!options.forceRefresh) {
+    const cached = remoteOriginsCache.get(plexToken)
+    if (cached && cached.expiresAt > now) {
+      for (const origin of cached.origins) allowed.add(origin)
+      return allowed
+    }
+    if (cached && cached.expiresAt <= now) {
+      remoteOriginsCache.delete(plexToken)
+    }
+  }
+
+  let discovered: string[] = []
   try {
-    const discovered = await getPlexRemoteOrigins(plexToken)
+    discovered = await getPlexRemoteOrigins(plexToken)
     for (const origin of discovered) allowed.add(origin)
   } catch {
     // If discovery fails, keep any non-private fallback origin.
+  }
+
+  if (discovered.length) {
+    if (remoteOriginsCache.size >= MAX_REMOTE_ORIGIN_CACHE_ENTRIES) {
+      const oldest = remoteOriginsCache.keys().next().value
+      if (oldest) remoteOriginsCache.delete(oldest)
+    }
+    remoteOriginsCache.set(plexToken, {
+      expiresAt: now + REMOTE_ORIGINS_TTL_MS,
+      origins: discovered,
+    })
   }
 
   return allowed
@@ -217,7 +249,11 @@ export async function GET(req: NextRequest) {
     if (proxyUrl) {
       const target = decodeURIComponent(proxyUrl)
       const targetOrigin = new URL(target).origin
-      const allowedOrigins = await resolveAllowedRemoteOrigins(plexToken, base)
+      let allowedOrigins = await resolveAllowedRemoteOrigins(plexToken, base)
+      if (!allowedOrigins.has(targetOrigin)) {
+        // Retry once with a forced refresh to tolerate endpoint rotation.
+        allowedOrigins = await resolveAllowedRemoteOrigins(plexToken, base, { forceRefresh: true })
+      }
       if (!allowedOrigins.has(targetOrigin)) {
         return NextResponse.json({ error: 'Invalid proxy target' }, { status: 400 })
       }

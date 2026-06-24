@@ -11,8 +11,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getIronSession }            from 'iron-session'
 
 export const dynamic = 'force-dynamic'
-import { sessionOptions, SessionData, defaultSession } from '@/lib/session'
-import { checkPlexPin, getPlexUser, getPlexServerUrl } from '@/lib/plex-auth'
+import { sessionOptions, SessionData, shouldUseSecureCookies } from '@/lib/session'
+import { checkPlexPin, getPlexUser, getPlexServerUrlWithOptions } from '@/lib/plex-auth'
 import { getPlexAuthRedirectBaseUrl } from '@/lib/plex-auth-redirect'
 import { prisma }   from '@/lib/db'
 import { toJson }   from '@/lib/json'
@@ -47,23 +47,16 @@ export async function GET(req: NextRequest) {
     }
     console.log('[Auth/Callback] Got auth token from Plex')
 
-    // Fetch user profile and server URL in parallel
-    console.log('[Auth/Callback] Fetching user profile and server URL')
-    let plexUser: any
-    let plexServerUrl: string | null = null
-    
+    // Fetch user profile first, then require a remote Plex playback endpoint.
+    console.log('[Auth/Callback] Fetching user profile and remote server URL')
+    const plexUser = await getPlexUser(authToken)
+    let plexServerUrl: string
     try {
-      [plexUser, plexServerUrl] = await Promise.all([
-        getPlexUser(authToken),
-        getPlexServerUrl(authToken),
-      ])
-      console.log('[Auth/Callback] Got Plex user:', plexUser.email, 'and server:', plexServerUrl)
+      plexServerUrl = await getPlexServerUrlWithOptions(authToken, { allowLanFallback: false })
+      console.log('[Auth/Callback] Got Plex user:', plexUser.email, 'and remote server:', plexServerUrl)
     } catch (err: any) {
-      // Try to get user alone if server discovery fails
-      console.log('[Auth/Callback] Server discovery failed:', err.message, '— attempting user-only auth')
-      plexUser = await getPlexUser(authToken)
-      console.log('[Auth/Callback] Got Plex user (server optional):', plexUser.email)
-      plexServerUrl = null // Allow login without a server
+      console.log('[Auth/Callback] Remote server discovery failed:', err?.message)
+      return NextResponse.redirect(new URL('/?auth=error&reason=no_remote_server', redirectBaseUrl))
     }
 
     // Upsert the user in the DB
@@ -76,7 +69,7 @@ export async function GET(req: NextRequest) {
       // Store Plex credentials in preferences so the scheduler can use them
       preferences: toJson({
         plexToken:     authToken,
-        plexServerUrl: plexServerUrl ?? '',
+        plexServerUrl: plexServerUrl,
       }),
       },
       create: {
@@ -86,7 +79,7 @@ export async function GET(req: NextRequest) {
       isAdmin:  false,
       preferences: toJson({
         plexToken:     authToken,
-        plexServerUrl: plexServerUrl ?? '',
+        plexServerUrl: plexServerUrl,
       }),
       },
     })
@@ -102,7 +95,7 @@ export async function GET(req: NextRequest) {
     session.isLoggedIn = true
     session.userId = user.id
     session.plexToken = authToken
-    session.plexServerUrl = plexServerUrl ?? ''
+    session.plexServerUrl = plexServerUrl
     session.plexId = plexUser.id
     session.username = plexUser.username
     session.email = plexUser.email
@@ -134,7 +127,7 @@ export async function GET(req: NextRequest) {
     // Clear the pin cookie using the Set-Cookie header
     // Format: Set-Cookie: name=; Max-Age=0; Path=/
     const existingSetCookie = finalResponse.headers.get('set-cookie') || ''
-    const pinClearCookie = 'plex_pin_id=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax'
+    const pinClearCookie = `plex_pin_id=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax${shouldUseSecureCookies() ? '; Secure' : ''}`
     
     // Append the pin clear cookie
     if (existingSetCookie) {

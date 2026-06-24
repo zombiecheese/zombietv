@@ -19,6 +19,7 @@ Review these items before promoting a build:
 
 - Check [docs/project-plan.md](project-plan.md) and [docs/code-state.md](code-state.md) for active priorities and known gaps.
 - Confirm all required environment variables are set: `DATABASE_URL`, `SESSION_SECRET`, `PLEX_CLIENT_ID`. The app will exit with a clear error message if any are missing.
+- Confirm production traffic is served behind HTTPS so secure auth cookies persist; only use `SESSION_COOKIE_SECURE=false` for explicit non-HTTPS test environments.
 - Confirm any schema, seed, or runtime config changes are reflected in Prisma and admin settings.
 - Verify the admin account still has Plex credentials if the scheduler depends on them.
 - Make sure the scheduler horizon and auto-run settings are sane for the target environment.

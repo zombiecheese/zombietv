@@ -1,6 +1,6 @@
 # Zombie TV - Current Codebase State
 
-Last updated: 2026-06-23.
+Last updated: 2026-06-24.
 
 This file is a concise implementation snapshot for active development.
 
@@ -25,10 +25,12 @@ This file is a concise implementation snapshot for active development.
 ### Auth and Session
 
 - Viewer: Plex auth routes under `/api/auth/plex/init` and `/api/auth/plex/callback`.
+- Viewer callback requires a remote Plex endpoint for playback-capable sessions.
 - Admin: `/api/admin/login` and `/api/admin/password`.
 - Admin dashboard protection is server-enforced in `src/app/admin/dashboard/layout.tsx`.
 - Admin-only logout endpoint `/api/admin/logout` de-escalates admin without destroying viewer/Plex session.
 - Full logout still available at `/api/auth/logout`.
+- Session cookies are secure by default in production, with optional `SESSION_COOKIE_SECURE` override for explicit non-HTTPS environments.
 
 ### Plex Redirect Override
 
@@ -42,9 +44,9 @@ This file is a concise implementation snapshot for active development.
 - Scheduler horizon days and auto-run interval hours are configurable from admin overview.
 - Scheduler reads station slot configuration (weekday/weekend) from DB rules.
 - Per-slot controls currently implemented:
-	- `fillerOnly`
 	- `openVideo` / `closeVideo` bumper IDs
 	- `libraryWeights`
+	- `disabledLibraries` (library-type toggles in the slot library mix)
 	- `allowGenres`
 - Per-station language controls are global across all slots/windows:
 	- `allow_languages` / `deny_languages`
@@ -57,6 +59,7 @@ This file is a concise implementation snapshot for active development.
 - Ad windows now account for actual ad queue runtime and resume content after ad completion.
 - Filler/ad YouTube queues use deterministic seeded ordering.
 - YouTube duration metadata is used to improve queue fit.
+- `/api/plex-stream` validates proxy targets against cached remote Plex origins (short TTL) and retries discovery on rotation.
 
 ### Filler Content Management
 

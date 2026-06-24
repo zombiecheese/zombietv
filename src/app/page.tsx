@@ -21,6 +21,16 @@ const EPG_HEIGHT_PX    = 440   // height of the EPG panel at the bottom (increas
 const EPG_BAR_HEIGHT_PX = 38   // compact bar height when EPG is minimized
 const NOWBAR_HEIGHT_PX = 36
 
+function authReasonMessage(reason: string | null): string {
+  if (!reason) return ''
+  const map: Record<string, string> = {
+    no_remote_server: 'Plex sign-in succeeded, but no remote playback endpoint was found for your server. Enable secure remote access in Plex and try again.',
+    pin_not_authed: 'Plex sign-in was not completed. Finish authentication in Plex and try again.',
+    missing_pin: 'Plex sign-in session expired. Start sign-in again.',
+  }
+  return map[reason] || 'Plex sign-in could not be completed. Please try again.'
+}
+
 export default function Home() {
   const [mounted, setMounted] = useState(false)
   const [station, setStation]             = useState('zbc')
@@ -29,6 +39,7 @@ export default function Home() {
   const [staticActive, setStaticActive]   = useState(false)
   const [checkingSession, setCheckingSession] = useState(true)
   const [appName, setAppName] = useState('Zombie TV')
+  const [authError, setAuthError] = useState('')
   const [session, setSession]             = useState<{
     isLoggedIn: boolean
     plexToken: string | null
@@ -50,7 +61,15 @@ export default function Home() {
   // ── Sync URL params to station state ──────────────────────────────────────
   useEffect(() => {
     if (!mounted) return
-    const stationParam = new URLSearchParams(window.location.search).get('station')
+    const params = new URLSearchParams(window.location.search)
+    const stationParam = params.get('station')
+    const authReason = params.get('reason')
+    const authStatus = params.get('auth')
+    if (authStatus === 'error') {
+      setAuthError(authReasonMessage(authReason))
+    } else {
+      setAuthError('')
+    }
     if (stationParam) {
       setStation(stationParam)
     }
@@ -170,6 +189,21 @@ export default function Home() {
               Sign in with Plex to start the broadcast and sync playback to your server.
               Without an active session, the player and EPG stay offline.
             </div>
+            {authError && (
+              <div style={{
+                border: '1px solid #8b1c1c',
+                backgroundColor: 'rgba(70, 12, 12, 0.55)',
+                color: '#ffd2d2',
+                fontSize: '0.8rem',
+                lineHeight: 1.5,
+                maxWidth: 620,
+                margin: '0 auto 18px',
+                padding: '10px 12px',
+                textAlign: 'left',
+              }}>
+                {authError}
+              </div>
+            )}
             <button
               onClick={handleLoginClick}
               style={{

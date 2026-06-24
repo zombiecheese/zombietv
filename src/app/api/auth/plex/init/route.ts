@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createPlexPin, buildPlexAuthUrl } from '@/lib/plex-auth'
 import { getPlexAuthRedirectBaseUrl } from '@/lib/plex-auth-redirect'
+import { shouldUseSecureCookies } from '@/lib/session'
 
 export const dynamic = 'force-dynamic'
 
@@ -31,7 +32,7 @@ export async function POST(req: NextRequest) {
     // Store the pin ID in a short-lived httpOnly cookie (15 min)
     response.cookies.set('plex_pin_id', String(pin.id), {
       httpOnly: true,
-      secure:   process.env.NODE_ENV === 'production',
+      secure:   shouldUseSecureCookies(),
       sameSite: 'lax',
       maxAge:   900, // 15 minutes
       path:     '/',

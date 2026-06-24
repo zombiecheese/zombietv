@@ -50,9 +50,13 @@ PLEX_CLIENT_ID="your-plex-client-id"
 POSTGRES_DB="zombietv"
 POSTGRES_USER="zombietv"
 POSTGRES_PASSWORD="zombietv_dev_password"
+# Optional: force cookie secure mode on/off (auto in production by default)
+# SESSION_COOKIE_SECURE="true"
 ```
 
 ⚠️ **Important:** All three variables above (`DATABASE_URL`, `SESSION_SECRET`, `PLEX_CLIENT_ID`) are required. The app will exit at startup with a clear error message if any are missing or empty.
+
+In production, auth cookies are secure by default and require HTTPS at the edge/proxy. If you are testing a non-HTTPS environment, set `SESSION_COOKIE_SECURE=false` explicitly.
 
 ### 3. Initialize database
 

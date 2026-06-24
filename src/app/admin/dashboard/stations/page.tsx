@@ -61,6 +61,9 @@ interface CatalogOptionsResponse {
   libraries: CatalogFilterOption[]
 }
 
+const SLOT_LIBS = ['tv_shows', 'movies', 'animation', 'fitness'] as const
+type SlotLibraryType = typeof SLOT_LIBS[number]
+
 const SLOT_TEMPLATE: Array<{ key: string; name: string; start: string; end: string }> = [
   { key: 'overnight',    name: 'Overnight',        start: 'first', end: '07:00' },
   { key: 'morning',      name: 'Morning',          start: '07:00', end: '09:00' },
@@ -87,6 +90,26 @@ function defaultSlot(t: { key: string; name: string; start: string; end: string 
   }
 }
 
+function normalizeDisabledLibraryType(value: unknown): SlotLibraryType | null {
+  const raw = normalizeRuleToken(String(value ?? ''))
+  if (!raw) return null
+  if (raw === 'tv' || raw === 'tvshow' || raw === 'tvshows' || raw === 'tv_shows' || raw === 'tv-shows' || raw === 'shows') return 'tv_shows'
+  if (raw === 'movie' || raw === 'movies') return 'movies'
+  if (raw === 'animation' || raw === 'anime') return 'animation'
+  if (raw === 'fitness' || raw === 'workout') return 'fitness'
+  return null
+}
+
+function normalizeDisabledLibraryTypes(values: unknown): string[] {
+  if (!Array.isArray(values)) return []
+  const deduped = new Set<SlotLibraryType>()
+  for (const value of values) {
+    const normalized = normalizeDisabledLibraryType(value)
+    if (normalized) deduped.add(normalized)
+  }
+  return Array.from(deduped)
+}
+
 function mergeSlots(saved: unknown): SlotConfig[] {
   const arr = Array.isArray(saved) ? (saved as Partial<SlotConfig>[]) : []
   return SLOT_TEMPLATE.map((t) => {
@@ -101,7 +124,7 @@ function mergeSlots(saved: unknown): SlotConfig[] {
       closeVideo: { ...base.closeVideo, ...(found.closeVideo ?? {}) },
       libraryWeights: { ...base.libraryWeights, ...(found.libraryWeights ?? {}) },
       fillerWindows: Array.isArray(found.fillerWindows) ? found.fillerWindows : base.fillerWindows,
-      disabledLibraries: Array.isArray(found.disabledLibraries) ? found.disabledLibraries.map((value) => String(value)) : [],
+      disabledLibraries: normalizeDisabledLibraryTypes(found.disabledLibraries),
       allowGenres: Array.isArray(found.allowGenres) ? found.allowGenres : [],
       strip: Boolean(found.strip),
     }
@@ -636,15 +659,6 @@ export default function StationsPage() {
                             value={slot.allowGenres}
                             onChange={(next) => updateSlot(index, { allowGenres: next })}
                           />
-
-                          <TokenPicker
-                            label="Disabled Plex libraries"
-                            anyLabel="Do not disable any library"
-                            options={catalogOptions.libraries}
-                            value={slot.disabledLibraries}
-                            normalizeValue={(raw) => raw.trim()}
-                            onChange={(next) => updateSlot(index, { disabledLibraries: next })}
-                          />
                         </>
                       )}
                     </>
@@ -981,6 +995,15 @@ function SlotModeToggle({ slot, index, updateSlot }: { slot: SlotConfig; index: 
 function LibraryWeightsEditor({ slot, index, updateSlot }: { slot: SlotConfig; index: number; updateSlot: (idx: number, patch: Partial<SlotConfig>) => void }) {
   const breakdown = weightBreakdown(slot)
   const total = breakdown.reduce((sum, b) => sum + b.weight, 0)
+  const disabledSet = new Set(slot.disabledLibraries)
+
+  const setDisabledLibrary = (lib: SlotLibraryType, checked: boolean) => {
+    const next = new Set(slot.disabledLibraries)
+    if (checked) next.add(lib)
+    else next.delete(lib)
+    updateSlot(index, { disabledLibraries: Array.from(next) })
+  }
+
   return (
     <div style={{ marginBottom: 12 }}>
       <div style={{ color: '#4a7fb5', fontSize: '0.65rem', letterSpacing: '0.06em', marginBottom: 6 }}>
@@ -999,6 +1022,14 @@ function LibraryWeightsEditor({ slot, index, updateSlot }: { slot: SlotConfig; i
             <div style={{ height: 4, backgroundColor: '#0a1628', borderRadius: 2, overflow: 'hidden' }}>
               <div style={{ width: `${pct}%`, height: '100%', backgroundColor: '#1a3a6e' }} />
             </div>
+            <label style={{ ...checkLabel, fontSize: '0.66rem' }}>
+              <input
+                type="checkbox"
+                checked={disabledSet.has(lib)}
+                onChange={(e) => setDisabledLibrary(lib as SlotLibraryType, e.target.checked)}
+              />
+              Disable this library type in this slot
+            </label>
           </label>
         ))}
       </div>
@@ -1008,8 +1039,6 @@ function LibraryWeightsEditor({ slot, index, updateSlot }: { slot: SlotConfig; i
     </div>
   )
 }
-
-const SLOT_LIBS = ['tv_shows', 'movies', 'animation', 'fitness'] as const
 
 function labelForLib(lib: string): string {
   if (lib === 'tv_shows') return 'TV'
