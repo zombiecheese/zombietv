@@ -4,6 +4,7 @@
 import { DEFAULT_VHS_SETTINGS, type VHSSettings } from '@/lib/vhs-defaults'
 import RouteVisualEffects from '@/components/RouteVisualEffects'
 import { getAppName, getAppTagline } from '@/lib/app-settings'
+import { getGlobalVHSSettings } from '@/lib/vhs-settings'
 
 // Metadata and VHS settings are read from the database at request time.
 // Forcing dynamic rendering prevents Next.js from querying the DB during
@@ -12,14 +13,7 @@ export const dynamic = 'force-dynamic'
 
 async function getVHSSettings(): Promise<VHSSettings> {
   try {
-    // Absolute URL required for server-side fetch in Next.js
-    const base = process.env.NEXTAUTH_URL ?? 'http://localhost:3000'
-    // Next.js extends the native fetch with a `next` option for ISR revalidation.
-    // lib.dom.d.ts does not know about it, so we cast the options object.
-    const fetchOpts = { next: { revalidate: 60 } } as RequestInit
-    const res  = await fetch(`${base}/api/vhs-settings`, fetchOpts)
-    if (!res.ok) return DEFAULT_VHS_SETTINGS
-    return { ...DEFAULT_VHS_SETTINGS, ...(await res.json()) }
+    return await getGlobalVHSSettings()
   } catch {
     return DEFAULT_VHS_SETTINGS
   }

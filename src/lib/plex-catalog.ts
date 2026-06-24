@@ -187,9 +187,10 @@ export async function shouldSyncCatalog(maxAgeHours: number): Promise<boolean> {
 export async function getCatalogAutoSyncMaxAgeHours(): Promise<number> {
   const pref = await prisma.adminPreference.findFirst({
     where: {
-      stationId: null,
       settingKey: PLEX_CATALOG_AUTO_SYNC_MAX_AGE_HOURS_KEY,
+      OR: [{ stationId: CATALOG_STATE_STATION_ID }, { stationId: null }],
     },
+    orderBy: { stationId: 'desc' },
   })
 
   const parsed = fromJson<number>(pref?.settingValue, DEFAULT_PLEX_CATALOG_AUTO_SYNC_MAX_AGE_HOURS)
@@ -199,27 +200,20 @@ export async function getCatalogAutoSyncMaxAgeHours(): Promise<number> {
 
 export async function saveCatalogAutoSyncMaxAgeHours(hours: number): Promise<number> {
   const normalized = Math.max(1, Math.min(24 * 30, Math.round(hours)))
-  const existing = await prisma.adminPreference.findFirst({
+  await prisma.adminPreference.upsert({
     where: {
-      stationId: null,
+      stationId_settingKey: {
+        stationId: CATALOG_STATE_STATION_ID,
+        settingKey: PLEX_CATALOG_AUTO_SYNC_MAX_AGE_HOURS_KEY,
+      },
+    },
+    update: { settingValue: toJson(normalized) },
+    create: {
+      stationId: CATALOG_STATE_STATION_ID,
       settingKey: PLEX_CATALOG_AUTO_SYNC_MAX_AGE_HOURS_KEY,
+      settingValue: toJson(normalized),
     },
   })
-
-  if (existing) {
-    await prisma.adminPreference.update({
-      where: { id: existing.id },
-      data: { settingValue: toJson(normalized) },
-    })
-  } else {
-    await prisma.adminPreference.create({
-      data: {
-        stationId: null,
-        settingKey: PLEX_CATALOG_AUTO_SYNC_MAX_AGE_HOURS_KEY,
-        settingValue: toJson(normalized),
-      },
-    })
-  }
 
   return normalized
 }

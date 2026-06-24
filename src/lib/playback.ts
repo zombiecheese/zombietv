@@ -108,6 +108,49 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
     offlineGraphicUrl: null,
   }
 
+  const station = await prisma.station.findUnique({
+    where: { id: stationId },
+    select: { fillerPools: true },
+  })
+  const fillerPools = fromJsonObject<Record<string, string | null>>(station?.fillerPools)
+
+  const buildGapFillerState = (nextTransitionMs: number): PlaybackState => {
+    const fallbackId = fillerPools.music ?? fillerPools.ads ?? null
+    if (!fallbackId) {
+      return {
+        ...offline,
+        nextTransitionMs,
+      }
+    }
+
+    return {
+      stationId,
+      serverTimeMs: now,
+      contentSource: 'filler',
+      contentId: fallbackId,
+      title: null,
+      showTitle: null,
+      seasonNumber: null,
+      episodeNumber: null,
+      contentRating: null,
+      startOffsetMs: 0,
+      slotStartMs: now,
+      slotEndMs: nextTransitionMs,
+      inAdBreak: false,
+      adFillerId: null,
+      adBreakEndsMs: null,
+      youtubeQueue: [fallbackId],
+      nextTransitionMs,
+      upcomingAdBreaks: [],
+      inFiller: true,
+      fillerStartMs: now,
+      fillerId: fallbackId,
+      openBumperId: null,
+      closeBumperId: null,
+      offlineGraphicUrl: null,
+    }
+  }
+
   // ── Find the active schedule for today ──────────────────────────────────
   // Schedules are stored by local calendar day, not UTC date-only midnight.
   // Match the admin schedule route so after-midnight local playback still
@@ -180,7 +223,11 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
     return slotStart > latest.startTime.getTime() ? slot : latest
   }, null)
 
-  if (!activeSlot) return offline
+  if (!activeSlot) {
+    const nextSlot = allSlots.find((slot) => slot.startTime.getTime() > now)
+    const nextTransitionMs = nextSlot?.startTime.getTime() ?? (now + 60_000)
+    return buildGapFillerState(nextTransitionMs)
+  }
 
   const slotStartMs    = activeSlot.startTime.getTime()
   const elapsedMs      = now - slotStartMs
@@ -255,12 +302,6 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
   const adBreakEndsMs = inAdBreak ? currentAdBreak!.endsAtMs : null
 
   // ── Fetch station filler pool for ads ────────────────────────────────────
-  const station = await prisma.station.findUnique({
-    where: { id: stationId },
-    select: { fillerPools: true },
-  })
-  const fillerPools = fromJsonObject<Record<string, string | null>>(station?.fillerPools)
-
   // Extract filler window info from slot metadata (for filler-only slots/windows)
   const slotMetadata = fromJsonObject<Record<string, unknown>>(activeSlot.metadata) ?? {}
 
@@ -420,6 +461,15 @@ async function selectYoutubeSelection(params: {
   closeBumperId?: string | null
 }): Promise<YoutubeSelection | null> {
   const { stationId, now, slotStartMs, contentEndMs, fillerDurationMins, inAdBreak, currentAdBreak, inFiller, fallbackId, fillerCategories = ['ads', 'filler', 'music', 'news'], windowSegment = null, openBumperId = null, closeBumperId = null } = params
+  if (windowSegment) {
+    const windowEndMs = windowSegment.startMs + windowSegment.durationMins * 60_000
+    // Bumpers and window queues are strictly scoped to the window itself.
+    if (now >= windowEndMs) {
+      if (!fallbackId) return null
+      return { currentVideoId: fallbackId, queue: [fallbackId], startOffsetMs: 0 }
+    }
+  }
+
   const segmentStartMs = inAdBreak
     ? (currentAdBreak?.startsAtMs ?? slotStartMs)
     : windowSegment

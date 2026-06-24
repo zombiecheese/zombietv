@@ -86,6 +86,9 @@ model Slot {
   metadata       String?
 
   mediaItems     SlotMediaItem[]
+
+  @@index([scheduleId, startTime])
+  @@index([startTime])
 }
 
 // ─── Media Items ─────────────────────────────────────────────────────────────

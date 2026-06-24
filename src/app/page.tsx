@@ -325,6 +325,7 @@ export default function Home() {
               plexToken={session.plexToken}
               clockOffsetMs={clockOffsetMs}
               isLoading={isLoading}
+              controlsBottomOffset={epgMinimized ? 4 : (NOWBAR_HEIGHT_PX + 4)}
             />
           </div>
 

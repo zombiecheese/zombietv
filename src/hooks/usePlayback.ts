@@ -14,6 +14,9 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import type { PlaybackState } from '@/lib/playback'
 
 const POLL_INTERVAL_MS = 5_000
+const HIDDEN_POLL_INTERVAL_MS = 30_000
+const NEAR_TRANSITION_POLL_INTERVAL_MS = 1_000
+const NEAR_TRANSITION_WINDOW_MS = 15_000
 
 export interface UsePlaybackResult {
   state:           PlaybackState | null
@@ -28,9 +31,11 @@ export function usePlayback(stationId: string, enabled = true): UsePlaybackResul
   const [clockOffset, setOffset]  = useState(0)
   const [isLoading, setLoading]   = useState(true)
   const [error, setError]         = useState<string | null>(null)
-  const timerRef                  = useRef<ReturnType<typeof setInterval> | null>(null)
+  const timerRef                  = useRef<ReturnType<typeof setTimeout> | null>(null)
   const abortRef                  = useRef<AbortController | null>(null)
   const debugAtRef                = useRef<string | null>(null)
+  const latestStateRef            = useRef<PlaybackState | null>(null)
+  const clockOffsetRef            = useRef(0)
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -70,8 +75,33 @@ export function usePlayback(stationId: string, enabled = true): UsePlaybackResul
   }, [stationId, enabled])
 
   useEffect(() => {
+    latestStateRef.current = state
+  }, [state])
+
+  useEffect(() => {
+    clockOffsetRef.current = clockOffset
+  }, [clockOffset])
+
+  const getNextPollDelay = useCallback((): number => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+      return HIDDEN_POLL_INTERVAL_MS
+    }
+
+    const current = latestStateRef.current
+    if (!current?.nextTransitionMs) return POLL_INTERVAL_MS
+
+    const correctedNow = Date.now() + clockOffsetRef.current
+    const untilTransition = current.nextTransitionMs - correctedNow
+    if (untilTransition > 0 && untilTransition <= NEAR_TRANSITION_WINDOW_MS) {
+      return NEAR_TRANSITION_POLL_INTERVAL_MS
+    }
+
+    return POLL_INTERVAL_MS
+  }, [])
+
+  useEffect(() => {
     if (!enabled) {
-      timerRef.current && clearInterval(timerRef.current)
+      timerRef.current && clearTimeout(timerRef.current)
       abortRef.current?.abort()
       setState(null)
       setError(null)
@@ -79,15 +109,33 @@ export function usePlayback(stationId: string, enabled = true): UsePlaybackResul
       return
     }
 
+    let active = true
+
+    const scheduleNext = () => {
+      if (!active) return
+      const delay = getNextPollDelay()
+      timerRef.current = setTimeout(async () => {
+        await fetchState()
+        scheduleNext()
+      }, delay)
+    }
+
+    const onVisibilityChange = () => {
+      if (!active || document.visibilityState === 'hidden') return
+      fetchState().catch(() => {})
+    }
+
     setLoading(true)
-    fetchState()
-    timerRef.current = setInterval(fetchState, POLL_INTERVAL_MS)
+    fetchState().finally(scheduleNext)
+    document.addEventListener('visibilitychange', onVisibilityChange)
 
     return () => {
-      timerRef.current && clearInterval(timerRef.current)
+      active = false
+      timerRef.current && clearTimeout(timerRef.current)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
       abortRef.current?.abort()
     }
-  }, [fetchState])
+  }, [fetchState, getNextPollDelay, enabled])
 
   return {
     state,

@@ -11,8 +11,12 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlaybackState }          from '@/lib/playback'
+import type { PlaybackState }        from '@/lib/playback'
 
 export const dynamic = 'force-dynamic'
+
+const LIVE_CACHE_TTL_MS = 1_500
+const livePlaybackCache = new Map<string, { expiresAt: number; state: PlaybackState }>()
 
 export async function GET(
   req: NextRequest,
@@ -31,7 +35,25 @@ export async function GET(
   }
 
   try {
+    const shouldUseCache = !atParam
+    if (shouldUseCache) {
+      const cached = livePlaybackCache.get(stationId)
+      if (cached && cached.expiresAt > Date.now()) {
+        return NextResponse.json(cached.state, {
+          headers: {
+            'Cache-Control': 'public, max-age=5, stale-while-revalidate=2',
+          },
+        })
+      }
+    }
+
     const state = await getPlaybackState(stationId, atMs)
+    if (shouldUseCache) {
+      livePlaybackCache.set(stationId, {
+        state,
+        expiresAt: Date.now() + LIVE_CACHE_TTL_MS,
+      })
+    }
 
     // Set a short cache so CDN / browser doesn't hammer the DB
     // 5 seconds is safe — client re-polls every ~5s anyway

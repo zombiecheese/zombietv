@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import AdminShell from '@/components/admin/AdminShell'
 import { DEFAULT_VHS_SETTINGS, type VHSSettings } from '@/lib/vhs-defaults'
 
-type NumericVHSKey = Exclude<keyof VHSSettings, 'debugOverlayEnabled'>
+type NumericVHSKey = Exclude<keyof VHSSettings, 'debugOverlayEnabled' | 'syncWobbleJumpsEnabled' | 'overscanSoftnessEnabled'>
 
 const KNOBS: Array<{ key: NumericVHSKey; label: string; desc: string }> = [
   { key: 'scanlines',           label: 'Scanlines',            desc: 'Horizontal scan-line density and opacity.' },
@@ -223,6 +223,50 @@ export default function VHSPage() {
         ))}
 
         <div style={{ marginBottom: 24, marginTop: 12, borderTop: '1px solid #1e3a5f', paddingTop: 18 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <label style={{ color: '#e8f0fe', fontSize: '0.82rem', fontWeight: 700 }} htmlFor="sync-wobble-toggle">
+              Low-Frequency Sync Wobble/Jumps
+            </label>
+            <span style={{ color: settings.syncWobbleJumpsEnabled ? '#4CAF50' : '#4a7fb5', fontFamily: 'monospace', fontSize: '0.78rem' }}>
+              {settings.syncWobbleJumpsEnabled ? 'ENABLED' : 'DISABLED'}
+            </span>
+          </div>
+          <div style={{ color: '#4a7fb5', fontSize: '0.68rem', marginBottom: 10 }}>
+            Occasional analog sync wobble and tiny vertical jumps, triggered at low frequency.
+          </div>
+          <label style={{ display: 'inline-flex', gap: 10, alignItems: 'center', color: '#dbe8f7', fontSize: '0.78rem', cursor: 'pointer', marginBottom: 16 }}>
+            <input
+              id="sync-wobble-toggle"
+              type="checkbox"
+              checked={settings.syncWobbleJumpsEnabled}
+              onChange={(e) => setSettings({ ...settings, syncWobbleJumpsEnabled: e.target.checked })}
+              style={{ accentColor: '#ff6600', cursor: 'pointer' }}
+            />
+            Enable sync wobble/jump events
+          </label>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <label style={{ color: '#e8f0fe', fontSize: '0.82rem', fontWeight: 700 }} htmlFor="overscan-softness-toggle">
+              Overscan + Edge Softness
+            </label>
+            <span style={{ color: settings.overscanSoftnessEnabled ? '#4CAF50' : '#4a7fb5', fontFamily: 'monospace', fontSize: '0.78rem' }}>
+              {settings.overscanSoftnessEnabled ? 'ENABLED' : 'DISABLED'}
+            </span>
+          </div>
+          <div style={{ color: '#4a7fb5', fontSize: '0.68rem', marginBottom: 10 }}>
+            Adds subtle CRT-style overscan crop and softened edge fall-off.
+          </div>
+          <label style={{ display: 'inline-flex', gap: 10, alignItems: 'center', color: '#dbe8f7', fontSize: '0.78rem', cursor: 'pointer', marginBottom: 16 }}>
+            <input
+              id="overscan-softness-toggle"
+              type="checkbox"
+              checked={settings.overscanSoftnessEnabled}
+              onChange={(e) => setSettings({ ...settings, overscanSoftnessEnabled: e.target.checked })}
+              style={{ accentColor: '#ff6600', cursor: 'pointer' }}
+            />
+            Enable overscan and edge softness
+          </label>
+
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
             <label style={{ color: '#e8f0fe', fontSize: '0.82rem', fontWeight: 700 }} htmlFor="debug-overlay-toggle">
               Viewer Debug Overlay

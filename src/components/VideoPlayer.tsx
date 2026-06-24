@@ -28,6 +28,7 @@ interface Props {
   plexToken:      string | null
   clockOffsetMs:  number
   isLoading:      boolean
+  controlsBottomOffset?: number
 }
 
 type ActiveLayer = 'plex' | 'youtube' | 'offline'
@@ -128,6 +129,7 @@ export default function VideoPlayer({
   plexToken,
   clockOffsetMs,
   isLoading,
+  controlsBottomOffset = 4,
 }: Props) {
   const [layer, setLayer]               = useState<ActiveLayer>('offline')
   const [offlineGraphic, setOfflineGraphic] = useState('')
@@ -625,7 +627,7 @@ export default function VideoPlayer({
           position:   'fixed',
           top:        'auto',
           left:       'auto',
-          bottom:     4,
+          bottom:     controlsBottomOffset,
           right:      4,
           zIndex:     10010,
           display:    'flex',
@@ -654,7 +656,7 @@ export default function VideoPlayer({
           position:   'fixed',
           top:        'auto',
           left:       'auto',
-          bottom:     4,
+          bottom:     controlsBottomOffset,
           right:      4,
           zIndex:     10010,
           display:    'flex',
@@ -862,7 +864,7 @@ export default function VideoPlayer({
         position:   'fixed',
         top:        'auto',
         left:       'auto',
-        bottom:     4,
+        bottom:     controlsBottomOffset,
         right:      4,
         zIndex:     10010,
         display:    'flex',

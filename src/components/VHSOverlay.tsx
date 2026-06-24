@@ -26,10 +26,14 @@ export default function VHSOverlay({ settings }: Props) {
     ghosting,
     trackingNoise,
     horizontalJitter,
+    syncWobbleJumpsEnabled,
+    overscanSoftnessEnabled,
   } = settings
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [jitterPx, setJitterPx] = useState(0)
+  const [syncX, setSyncX] = useState(0)
+  const [syncY, setSyncY] = useState(0)
 
   useEffect(() => {
     if (horizontalJitter <= 0) {
@@ -44,6 +48,38 @@ export default function VHSOverlay({ settings }: Props) {
 
     return () => clearInterval(id)
   }, [horizontalJitter])
+
+  useEffect(() => {
+    if (!syncWobbleJumpsEnabled) {
+      setSyncX(0)
+      setSyncY(0)
+      return
+    }
+
+    const timers = new Set<ReturnType<typeof setTimeout>>()
+    const interval = setInterval(() => {
+      // Low-frequency sync wobble event.
+      if (Math.random() < 0.18) {
+        const wobble = (Math.random() * 2 - 1) * (0.8 + horizontalJitter * 2.4)
+        setSyncX(wobble)
+        const wobbleReset = setTimeout(() => setSyncX(0), 220 + Math.random() * 260)
+        timers.add(wobbleReset)
+      }
+
+      // Rare tiny vertical jump with quick settle.
+      if (Math.random() < 0.08) {
+        const jump = (Math.random() < 0.5 ? -1 : 1) * (0.6 + trackingNoise * 2.2)
+        setSyncY(jump)
+        const jumpReset = setTimeout(() => setSyncY(0), 80 + Math.random() * 100)
+        timers.add(jumpReset)
+      }
+    }, 4_500)
+
+    return () => {
+      clearInterval(interval)
+      for (const t of timers) clearTimeout(t)
+    }
+  }, [syncWobbleJumpsEnabled, horizontalJitter, trackingNoise])
 
   useEffect(() => {
     if (noise <= 0) return
@@ -98,7 +134,9 @@ export default function VHSOverlay({ settings }: Props) {
         pointerEvents: 'none',
         zIndex: 9999,
         overflow: 'hidden',
-        transform: horizontalJitter > 0 ? `translateX(${jitterPx.toFixed(2)}px)` : 'none',
+        transform: (horizontalJitter > 0 || syncWobbleJumpsEnabled)
+          ? `translate(${(jitterPx + syncX).toFixed(2)}px, ${syncY.toFixed(2)}px)`
+          : 'none',
         animation: flicker > 0 ? `vhs-flicker ${0.15 + (1 - flicker) * 0.15}s infinite` : 'none',
       }}
     >
@@ -155,6 +193,30 @@ export default function VHSOverlay({ settings }: Props) {
             background: `radial-gradient(ellipse at center, transparent ${Math.round((1 - vignette) * 60)}%, rgba(0,0,0,${(vignette * 0.85).toFixed(2)}) 100%)`,
           }}
         />
+      )}
+
+      {overscanSoftnessEnabled && (
+        <>
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              boxShadow: 'inset 0 0 0 10px rgba(0,0,0,0.18)',
+              transform: 'scale(1.012)',
+              transformOrigin: 'center center',
+            }}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              backdropFilter: 'blur(0.6px)',
+              WebkitBackdropFilter: 'blur(0.6px)',
+              maskImage: 'radial-gradient(ellipse at center, transparent 70%, black 100%)',
+              WebkitMaskImage: 'radial-gradient(ellipse at center, transparent 70%, black 100%)',
+            }}
+          />
+        </>
       )}
 
       {trackingNoise > 0 && (

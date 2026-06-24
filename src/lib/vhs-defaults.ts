@@ -11,6 +11,8 @@ export interface VHSSettings {
   ghosting:            number
   trackingNoise:       number
   horizontalJitter:    number
+  syncWobbleJumpsEnabled: boolean
+  overscanSoftnessEnabled: boolean
   debugOverlayEnabled: boolean
 }
 
@@ -24,5 +26,7 @@ export const DEFAULT_VHS_SETTINGS: VHSSettings = {
   ghosting:            0.35,
   trackingNoise:       0.25,
   horizontalJitter:    0.2,
+  syncWobbleJumpsEnabled: true,
+  overscanSoftnessEnabled: true,
   debugOverlayEnabled: false,
 }

@@ -1523,7 +1523,7 @@ export async function runScheduler(
             let slotStart = new Date(blockStart)
             let failedPlacementsAtCurrentStart = 0
 
-            while (differenceInMinutes(blockEnd, slotStart) >= 30) {
+            while (differenceInMinutes(blockEnd, slotStart) >= 1) {
               const remainingMins = differenceInMinutes(blockEnd, slotStart)
               const effectiveContentType = getContentTypeForSlot(slotStart, block.contentType, stationBlocks)
 
@@ -2062,7 +2062,7 @@ export async function runScheduler(
                 }
               }
 
-              const fallbackDuration = 30
+              const fallbackDuration = Math.max(1, Math.min(30, remainingMins))
               const fallbackAdBreaks = buildAdBreaks(fallbackDuration, adIntervalTv, adEnabled)
 
               const rescuePool = applyRatingCeiling(slotRescueMovies, effCeiling)
@@ -2128,7 +2128,7 @@ export async function runScheduler(
                   metadata:      toJson({ blockName: block.name, title: 'Filler', reason: 'fallback_filler', showInEpg: false }),
                 },
               })
-              slotStart = addMinutes(slotStart, 30)
+              slotStart = addMinutes(slotStart, fallbackDuration)
               failedPlacementsAtCurrentStart = 0
             }
           }
