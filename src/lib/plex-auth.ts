@@ -105,7 +105,42 @@ export interface PlexServerDetails {
   name: string
 }
 
+export function isPrivateHost(host: string): boolean {
+  const h = String(host || '').trim().toLowerCase()
+  if (!h) return false
+  if (h === 'localhost' || h === '::1' || h === '127.0.0.1') return true
+
+  // IPv4 private ranges
+  if (/^10\./.test(h)) return true
+  if (/^192\.168\./.test(h)) return true
+  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(h)) return true
+
+  // IPv6 unique-local and link-local
+  if (/^(fc|fd)[0-9a-f]{2}:/i.test(h)) return true
+  if (/^fe80:/i.test(h)) return true
+
+  return false
+}
+
+function isLanConnection(connection: any): boolean {
+  if (Boolean(connection?.local)) return true
+  try {
+    const host = new URL(String(connection?.uri ?? '')).hostname
+    return isPrivateHost(host)
+  } catch {
+    return false
+  }
+}
+
 export async function getPlexServerDetails(authToken: string): Promise<PlexServerDetails> {
+  return getPlexServerDetailsWithOptions(authToken, { allowLanFallback: true })
+}
+
+export async function getPlexServerDetailsWithOptions(
+  authToken: string,
+  options: { allowLanFallback?: boolean } = {},
+): Promise<PlexServerDetails> {
+  const allowLanFallback = options.allowLanFallback !== false
   const res = await fetch(
     'https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1&includeIPv6=1',
     { headers: plexHeaders(authToken) },
@@ -123,12 +158,50 @@ export async function getPlexServerDetails(authToken: string): Promise<PlexServe
     throw new Error('No owned Plex Media Server found on this account.')
   }
 
-  // Prefer a direct HTTPS local connection, fall back to relay
+  // Prefer public/remote endpoints first so containerized deployments do not
+  // persist private LAN addresses. LAN endpoints are only used as a fallback
+  // when explicitly allowed.
   const connections: any[] = server.connections ?? []
-  const preferred =
-    connections.find((c) => c.protocol === 'https' && !c.relay) ??
-    connections.find((c) => c.protocol === 'https') ??
-    connections[0]
+  const remoteConnections = connections.filter((c) => !isLanConnection(c))
+  const candidatePool = remoteConnections.length
+    ? remoteConnections
+    : (allowLanFallback ? connections : [])
+  const preferredConnections = [...candidatePool].sort((a, b) => {
+    const score = (c: any) => {
+      const isHttps = c?.protocol === 'https'
+      const isRelay = Boolean(c?.relay)
+      if (isHttps && !isRelay) return 0
+      if (isHttps && isRelay) return 1
+      if (!isHttps && !isRelay) return 2
+      return 3
+    }
+    return score(a) - score(b)
+  })
+
+  const canReach = async (uri: string): Promise<boolean> => {
+    try {
+      const base = String(uri || '').replace(/\/$/, '')
+      if (!base) return false
+      const probeUrl = `${base}/identity?X-Plex-Token=${encodeURIComponent(authToken)}`
+      const res = await fetch(probeUrl, {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(3_000),
+      })
+      return res.ok
+    } catch {
+      return false
+    }
+  }
+
+  let preferred = preferredConnections[0]
+  for (const connection of preferredConnections) {
+    const uri = String(connection?.uri ?? '')
+    if (!uri) continue
+    if (await canReach(uri)) {
+      preferred = connection
+      break
+    }
+  }
 
   if (!preferred) {
     throw new Error('Plex server has no usable connection endpoints.')
@@ -140,4 +213,12 @@ export async function getPlexServerDetails(authToken: string): Promise<PlexServe
     url: preferred.uri as string,
     name,
   }
+}
+
+export async function getPlexServerUrlWithOptions(
+  authToken: string,
+  options: { allowLanFallback?: boolean } = {},
+): Promise<string> {
+  const details = await getPlexServerDetailsWithOptions(authToken, options)
+  return details.url
 }

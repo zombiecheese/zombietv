@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAdmin } from '@/lib/admin-guard'
 import { prisma } from '@/lib/db'
 import { fromJsonObject } from '@/lib/json'
-import { getCatalogFilterOptions } from '@/lib/plex-catalog'
+import { getCatalogFilterOptions, listCatalogLibraries } from '@/lib/plex-catalog'
 import { PlexClient } from '@/lib/plex-client'
 
 export const dynamic = 'force-dynamic'
@@ -11,7 +11,10 @@ export async function GET(req: NextRequest) {
   const guard = await requireAdmin(req)
   if (!guard.ok) return guard.response
 
-  const options = await getCatalogFilterOptions()
+  const [options, libraries] = await Promise.all([
+    getCatalogFilterOptions(),
+    listCatalogLibraries(),
+  ])
 
   if (options.languages.length === 0) {
     const admin = await prisma.user.findUnique({
@@ -44,5 +47,12 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  return NextResponse.json(options)
+  return NextResponse.json({
+    ...options,
+    libraries: libraries.map((library) => ({
+      value: library.key,
+      label: library.title,
+      count: 0,
+    })),
+  })
 }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getIronSession } from 'iron-session'
 import { sessionOptions, SessionData } from '@/lib/session'
+import { getPlexServerUrlWithOptions, isPrivateHost } from '@/lib/plex-auth'
 
 export const dynamic = 'force-dynamic'
 
@@ -35,6 +36,14 @@ function inferPlaybackLocation(req: NextRequest): 'lan' | 'wan' {
   return 'wan'
 }
 
+function isLanBaseUrl(url: string): boolean {
+  try {
+    return isPrivateHost(new URL(url).hostname)
+  } catch {
+    return false
+  }
+}
+
 export async function POST(req: NextRequest) {
   const sessionResponse = new NextResponse()
   const session = await getIronSession<SessionData>(req, sessionResponse, sessionOptions)
@@ -59,7 +68,17 @@ export async function POST(req: NextRequest) {
   const state = ['playing', 'paused', 'stopped', 'buffering'].includes(rawState) ? rawState : 'playing'
   const location = inferPlaybackLocation(req)
   const clientSessionId = normalizeClientSessionId(requestedClientSessionId, session.userId || 'viewer')
-  const base = session.plexServerUrl.replace(/\/$/, '')
+  let base = session.plexServerUrl.replace(/\/$/, '')
+  if (isLanBaseUrl(base)) {
+    const remoteOnly = await getPlexServerUrlWithOptions(session.plexToken, { allowLanFallback: false }).catch(() => '')
+    if (!remoteOnly) {
+      return NextResponse.json(
+        { error: 'Playback requires a remote Plex endpoint. LAN/private Plex URLs are disabled for playback.' },
+        { status: 502 },
+      )
+    }
+    base = remoteOnly.replace(/\/$/, '')
+  }
 
   const params = new URLSearchParams({
     ratingKey: contentId,

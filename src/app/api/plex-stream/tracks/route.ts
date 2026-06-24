@@ -3,6 +3,7 @@ import { getIronSession } from 'iron-session'
 import { sessionOptions, type SessionData } from '@/lib/session'
 import { prisma } from '@/lib/db'
 import { fromJsonObject } from '@/lib/json'
+import { getPlexServerUrlWithOptions, isPrivateHost } from '@/lib/plex-auth'
 
 // Mark this route as dynamic since it uses request.headers
 export const dynamic = 'force-dynamic'
@@ -39,6 +40,19 @@ async function resolvePlexCredentials(session: SessionData) {
   return null
 }
 
+function isPlexNetworkError(err: unknown): boolean {
+  const code = (err as { cause?: { code?: string } })?.cause?.code
+  return code === 'EHOSTUNREACH' || code === 'ENETUNREACH' || code === 'ECONNREFUSED' || code === 'ETIMEDOUT'
+}
+
+function isLanBaseUrl(url: string): boolean {
+  try {
+    return isPrivateHost(new URL(url).hostname)
+  } catch {
+    return false
+  }
+}
+
 export async function GET(req: NextRequest) {
   try {
     const sessionResponse = new NextResponse()
@@ -56,9 +70,31 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
     }
 
-    const base = creds.plexServerUrl.replace(/\/$/, '')
-    const metadataUrl = `${base}/library/metadata/${contentId}?X-Plex-Token=${creds.plexToken}`
-    const res = await fetch(metadataUrl, { cache: 'no-store' })
+    let base = creds.plexServerUrl.replace(/\/$/, '')
+    if (isLanBaseUrl(base)) {
+      const remoteOnly = await getPlexServerUrlWithOptions(creds.plexToken, { allowLanFallback: false }).catch(() => '')
+      if (!remoteOnly) {
+        return NextResponse.json(
+          { error: 'Playback requires a remote Plex endpoint. LAN/private Plex URLs are disabled for playback.' },
+          { status: 502 },
+        )
+      }
+      base = remoteOnly.replace(/\/$/, '')
+    }
+    let metadataUrl = `${base}/library/metadata/${contentId}?X-Plex-Token=${creds.plexToken}`
+
+    let res: Response
+    try {
+      res = await fetch(metadataUrl, { cache: 'no-store' })
+    } catch (err) {
+      if (!isPlexNetworkError(err)) throw err
+      const refreshed = await getPlexServerUrlWithOptions(creds.plexToken, { allowLanFallback: false }).catch(() => '')
+      const refreshedBase = refreshed.replace(/\/$/, '')
+      if (!refreshedBase || refreshedBase === base) throw err
+      base = refreshedBase
+      metadataUrl = `${base}/library/metadata/${contentId}?X-Plex-Token=${creds.plexToken}`
+      res = await fetch(metadataUrl, { cache: 'no-store' })
+    }
 
     if (!res.ok) {
       return NextResponse.json({ error: 'Failed to fetch Plex metadata' }, { status: 502 })

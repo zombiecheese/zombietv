@@ -63,6 +63,7 @@ interface EffectiveStationBlock {
   endMins: number
   contentType: TimeBlock['contentType']
   allowGenres?: string[]
+  disabledLibraries?: string[]
   fillerWindows?: FillerWindow[]
   libraryWeights?: Record<string, number>
   openVideoId?: string
@@ -95,6 +96,7 @@ interface SlotConfigSpec {
   end: string
   enabled?: boolean
   fillerWindows?: FillerWindow[]
+  disabledLibraries?: string[]
   libraryWeights?: { tv_shows?: number; movies?: number; animation?: number; fitness?: number }
   allowGenres?: string[]
   openVideo?: { enabled?: boolean; videoId?: string }
@@ -297,6 +299,9 @@ function resolveStationTimeBlocks(
         endMins,
         contentType: slotContentType(slot),
         allowGenres: Array.isArray(slot.allowGenres) && slot.allowGenres.length ? slot.allowGenres : undefined,
+        disabledLibraries: Array.isArray(slot.disabledLibraries) && slot.disabledLibraries.length
+          ? slot.disabledLibraries.map((key) => String(key).trim()).filter(Boolean)
+          : undefined,
         fillerWindows: Array.isArray(slot.fillerWindows) ? slot.fillerWindows : undefined,
         libraryWeights: slot.libraryWeights as Record<string, number> | undefined,
         openVideoId: slot.openVideo?.enabled && slot.openVideo.videoId ? String(slot.openVideo.videoId).trim() : undefined,
@@ -417,12 +422,21 @@ function filterCandidatesBySlot(
   classByKey: Record<string, string>,
 ): PlexMediaItem[] {
   if (!block) return items
+  const disabledLibraries = new Set((block.disabledLibraries ?? []).map((key) => String(key).trim()).filter(Boolean))
+  const afterLibraryExclusions = disabledLibraries.size
+    ? items.filter((item) => {
+      const sectionKey = String(item.sourceSectionKey ?? '').trim()
+      return !sectionKey || !disabledLibraries.has(sectionKey)
+    })
+    : items
+  if (!afterLibraryExclusions.length) return []
+
   const allowGenres = (block.allowGenres ?? []).map((g) => g.toLowerCase()).filter(Boolean)
   const weights = block.libraryWeights
   const excludeZeroWeight = !!weights && Object.values(weights).some((w) => Number(w) > 0)
-  if (!allowGenres.length && !excludeZeroWeight) return items
+  if (!allowGenres.length && !excludeZeroWeight) return afterLibraryExclusions
 
-  const filtered = items.filter((item) => {
+  const filtered = afterLibraryExclusions.filter((item) => {
     const genres = (item.genres ?? []).map((g) => String(g).toLowerCase())
     if (allowGenres.length && !allowGenres.some((g) => genres.includes(g))) return false
     if (excludeZeroWeight) {
@@ -431,7 +445,7 @@ function filterCandidatesBySlot(
     }
     return true
   })
-  return filtered.length ? filtered : items
+  return filtered.length ? filtered : afterLibraryExclusions
 }
 
 // Multiplier applied to a candidate's selection weight based on the slot's

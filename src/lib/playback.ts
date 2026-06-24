@@ -465,13 +465,16 @@ async function selectYoutubeSelection(params: {
   )
 
   // Reserve time at the window edges for opening/closing idents. Bumpers are
-  // only eligible when the current time is actually at the segment edge, so
-  // tuning into a channel mid-slot does not replay edge idents.
+  // only eligible when the current time is very close to the segment edge, so
+  // tuning into a channel after slot start does not replay edge idents.
   const BUMPER_MINS = 1
-  const elapsedMins = Math.max(0, (now - segmentStartMs) / 60_000)
-  const remainingMins = Math.max(0, segmentDurationMins - elapsedMins)
-  const wantOpen = !inAdBreak && Boolean(openBumperId) && elapsedMins < BUMPER_MINS
-  const wantClose = !inAdBreak && Boolean(closeBumperId) && remainingMins <= BUMPER_MINS
+  const EDGE_GRACE_MS = 10_000
+  const elapsedMs = Math.max(0, now - segmentStartMs)
+  const segmentDurationMs = segmentDurationMins * 60_000
+  const remainingMs = Math.max(0, segmentDurationMs - elapsedMs)
+  const elapsedMins = elapsedMs / 60_000
+  const wantOpen = !inAdBreak && Boolean(openBumperId) && elapsedMs <= EDGE_GRACE_MS
+  const wantClose = !inAdBreak && Boolean(closeBumperId) && remainingMs <= EDGE_GRACE_MS
   const reservedMins = (wantOpen ? BUMPER_MINS : 0) + (wantClose ? BUMPER_MINS : 0)
   const middleTargetMins = Math.max(0, segmentDurationMins - reservedMins)
 

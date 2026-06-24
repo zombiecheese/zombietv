@@ -188,9 +188,15 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
 
   // Update "now" every 30 seconds
   useEffect(() => {
-    const t = setInterval(() => setNowMs(Date.now() + clockOffsetMs), 30_000)
+    const tick = () => setNowMs(Date.now() + clockOffsetMs)
+    tick()
+    const t = setInterval(tick, 1_000)
     return () => clearInterval(t)
   }, [clockOffsetMs])
+
+  // Anchor EPG data window to the current broadcast hour so slot data only
+  // refetches when the visible window meaningfully changes.
+  const startMs = nowMs - (nowMs % (60 * 60 * 1000))  // floor to hour
 
   // Load the configured broadcast timezone so every displayed time aligns to it,
   // regardless of the viewer's own browser timezone.
@@ -217,7 +223,7 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
 
   // Fetch slots for all stations (48hr window from now)
   useEffect(() => {
-    const from = new Date(nowMs)
+    const from = new Date(startMs)
     from.setMinutes(0, 0, 0)
 
     Promise.all(
@@ -238,7 +244,7 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
       for (const r of results) map[r.id] = r.slots
       setSlots(map)
     })
-  }, [nowMs, stations])
+  }, [startMs, stations])
 
   // Zone-aware display helpers — all times render in the configured broadcast
   // timezone (falls back to the viewer's local zone until it loads).
@@ -254,7 +260,6 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
     new Date(value).toLocaleDateString('en-AU', { weekday: 'short', timeZone: tz })
 
   // ── Time axis ─────────────────────────────────────────────────────────────
-  const startMs      = nowMs - (nowMs % (60 * 60 * 1000))  // floor to hour
   const nowOffsetPx  = ((nowMs - startMs) / 3_600_000) * SLOT_HOUR_PX
   const totalHours   = 48
   const gridWidthPx  = totalHours * SLOT_HOUR_PX

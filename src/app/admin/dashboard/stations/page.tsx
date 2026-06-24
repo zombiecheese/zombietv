@@ -24,6 +24,7 @@ interface SlotConfig {
   end: string     // 'HH:MM' or 'until_finished'
   enabled: boolean
   fillerWindows: FillerWindow[]  // empty = no filler windows
+  disabledLibraries: string[]
   openVideo: SlotVideo
   closeVideo: SlotVideo
   libraryWeights: SlotLibraryWeights
@@ -50,12 +51,14 @@ interface StationData {
 
 interface CatalogFilterOption {
   value: string
-  count: number
+  count?: number
+  label?: string
 }
 
 interface CatalogOptionsResponse {
   genres: CatalogFilterOption[]
   languages: CatalogFilterOption[]
+  libraries: CatalogFilterOption[]
 }
 
 const SLOT_TEMPLATE: Array<{ key: string; name: string; start: string; end: string }> = [
@@ -75,6 +78,7 @@ function defaultSlot(t: { key: string; name: string; start: string; end: string 
     key: t.key, name: t.name, start: t.start, end: t.end,
     enabled: true,
     fillerWindows: [],
+    disabledLibraries: [],
     openVideo: { enabled: false, videoId: '' },
     closeVideo: { enabled: false, videoId: '' },
     libraryWeights: { tv_shows: 1, movies: 1, animation: 0, fitness: 0 },
@@ -97,6 +101,7 @@ function mergeSlots(saved: unknown): SlotConfig[] {
       closeVideo: { ...base.closeVideo, ...(found.closeVideo ?? {}) },
       libraryWeights: { ...base.libraryWeights, ...(found.libraryWeights ?? {}) },
       fillerWindows: Array.isArray(found.fillerWindows) ? found.fillerWindows : base.fillerWindows,
+      disabledLibraries: Array.isArray(found.disabledLibraries) ? found.disabledLibraries.map((value) => String(value)) : [],
       allowGenres: Array.isArray(found.allowGenres) ? found.allowGenres : [],
       strip: Boolean(found.strip),
     }
@@ -245,7 +250,7 @@ export default function StationsPage() {
   const [selected, setSelected] = useState<StationData | null>(null)
   const [form,     setForm]     = useState<StationData | null>(null)
   const [dayType,  setDayType]  = useState<DayType>('weekday')
-  const [catalogOptions, setCatalogOptions] = useState<CatalogOptionsResponse>({ genres: [], languages: [] })
+  const [catalogOptions, setCatalogOptions] = useState<CatalogOptionsResponse>({ genres: [], languages: [], libraries: [] })
   const [msg,      setMsg]      = useState('')
   const [newStationId, setNewStationId] = useState('')
   const [newStationName, setNewStationName] = useState('')
@@ -274,6 +279,7 @@ export default function StationsPage() {
         setCatalogOptions({
           genres: Array.isArray(data.genres) ? data.genres : [],
           languages: Array.isArray(data.languages) ? data.languages : [],
+          libraries: Array.isArray(data.libraries) ? data.libraries : [],
         })
       })
       .catch(() => {})
@@ -629,6 +635,15 @@ export default function StationsPage() {
                             options={catalogOptions.genres}
                             value={slot.allowGenres}
                             onChange={(next) => updateSlot(index, { allowGenres: next })}
+                          />
+
+                          <TokenPicker
+                            label="Disabled Plex libraries"
+                            anyLabel="Do not disable any library"
+                            options={catalogOptions.libraries}
+                            value={slot.disabledLibraries}
+                            normalizeValue={(raw) => raw.trim()}
+                            onChange={(next) => updateSlot(index, { disabledLibraries: next })}
                           />
                         </>
                       )}
@@ -1035,6 +1050,7 @@ function slotSummary(slot: SlotConfig): string {
   const parts = mix.length ? [mix.join(' · ')] : ['No library weight — will fall back to filler']
   if (slot.strip) parts.push('stripped Mon–Fri')
   if (slot.allowGenres.length) parts.push(`${slot.allowGenres.length} genre${slot.allowGenres.length > 1 ? 's' : ''}`)
+  if (slot.disabledLibraries.length) parts.push(`${slot.disabledLibraries.length} library exclusion${slot.disabledLibraries.length > 1 ? 's' : ''}`)
   if (slot.openVideo.enabled) parts.push('open ident')
   if (slot.closeVideo.enabled) parts.push('close ident')
   return parts.join(' · ')
@@ -1150,24 +1166,27 @@ function TokenPicker({
   anyLabel,
   value,
   options,
+  normalizeValue,
   onChange,
 }: {
   label: string
   anyLabel: string
   value: string[]
   options: CatalogFilterOption[]
+  normalizeValue?: (rawValue: string) => string
   onChange: (next: string[]) => void
 }) {
   const [query, setQuery] = useState('')
+  const normalize = normalizeValue ?? normalizeRuleToken
   const isAny = value.length === 0
   const selectedSet = new Set(value)
   const filtered = options
     .filter((option) => !selectedSet.has(option.value))
-    .filter((option) => option.value.includes(normalizeRuleToken(query)))
+    .filter((option) => option.value.includes(normalize(query)))
     .slice(0, 18)
 
   const addValue = (rawValue: string) => {
-    const normalized = normalizeRuleToken(rawValue)
+    const normalized = normalize(rawValue)
     if (!normalized || selectedSet.has(normalized)) return
     onChange([...value, normalized])
     setQuery('')
@@ -1210,8 +1229,8 @@ function TokenPicker({
           <div style={suggestionsWrap}>
             {filtered.length > 0 ? filtered.map((option) => (
               <button key={option.value} type="button" style={suggestionBtn} onClick={() => addValue(option.value)}>
-                <span>{option.value}</span>
-                <span style={suggestionCount}>{option.count}</span>
+                <span>{option.label || option.value}</span>
+                <span style={suggestionCount}>{option.count ?? ''}</span>
               </button>
             )) : <div style={pickerEmpty}>No matching synced options.</div>}
           </div>

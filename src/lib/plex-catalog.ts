@@ -574,6 +574,8 @@ interface CatalogMediaRow {
   genres: string | null
   languages: string | null
   ratings: string
+  librarySectionKey?: string | null
+  librarySectionTitle?: string | null
   parentPlexKey: string | null
   showTitle: string | null
   seasonNumber: number | null
@@ -613,6 +615,8 @@ function mapCatalogRow(row: CatalogMediaRow): PlexMediaItem {
     seasonNumber: row.seasonNumber ?? undefined,
     episodeNumber: row.episodeNumber ?? undefined,
     chapters: row.chapters ? (JSON.parse(row.chapters) as Array<{ title: string; startOffsetMs: number }>) : undefined,
+    sourceSectionKey: row.librarySectionKey ?? undefined,
+    sourceSectionTitle: row.librarySectionTitle ?? undefined,
   }
 }
 
@@ -660,6 +664,8 @@ export async function getCatalogCandidates(filters: CatalogPickFilters): Promise
       "genres",
       "languages",
       "ratings",
+      "librarySectionKey",
+      "librarySectionTitle",
       "parentPlexKey",
       "showTitle",
       "seasonNumber",
@@ -718,6 +724,8 @@ export async function getCatalogEpisodeList(
       "genres",
       "languages",
       "ratings",
+      "librarySectionKey",
+      "librarySectionTitle",
       "parentPlexKey",
       "showTitle",
       "seasonNumber",
@@ -780,6 +788,8 @@ export async function getCatalogEpisode(
       "genres",
       "languages",
       "ratings",
+      "librarySectionKey",
+      "librarySectionTitle",
       "parentPlexKey",
       "showTitle",
       "seasonNumber",

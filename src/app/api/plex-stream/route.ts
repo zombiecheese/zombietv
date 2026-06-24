@@ -11,6 +11,7 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { getIronSession } from 'iron-session'
 import { sessionOptions, SessionData } from '@/lib/session'
+import { getPlexServerUrlWithOptions, isPrivateHost } from '@/lib/plex-auth'
 
 async function resolvePlexCredentials(session: SessionData): Promise<{ plexServerUrl: string; plexToken: string } | null> {
   if (session.isLoggedIn && session.plexServerUrl && session.plexToken) {
@@ -68,6 +69,19 @@ function inferPlaybackLocation(req: NextRequest): 'lan' | 'wan' {
 function normalizeClientSessionId(raw: string | null, fallbackUserId: string): string {
   if (raw && /^[A-Za-z0-9_-]{8,80}$/.test(raw)) return raw
   return `zombietv-${fallbackUserId}`
+}
+
+function isPlexNetworkError(err: unknown): boolean {
+  const code = (err as { cause?: { code?: string } })?.cause?.code
+  return code === 'EHOSTUNREACH' || code === 'ENETUNREACH' || code === 'ECONNREFUSED' || code === 'ETIMEDOUT'
+}
+
+function isLanBaseUrl(url: string): boolean {
+  try {
+    return isPrivateHost(new URL(url).hostname)
+  } catch {
+    return false
+  }
 }
 
 function buildHlsStartUrl(
@@ -189,12 +203,23 @@ export async function GET(req: NextRequest) {
       )
     }
 
-    const plexServerUrl = creds.plexServerUrl
+    let plexServerUrl = creds.plexServerUrl
     const plexToken = creds.plexToken
     const clientSessionId = normalizeClientSessionId(requestedClientSessionId, session.userId || 'viewer')
     const playbackLocation = inferPlaybackLocation(req)
 
-    const base = plexServerUrl.replace(/\/$/, '')
+    let base = plexServerUrl.replace(/\/$/, '')
+    if (isLanBaseUrl(base)) {
+      const remoteOnly = await getPlexServerUrlWithOptions(plexToken, { allowLanFallback: false }).catch(() => '')
+      if (!remoteOnly) {
+        return NextResponse.json(
+          { error: 'Playback requires a remote Plex endpoint. LAN/private Plex URLs are disabled for playback.' },
+          { status: 502 },
+        )
+      }
+      plexServerUrl = remoteOnly
+      base = plexServerUrl.replace(/\/$/, '')
+    }
 
     if (proxyUrl) {
       const target = decodeURIComponent(proxyUrl)
@@ -207,8 +232,19 @@ export async function GET(req: NextRequest) {
     }
     
     // First, fetch media metadata to resolve the concrete file part key.
-    const metadataUrl = `${base}/library/metadata/${contentId}?X-Plex-Token=${plexToken}`
-    const metadataRes = await fetch(metadataUrl, { cache: 'no-store' })
+    let metadataUrl = `${base}/library/metadata/${contentId}?X-Plex-Token=${plexToken}`
+    let metadataRes: Response
+    try {
+      metadataRes = await fetch(metadataUrl, { cache: 'no-store' })
+    } catch (err) {
+      if (!isPlexNetworkError(err)) throw err
+      const refreshed = await getPlexServerUrlWithOptions(plexToken, { allowLanFallback: false }).catch(() => '')
+      const refreshedBase = refreshed.replace(/\/$/, '')
+      if (!refreshedBase || refreshedBase === base) throw err
+      base = refreshedBase
+      metadataUrl = `${base}/library/metadata/${contentId}?X-Plex-Token=${plexToken}`
+      metadataRes = await fetch(metadataUrl, { cache: 'no-store' })
+    }
     
     if (!metadataRes.ok) {
       console.error(`Plex metadata fetch failed: ${metadataRes.status}`)
