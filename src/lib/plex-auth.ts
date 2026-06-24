@@ -123,11 +123,17 @@ export async function getPlexServerDetails(authToken: string): Promise<PlexServe
     throw new Error('No owned Plex Media Server found on this account.')
   }
 
-  // Prefer a direct HTTPS local connection, fall back to relay
+  // Playback is proxied server-side (ZombieTV server → Plex), so the connection
+  // must be reachable from wherever ZombieTV is hosted — not from a viewer's LAN.
+  // Prefer the native plex.tv relay so remote playback always works, then fall
+  // back to a public (non-local) HTTPS endpoint. Local LAN connections are only
+  // used as a last resort to avoid silently picking an unreachable address.
   const connections: any[] = server.connections ?? []
   const preferred =
-    connections.find((c) => c.protocol === 'https' && !c.relay) ??
-    connections.find((c) => c.protocol === 'https') ??
+    connections.find((c) => c.relay && c.protocol === 'https') ??
+    connections.find((c) => c.relay) ??
+    connections.find((c) => c.protocol === 'https' && c.local === false) ??
+    connections.find((c) => c.local === false) ??
     connections[0]
 
   if (!preferred) {

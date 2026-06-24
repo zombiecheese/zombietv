@@ -34,37 +34,6 @@ function withPlexToken(url: string, plexToken: string): string {
   return next.toString()
 }
 
-function isPrivateIp(value: string): boolean {
-  const ip = value.trim()
-  if (!ip) return false
-  if (ip === '::1' || ip === '127.0.0.1') return true
-
-  // IPv4 private ranges
-  if (/^10\./.test(ip)) return true
-  if (/^192\.168\./.test(ip)) return true
-  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(ip)) return true
-
-  // IPv6 unique local and link-local
-  if (/^(fc|fd)[0-9a-f]{2}:/i.test(ip)) return true
-  if (/^fe80:/i.test(ip)) return true
-
-  return false
-}
-
-function inferPlaybackLocation(req: NextRequest): 'lan' | 'wan' {
-  const xff = req.headers.get('x-forwarded-for') ?? ''
-  const firstForwarded = xff.split(',')[0]?.trim() ?? ''
-  if (firstForwarded && isPrivateIp(firstForwarded)) return 'lan'
-
-  const realIp = req.headers.get('x-real-ip')?.trim() ?? ''
-  if (realIp && isPrivateIp(realIp)) return 'lan'
-
-  const host = (req.headers.get('host') ?? '').toLowerCase()
-  if (host.startsWith('localhost') || host.startsWith('127.0.0.1')) return 'lan'
-
-  return 'wan'
-}
-
 function normalizeClientSessionId(raw: string | null, fallbackUserId: string): string {
   if (raw && /^[A-Za-z0-9_-]{8,80}$/.test(raw)) return raw
   return `zombietv-${fallbackUserId}`
@@ -192,7 +161,10 @@ export async function GET(req: NextRequest) {
     const plexServerUrl = creds.plexServerUrl
     const plexToken = creds.plexToken
     const clientSessionId = normalizeClientSessionId(requestedClientSessionId, session.userId || 'viewer')
-    const playbackLocation = inferPlaybackLocation(req)
+    // Playback is proxied through the Plex relay (server-side), which is always a
+    // remote/WAN connection from Plex's perspective. Never treat it as LAN, since
+    // the viewer's own network has no bearing on the ZombieTV → Plex link.
+    const playbackLocation: 'lan' | 'wan' = 'wan'
 
     const base = plexServerUrl.replace(/\/$/, '')
 
