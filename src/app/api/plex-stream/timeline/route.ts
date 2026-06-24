@@ -10,32 +10,6 @@ function normalizeClientSessionId(raw: string | null, fallbackUserId: string): s
   return `zombietv-${fallbackUserId}`
 }
 
-function isPrivateIp(value: string): boolean {
-  const ip = value.trim()
-  if (!ip) return false
-  if (ip === '::1' || ip === '127.0.0.1') return true
-  if (/^10\./.test(ip)) return true
-  if (/^192\.168\./.test(ip)) return true
-  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(ip)) return true
-  if (/^(fc|fd)[0-9a-f]{2}:/i.test(ip)) return true
-  if (/^fe80:/i.test(ip)) return true
-  return false
-}
-
-function inferPlaybackLocation(req: NextRequest): 'lan' | 'wan' {
-  const xff = req.headers.get('x-forwarded-for') ?? ''
-  const firstForwarded = xff.split(',')[0]?.trim() ?? ''
-  if (firstForwarded && isPrivateIp(firstForwarded)) return 'lan'
-
-  const realIp = req.headers.get('x-real-ip')?.trim() ?? ''
-  if (realIp && isPrivateIp(realIp)) return 'lan'
-
-  const host = (req.headers.get('host') ?? '').toLowerCase()
-  if (host.startsWith('localhost') || host.startsWith('127.0.0.1')) return 'lan'
-
-  return 'wan'
-}
-
 function isLanBaseUrl(url: string): boolean {
   try {
     return isPrivateHost(new URL(url).hostname)
@@ -66,7 +40,9 @@ export async function POST(req: NextRequest) {
   const time = Number.isFinite(rawOffsetMs) ? Math.max(0, Math.floor(rawOffsetMs)) : 0
   const duration = Number.isFinite(rawDurationMs) ? Math.max(0, Math.floor(rawDurationMs)) : 0
   const state = ['playing', 'paused', 'stopped', 'buffering'].includes(rawState) ? rawState : 'playing'
-  const location = inferPlaybackLocation(req)
+  // Keep timeline reporting aligned with stream playback policy: playback is
+  // always treated as WAN/remote and never LAN.
+  const location: 'lan' | 'wan' = 'wan'
   const clientSessionId = normalizeClientSessionId(requestedClientSessionId, session.userId || 'viewer')
   let base = session.plexServerUrl.replace(/\/$/, '')
   if (isLanBaseUrl(base)) {

@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { getIronSession } from 'iron-session'
 import { sessionOptions, SessionData } from '@/lib/session'
-import { getPlexServerUrlWithOptions, isPrivateHost } from '@/lib/plex-auth'
+import { getPlexRemoteOrigins, getPlexServerUrlWithOptions, isPrivateHost } from '@/lib/plex-auth'
 
 async function resolvePlexCredentials(session: SessionData): Promise<{ plexServerUrl: string; plexToken: string } | null> {
   if (session.isLoggedIn && session.plexServerUrl && session.plexToken) {
@@ -51,6 +51,27 @@ function isLanBaseUrl(url: string): boolean {
   } catch {
     return false
   }
+}
+
+async function resolveAllowedRemoteOrigins(plexToken: string, fallbackBase: string): Promise<Set<string>> {
+  const allowed = new Set<string>()
+  try {
+    const fallbackOrigin = new URL(fallbackBase).origin
+    if (!isPrivateHost(new URL(fallbackBase).hostname)) {
+      allowed.add(fallbackOrigin)
+    }
+  } catch {
+    // Ignore invalid fallback URL.
+  }
+
+  try {
+    const discovered = await getPlexRemoteOrigins(plexToken)
+    for (const origin of discovered) allowed.add(origin)
+  } catch {
+    // If discovery fails, keep any non-private fallback origin.
+  }
+
+  return allowed
 }
 
 function buildHlsStartUrl(
@@ -195,9 +216,9 @@ export async function GET(req: NextRequest) {
 
     if (proxyUrl) {
       const target = decodeURIComponent(proxyUrl)
-      const baseOrigin = new URL(base).origin
       const targetOrigin = new URL(target).origin
-      if (targetOrigin !== baseOrigin) {
+      const allowedOrigins = await resolveAllowedRemoteOrigins(plexToken, base)
+      if (!allowedOrigins.has(targetOrigin)) {
         return NextResponse.json({ error: 'Invalid proxy target' }, { status: 400 })
       }
       return await proxyBinary(target, req, plexToken)

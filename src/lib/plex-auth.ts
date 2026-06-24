@@ -222,3 +222,35 @@ export async function getPlexServerUrlWithOptions(
   const details = await getPlexServerDetailsWithOptions(authToken, options)
   return details.url
 }
+
+export async function getPlexRemoteOrigins(authToken: string): Promise<string[]> {
+  const res = await fetch(
+    'https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1&includeIPv6=1',
+    { headers: plexHeaders(authToken) },
+  )
+  if (!res.ok) {
+    throw new Error(`Failed to fetch Plex resources: ${res.status} ${res.statusText}`)
+  }
+  const data: any[] = await res.json()
+
+  const server = data.find(
+    (r) => r.product === 'Plex Media Server' && r.owned === true,
+  )
+  if (!server) return []
+
+  const connections: any[] = server.connections ?? []
+  const remoteConnections = connections.filter((c) => !isLanConnection(c))
+  const origins = new Set<string>()
+
+  for (const connection of remoteConnections) {
+    try {
+      const uri = String(connection?.uri ?? '').trim()
+      if (!uri) continue
+      origins.add(new URL(uri).origin)
+    } catch {
+      // Ignore malformed URIs from upstream resource payloads.
+    }
+  }
+
+  return Array.from(origins)
+}
