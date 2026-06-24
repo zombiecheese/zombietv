@@ -105,6 +105,47 @@ export interface PlexServerDetails {
   name: string
 }
 
+export interface PlexPlaybackConnection {
+  url: string
+  token: string
+}
+
+function normalizeConnectionUri(uri: string): string {
+  try {
+    const parsed = new URL(String(uri || ''))
+    parsed.hash = ''
+    parsed.search = ''
+    return parsed.toString().replace(/\/$/, '')
+  } catch {
+    return ''
+  }
+}
+
+function sortConnections(connections: any[]): any[] {
+  return [...connections].sort((a, b) => {
+    const score = (c: any) => {
+      const isHttps = c?.protocol === 'https'
+      const isRelay = Boolean(c?.relay)
+      if (isHttps && !isRelay) return 0
+      if (isHttps && isRelay) return 1
+      if (!isHttps && !isRelay) return 2
+      return 3
+    }
+    return score(a) - score(b)
+  })
+}
+
+async function fetchPlexResources(authToken: string): Promise<any[]> {
+  const res = await fetch(
+    'https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1&includeIPv6=1',
+    { headers: plexHeaders(authToken) },
+  )
+  if (!res.ok) {
+    throw new Error(`Failed to fetch Plex resources: ${res.status} ${res.statusText}`)
+  }
+  return (await res.json()) as any[]
+}
+
 export function isPrivateHost(host: string): boolean {
   const h = String(host || '').trim().toLowerCase()
   if (!h) return false
@@ -162,14 +203,7 @@ export async function getPlexServerDetailsWithOptions(
   options: { allowLanFallback?: boolean } = {},
 ): Promise<PlexServerDetails> {
   const allowLanFallback = options.allowLanFallback !== false
-  const res = await fetch(
-    'https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1&includeIPv6=1',
-    { headers: plexHeaders(authToken) },
-  )
-  if (!res.ok) {
-    throw new Error(`Failed to fetch Plex resources: ${res.status} ${res.statusText}`)
-  }
-  const data: any[] = await res.json()
+  const data = await fetchPlexResources(authToken)
 
   const servers = data
     .filter(isPlexMediaServer)
@@ -179,26 +213,11 @@ export async function getPlexServerDetailsWithOptions(
     throw new Error('No Plex Media Server found on this account.')
   }
 
-  // Prefer public/remote endpoints first so containerized deployments do not
-  // persist private LAN addresses. LAN endpoints are only used as a fallback
-  // when explicitly allowed.
-  const sortConnections = (connections: any[]) => [...connections].sort((a, b) => {
-    const score = (c: any) => {
-      const isHttps = c?.protocol === 'https'
-      const isRelay = Boolean(c?.relay)
-      if (isHttps && !isRelay) return 0
-      if (isHttps && isRelay) return 1
-      if (!isHttps && !isRelay) return 2
-      return 3
-    }
-    return score(a) - score(b)
-  })
-
-  const canReach = async (uri: string): Promise<boolean> => {
+  const canReach = async (uri: string, token: string): Promise<boolean> => {
     try {
       const base = String(uri || '').replace(/\/$/, '')
       if (!base) return false
-      const probeUrl = `${base}/identity?X-Plex-Token=${encodeURIComponent(authToken)}`
+      const probeUrl = `${base}/identity?X-Plex-Token=${encodeURIComponent(token)}`
       const res = await fetch(probeUrl, {
         cache: 'no-store',
         signal: AbortSignal.timeout(3_000),
@@ -210,6 +229,7 @@ export async function getPlexServerDetailsWithOptions(
   }
 
   for (const server of servers) {
+    const serverToken = String(server?.accessToken ?? authToken).trim() || authToken
     const connections: any[] = server.connections ?? []
     const remoteConnections = connections.filter((c) => !isLanConnection(c))
     const candidatePool = remoteConnections.length
@@ -221,7 +241,7 @@ export async function getPlexServerDetailsWithOptions(
     for (const connection of preferredConnections) {
       const uri = String(connection?.uri ?? '')
       if (!uri) continue
-      if (await canReach(uri)) {
+      if (await canReach(uri, serverToken)) {
         preferred = connection
         break
       }
@@ -238,6 +258,70 @@ export async function getPlexServerDetailsWithOptions(
   throw new Error('Plex server has no usable connection endpoints.')
 }
 
+export async function getPlexPlaybackConnectionForServer(
+  authToken: string,
+  preferredServerUrl: string,
+  options: { allowLanFallback?: boolean } = {},
+): Promise<PlexPlaybackConnection> {
+  const allowLanFallback = options.allowLanFallback !== false
+  const normalizedPreferredBase = normalizeConnectionUri(preferredServerUrl)
+
+  if (!normalizedPreferredBase) {
+    const fallback = await getPlexServerDetailsWithOptions(authToken, options)
+    return {
+      url: fallback.url.replace(/\/$/, ''),
+      token: authToken,
+    }
+  }
+
+  const preferredUrl = new URL(normalizedPreferredBase)
+  const resources = await fetchPlexResources(authToken)
+  const servers = resources
+    .filter(isPlexMediaServer)
+    .sort((a, b) => getServerPreferenceScore(a) - getServerPreferenceScore(b))
+
+  for (const server of servers) {
+    const serverToken = String(server?.accessToken ?? authToken).trim() || authToken
+    const connections: any[] = server.connections ?? []
+    const matched = connections.filter((connection) => {
+      const uri = normalizeConnectionUri(String(connection?.uri ?? ''))
+      if (!uri) return false
+      try {
+        const parsed = new URL(uri)
+        return (
+          uri === normalizedPreferredBase
+          || parsed.origin === preferredUrl.origin
+          || parsed.hostname === preferredUrl.hostname
+        )
+      } catch {
+        return false
+      }
+    })
+
+    if (!matched.length) continue
+
+    const remoteMatched = matched.filter((c) => !isLanConnection(c))
+    const preferredPool = remoteMatched.length
+      ? remoteMatched
+      : (allowLanFallback ? matched : [])
+    const ordered = sortConnections(preferredPool)
+    const selected = ordered[0]
+
+    if (selected?.uri) {
+      return {
+        url: normalizeConnectionUri(String(selected.uri)),
+        token: serverToken,
+      }
+    }
+  }
+
+  const fallback = await getPlexServerDetailsWithOptions(authToken, options)
+  return {
+    url: fallback.url.replace(/\/$/, ''),
+    token: authToken,
+  }
+}
+
 export async function getPlexServerUrlWithOptions(
   authToken: string,
   options: { allowLanFallback?: boolean } = {},
@@ -247,14 +331,7 @@ export async function getPlexServerUrlWithOptions(
 }
 
 export async function getPlexRemoteOrigins(authToken: string): Promise<string[]> {
-  const res = await fetch(
-    'https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1&includeIPv6=1',
-    { headers: plexHeaders(authToken) },
-  )
-  if (!res.ok) {
-    throw new Error(`Failed to fetch Plex resources: ${res.status} ${res.statusText}`)
-  }
-  const data: any[] = await res.json()
+  const data = await fetchPlexResources(authToken)
 
   const origins = new Set<string>()
 

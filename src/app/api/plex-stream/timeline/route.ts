@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getIronSession } from 'iron-session'
 import { sessionOptions, SessionData } from '@/lib/session'
 import { getCatalogPlaybackServerUrl } from '@/lib/plex-catalog'
-import { getPlexServerUrlWithOptions, isPrivateHost } from '@/lib/plex-auth'
+import { getPlexPlaybackConnectionForServer, isPrivateHost } from '@/lib/plex-auth'
 
 export const dynamic = 'force-dynamic'
 
@@ -50,16 +50,27 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Playback server is not configured.' }, { status: 502 })
   }
 
-  let base = catalogServerUrl.replace(/\/$/, '')
+  const playbackConnection = await getPlexPlaybackConnectionForServer(session.plexToken, catalogServerUrl, {
+    allowLanFallback: false,
+  }).catch(() => null)
+  if (!playbackConnection?.url) {
+    return NextResponse.json({ error: 'Playback server is not reachable for this Plex account.' }, { status: 502 })
+  }
+
+  const plexToken = playbackConnection.token
+
+  let base = playbackConnection.url.replace(/\/$/, '')
   if (isLanBaseUrl(base)) {
-    const remoteOnly = await getPlexServerUrlWithOptions(session.plexToken, { allowLanFallback: false }).catch(() => '')
-    if (!remoteOnly) {
+    const remoteConnection = await getPlexPlaybackConnectionForServer(session.plexToken, playbackConnection.url, {
+      allowLanFallback: false,
+    }).catch(() => null)
+    if (!remoteConnection?.url) {
       return NextResponse.json(
         { error: 'Playback requires a remote Plex endpoint. LAN/private Plex URLs are disabled for playback.' },
         { status: 502 },
       )
     }
-    base = remoteOnly.replace(/\/$/, '')
+    base = remoteConnection.url.replace(/\/$/, '')
   }
 
   const params = new URLSearchParams({
@@ -79,7 +90,7 @@ export async function POST(req: NextRequest) {
     'X-Plex-Platform': 'Web',
     'X-Plex-Client-Identifier': clientSessionId,
     'X-Plex-Session-Identifier': clientSessionId,
-    'X-Plex-Token': session.plexToken,
+    'X-Plex-Token': plexToken,
   })
 
   const timelineUrl = `${base}/:/timeline?${params.toString()}`

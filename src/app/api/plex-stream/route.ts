@@ -12,7 +12,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getIronSession } from 'iron-session'
 import { sessionOptions, SessionData } from '@/lib/session'
 import { getCatalogPlaybackServerUrl } from '@/lib/plex-catalog'
-import { getPlexRemoteOrigins, getPlexServerUrlWithOptions, isPrivateHost } from '@/lib/plex-auth'
+import { getPlexPlaybackConnectionForServer, getPlexRemoteOrigins, isPrivateHost } from '@/lib/plex-auth'
 
 const REMOTE_ORIGINS_TTL_MS = 60_000
 const MAX_REMOTE_ORIGIN_CACHE_ENTRIES = 64
@@ -20,11 +20,14 @@ const remoteOriginsCache = new Map<string, { expiresAt: number; origins: string[
 
 async function resolvePlexCredentials(session: SessionData): Promise<{ plexServerUrl: string; plexToken: string } | null> {
   if (session.isLoggedIn && session.plexToken) {
-    const plexServerUrl = await getCatalogPlaybackServerUrl(session.plexServerUrl)
-    if (!plexServerUrl) return null
+    const catalogServerUrl = await getCatalogPlaybackServerUrl(session.plexServerUrl)
+    if (!catalogServerUrl) return null
+    const connection = await getPlexPlaybackConnectionForServer(session.plexToken, catalogServerUrl, {
+      allowLanFallback: false,
+    }).catch(() => null)
     return {
-      plexServerUrl,
-      plexToken: session.plexToken,
+      plexServerUrl: connection?.url ?? catalogServerUrl,
+      plexToken: connection?.token ?? session.plexToken,
     }
   }
   return null
@@ -229,7 +232,7 @@ export async function GET(req: NextRequest) {
     }
 
     let plexServerUrl = creds.plexServerUrl
-    const plexToken = creds.plexToken
+    let plexToken = creds.plexToken
     const clientSessionId = normalizeClientSessionId(requestedClientSessionId, session.userId || 'viewer')
     // Playback is proxied through the Plex relay (server-side), which is always a
     // remote/WAN connection from Plex's perspective. Never treat it as LAN, since
@@ -238,14 +241,17 @@ export async function GET(req: NextRequest) {
 
     let base = plexServerUrl.replace(/\/$/, '')
     if (isLanBaseUrl(base)) {
-      const remoteOnly = await getPlexServerUrlWithOptions(plexToken, { allowLanFallback: false }).catch(() => '')
-      if (!remoteOnly) {
+      const remoteConnection = await getPlexPlaybackConnectionForServer(session.plexToken, plexServerUrl, {
+        allowLanFallback: false,
+      }).catch(() => null)
+      if (!remoteConnection?.url) {
         return NextResponse.json(
           { error: 'Playback requires a remote Plex endpoint. LAN/private Plex URLs are disabled for playback.' },
           { status: 502 },
         )
       }
-      plexServerUrl = remoteOnly
+      plexServerUrl = remoteConnection.url
+      plexToken = remoteConnection.token
       base = plexServerUrl.replace(/\/$/, '')
     }
 
@@ -270,9 +276,13 @@ export async function GET(req: NextRequest) {
       metadataRes = await fetch(metadataUrl, { cache: 'no-store' })
     } catch (err) {
       if (!isPlexNetworkError(err)) throw err
-      const refreshed = await getPlexServerUrlWithOptions(plexToken, { allowLanFallback: false }).catch(() => '')
-      const refreshedBase = refreshed.replace(/\/$/, '')
+      const refreshedConnection = await getPlexPlaybackConnectionForServer(session.plexToken, plexServerUrl, {
+        allowLanFallback: false,
+      }).catch(() => null)
+      const refreshedBase = refreshedConnection?.url?.replace(/\/$/, '') ?? ''
       if (!refreshedBase || refreshedBase === base) throw err
+      plexToken = refreshedConnection?.token ?? plexToken
+      plexServerUrl = refreshedConnection?.url ?? plexServerUrl
       base = refreshedBase
       metadataUrl = `${base}/library/metadata/${contentId}?X-Plex-Token=${plexToken}`
       metadataRes = await fetch(metadataUrl, { cache: 'no-store' })
@@ -280,9 +290,13 @@ export async function GET(req: NextRequest) {
 
     if (!metadataRes.ok && (metadataRes.status === 401 || metadataRes.status === 403)) {
       // Endpoint or token-scoped route may have rotated; refresh once and retry.
-      const refreshed = await getPlexServerUrlWithOptions(plexToken, { allowLanFallback: false }).catch(() => '')
-      const refreshedBase = refreshed.replace(/\/$/, '')
+      const refreshedConnection = await getPlexPlaybackConnectionForServer(session.plexToken, plexServerUrl, {
+        allowLanFallback: false,
+      }).catch(() => null)
+      const refreshedBase = refreshedConnection?.url?.replace(/\/$/, '') ?? ''
       if (refreshedBase && refreshedBase !== base) {
+        plexToken = refreshedConnection?.token ?? plexToken
+        plexServerUrl = refreshedConnection?.url ?? plexServerUrl
         base = refreshedBase
         metadataUrl = `${base}/library/metadata/${contentId}?X-Plex-Token=${plexToken}`
         metadataRes = await fetch(metadataUrl, { cache: 'no-store' })
