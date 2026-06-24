@@ -28,7 +28,8 @@ function getRequestOrigin(req: NextRequest): string {
 }
 
 export async function GET(req: NextRequest) {
-  const redirectBaseUrl = (await getPlexAuthRedirectBaseUrl()) ?? getRequestOrigin(req)
+  const requestOrigin = getRequestOrigin(req)
+  const redirectBaseUrl = requestOrigin || (await getPlexAuthRedirectBaseUrl()) || req.nextUrl.origin
   const url = new URL(req.url)
 
   // Pin ID comes from cookie (preferred) or query string (Plex appends ?pinID=)

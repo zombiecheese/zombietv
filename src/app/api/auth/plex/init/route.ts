@@ -29,7 +29,8 @@ export async function POST(req: NextRequest) {
     // The forwardUrl is where Plex redirects after the user authenticates.
     // It must be an absolute URL so Plex can redirect to it.
     const overrideBaseUrl = await getPlexAuthRedirectBaseUrl()
-    const origin = overrideBaseUrl ?? process.env.NEXTAUTH_URL ?? getRequestOrigin(req) ?? 'http://localhost:3000'
+    const requestOrigin = getRequestOrigin(req)
+    const origin = requestOrigin || overrideBaseUrl || process.env.NEXTAUTH_URL || 'http://localhost:3000'
     // Include pinID in the callback URL so callback can still complete
     // even if the short-lived cookie is blocked or dropped.
     const callback = new URL('/api/auth/plex/callback', origin)

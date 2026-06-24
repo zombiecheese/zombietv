@@ -218,7 +218,9 @@ export default function VideoPlayer({
 
   const loadTracks = useCallback(async (contentId: string) => {
     try {
-      const res = await fetch(`/api/plex-stream/tracks?contentId=${encodeURIComponent(contentId)}`)
+      const res = await fetch(`/api/plex-stream/tracks?contentId=${encodeURIComponent(contentId)}`, {
+        credentials: 'include',
+      })
       if (!res.ok) return
       const data: TracksResponse = await res.json()
       setAudioTracks(data.audio ?? [])
@@ -229,6 +231,17 @@ export default function VideoPlayer({
       if (defaultSub) setSelectedSub(defaultSub.id)
     } catch {
       // Keep playback resilient if track metadata cannot be loaded.
+    }
+  }, [])
+
+  const handleLogout = useCallback(async () => {
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'include',
+      })
+    } finally {
+      window.location.assign('/')
     }
   }, [])
 
@@ -416,6 +429,9 @@ export default function VideoPlayer({
     if (isHlsManifest && Hls.isSupported()) {
       const hls = new Hls({
         enableWorker: true,
+        xhrSetup: (xhr) => {
+          xhr.withCredentials = true
+        },
       })
       hls.loadSource(plexHlsUrl)
       hls.attachMedia(video)
@@ -801,7 +817,7 @@ export default function VideoPlayer({
         top:        'auto',
         left:       'auto',
         bottom:     4,
-        right:      92,
+        right:      4,
         zIndex:     260,
         display:    'flex',
         gap:        8,
@@ -813,6 +829,27 @@ export default function VideoPlayer({
         borderRadius: 6,
         opacity:    trackControlsEnabled ? 1 : 0.65,
       }}>
+        <button
+          type="button"
+          onClick={handleLogout}
+          title="Sign out of Plex"
+          style={{
+            background:   'rgba(255,102,0,0.18)',
+            border:       '1px solid rgba(255,102,0,0.55)',
+            color:        '#fff',
+            borderRadius: 4,
+            padding:      '4px 10px',
+            cursor:       'pointer',
+            fontSize:     '11px',
+            fontWeight:   700,
+            letterSpacing:'0.03em',
+            lineHeight:   1,
+            opacity:      0.9,
+          }}
+        >
+          LOG OUT
+        </button>
+
         {/* Subtitle track selector */}
         <div style={{ position: 'relative' }}>
             <button

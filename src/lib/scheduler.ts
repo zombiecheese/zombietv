@@ -1550,6 +1550,7 @@ export async function runScheduler(
               const slotShows  = ceil(applySlotFilter ? filterCandidatesBySlot(validShows, activeStationSlot, activeClassByPlexKey, activeClassBySectionKey) : validShows)
               const slotMoviesFallback = ceil(applySlotFilter ? filterCandidatesBySlot(generalMovies, activeStationSlot, activeClassByPlexKey, activeClassBySectionKey) : generalMovies)
               const slotShowsFallback  = ceil(applySlotFilter ? filterCandidatesBySlot(generalShows, activeStationSlot, activeClassByPlexKey, activeClassBySectionKey) : generalShows)
+              const slotRescueMovies = ceil(applySlotFilter ? filterCandidatesBySlot(rescueMovies, activeStationSlot, activeClassByPlexKey, activeClassBySectionKey) : rescueMovies)
               const slotLibWeights = applySlotFilter ? activeStationSlot?.libraryWeights : undefined
               const libMultiplier = (item: PlexMediaItem) => slotLibraryMultiplier(item, slotLibWeights, activeClassByPlexKey, activeClassBySectionKey)
 
@@ -1566,8 +1567,8 @@ export async function runScheduler(
               }
 
               if (failedPlacementsAtCurrentStart >= 6) {
-                const rescuePool = applyRatingCeiling(rescueMovies, effCeiling)
-                const rescueCandidates = rescuePool.length ? rescuePool : rescueMovies
+                const rescuePool = applyRatingCeiling(slotRescueMovies, effCeiling)
+                const rescueCandidates = rescuePool.length ? rescuePool : slotRescueMovies
                 const rescueMovie = pickMovieCandidate(
                   rescueCandidates,
                   block,
@@ -2064,8 +2065,8 @@ export async function runScheduler(
               const fallbackDuration = 30
               const fallbackAdBreaks = buildAdBreaks(fallbackDuration, adIntervalTv, adEnabled)
 
-              const rescuePool = applyRatingCeiling(rescueMovies, effCeiling)
-              const rescueCandidates = rescuePool.length ? rescuePool : rescueMovies
+              const rescuePool = applyRatingCeiling(slotRescueMovies, effCeiling)
+              const rescueCandidates = rescuePool.length ? rescuePool : slotRescueMovies
               const rescueMovie = pickMovieCandidate(
                 rescueCandidates,
                 block,
