@@ -48,6 +48,30 @@ export default function Home() {
 
   const { state, clockOffsetMs, isLoading } = usePlayback(station, session.isLoggedIn)
 
+  const completePlexSignInFromPin = useCallback(async (pinId: string): Promise<boolean> => {
+    try {
+      const pinNumber = Number(pinId)
+      if (!Number.isFinite(pinNumber) || pinNumber <= 0) return false
+
+      const res = await fetch('/api/auth/plex/complete', {
+        method: 'POST',
+        credentials: 'include',
+        cache: 'no-store',
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache',
+        },
+        body: JSON.stringify({ pinID: pinNumber }),
+      })
+
+      if (!res.ok) return false
+      const data = await res.json().catch(() => ({}))
+      return Boolean(data?.ok)
+    } catch {
+      return false
+    }
+  }, [])
+
   // ── Set mounted flag on client ────────────────────────────────────────────
   useEffect(() => {
     setMounted(true)
@@ -81,6 +105,11 @@ export default function Home() {
     const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
     const probeSession = async () => {
+      const pageUrl = new URL(window.location.href)
+      const callbackPinId = pageUrl.searchParams.get('pinID')
+      const callbackAuthStatus = pageUrl.searchParams.get('auth')
+      const shouldTryComplete = callbackAuthStatus === 'success' && Boolean(callbackPinId)
+
       const delays = [0, 250, 750]
       for (const delay of delays) {
         if (delay > 0) await wait(delay)
@@ -99,6 +128,12 @@ export default function Home() {
               plexToken:     data.plexToken ?? null,
               plexServerUrl: data.plexServerUrl ?? null,
             })
+            if (callbackPinId || callbackAuthStatus) {
+              pageUrl.searchParams.delete('pinID')
+              pageUrl.searchParams.delete('auth')
+              pageUrl.searchParams.delete('reason')
+              window.history.replaceState({}, '', `${pageUrl.pathname}${pageUrl.search}${pageUrl.hash}`)
+            }
             setCheckingSession(false)
             return
           }
@@ -107,12 +142,44 @@ export default function Home() {
         }
       }
 
+      if (shouldTryComplete && callbackPinId) {
+        const completed = await completePlexSignInFromPin(callbackPinId)
+        if (completed) {
+          try {
+            const sessionRes = await fetch('/api/auth/session', {
+              credentials: 'include',
+              cache: 'no-store',
+              headers: { 'Cache-Control': 'no-cache' },
+            })
+            if (sessionRes.ok) {
+              const data = await sessionRes.json()
+              if (!cancelled && data?.isLoggedIn) {
+                setSession({
+                  isLoggedIn: true,
+                  plexToken: data.plexToken ?? null,
+                  plexServerUrl: data.plexServerUrl ?? null,
+                })
+              }
+            }
+          } catch {
+            // Keep fallback resilient.
+          }
+        }
+
+        pageUrl.searchParams.delete('pinID')
+        pageUrl.searchParams.delete('auth')
+        pageUrl.searchParams.delete('reason')
+        if (!cancelled) {
+          window.history.replaceState({}, '', `${pageUrl.pathname}${pageUrl.search}${pageUrl.hash}`)
+        }
+      }
+
       if (!cancelled) setCheckingSession(false)
     }
 
     probeSession()
     return () => { cancelled = true }
-  }, [])
+  }, [completePlexSignInFromPin])
 
   // ── Channel switching: fire static burst, then switch ────────────────────
   const handleSelectStation = useCallback((id: string) => {

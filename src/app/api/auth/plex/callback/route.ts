@@ -98,7 +98,9 @@ export async function GET(req: NextRequest) {
 
     // Create redirect response first so iron-session writes cookies directly on
     // the final response object returned to the browser/proxy chain.
-    const finalResponse = NextResponse.redirect(new URL('/', redirectBaseUrl))
+    const successUrl = new URL('/auth/plex/finish', redirectBaseUrl)
+    successUrl.searchParams.set('pinID', String(pinId))
+    const finalResponse = NextResponse.redirect(successUrl)
 
     // Create the iron-session
     console.log('[Auth/Callback] Creating iron-session')
