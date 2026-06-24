@@ -11,6 +11,7 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { getIronSession } from 'iron-session'
 import { sessionOptions, SessionData } from '@/lib/session'
+import { getCatalogPlaybackServerUrl } from '@/lib/plex-catalog'
 import { getPlexRemoteOrigins, getPlexServerUrlWithOptions, isPrivateHost } from '@/lib/plex-auth'
 
 const REMOTE_ORIGINS_TTL_MS = 60_000
@@ -18,9 +19,11 @@ const MAX_REMOTE_ORIGIN_CACHE_ENTRIES = 64
 const remoteOriginsCache = new Map<string, { expiresAt: number; origins: string[] }>()
 
 async function resolvePlexCredentials(session: SessionData): Promise<{ plexServerUrl: string; plexToken: string } | null> {
-  if (session.isLoggedIn && session.plexServerUrl && session.plexToken) {
+  if (session.isLoggedIn && session.plexToken) {
+    const plexServerUrl = await getCatalogPlaybackServerUrl(session.plexServerUrl)
+    if (!plexServerUrl) return null
     return {
-      plexServerUrl: session.plexServerUrl,
+      plexServerUrl,
       plexToken: session.plexToken,
     }
   }

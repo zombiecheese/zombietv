@@ -9,6 +9,7 @@ import { fromJsonObject, toJson } from '@/lib/json'
 import { checkPlexPin, getPlexServerUrl } from '@/lib/plex-auth'
 import { getPlexAuthRedirectBaseUrl } from '@/lib/plex-auth-redirect'
 import { sessionOptions, SessionData } from '@/lib/session'
+import { saveCatalogPlaybackServerUrl } from '@/lib/plex-catalog'
 
 export const dynamic = 'force-dynamic'
 
@@ -60,6 +61,7 @@ export async function GET(req: NextRequest) {
     }
 
     const plexServerUrl = await getPlexServerUrl(authToken)
+    await saveCatalogPlaybackServerUrl(plexServerUrl)
 
     const admin = await prisma.user.findUnique({ where: { id: adminUserId } })
       ?? (sessionAdminEmail

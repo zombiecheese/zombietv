@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAdmin } from '@/lib/admin-guard'
 import { ensureDatabaseReady, prisma } from '@/lib/db'
 import { fromJsonObject } from '@/lib/json'
-import { getCatalogStatus, isCatalogSyncRunning, triggerCatalogSync } from '@/lib/plex-catalog'
+import { getCatalogStatus, isCatalogSyncRunning, triggerCatalogSync, saveCatalogPlaybackServerUrl } from '@/lib/plex-catalog'
 import { PlexClient } from '@/lib/plex-client'
 
 export const dynamic = 'force-dynamic'
@@ -39,6 +39,8 @@ export async function POST(req: NextRequest) {
       { status: 400 },
     )
   }
+
+  await saveCatalogPlaybackServerUrl(plexServerUrl)
 
   const plex = new PlexClient(plexServerUrl, plexToken)
   const result = await triggerCatalogSync(plex)

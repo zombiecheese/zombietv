@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getIronSession } from 'iron-session'
 import { sessionOptions, SessionData } from '@/lib/session'
+import { getCatalogPlaybackServerUrl } from '@/lib/plex-catalog'
 import { getPlexServerUrlWithOptions, isPrivateHost } from '@/lib/plex-auth'
 
 export const dynamic = 'force-dynamic'
@@ -22,7 +23,7 @@ export async function POST(req: NextRequest) {
   const sessionResponse = new NextResponse()
   const session = await getIronSession<SessionData>(req, sessionResponse, sessionOptions)
 
-  if (!session.isLoggedIn || !session.plexServerUrl || !session.plexToken) {
+  if (!session.isLoggedIn || !session.plexToken) {
     return NextResponse.json({ error: 'Sign in with Plex to report playback progress.' }, { status: 401 })
   }
 
@@ -44,7 +45,12 @@ export async function POST(req: NextRequest) {
   // always treated as WAN/remote and never LAN.
   const location: 'lan' | 'wan' = 'wan'
   const clientSessionId = normalizeClientSessionId(requestedClientSessionId, session.userId || 'viewer')
-  let base = session.plexServerUrl.replace(/\/$/, '')
+  const catalogServerUrl = await getCatalogPlaybackServerUrl(session.plexServerUrl)
+  if (!catalogServerUrl) {
+    return NextResponse.json({ error: 'Playback server is not configured.' }, { status: 502 })
+  }
+
+  let base = catalogServerUrl.replace(/\/$/, '')
   if (isLanBaseUrl(base)) {
     const remoteOnly = await getPlexServerUrlWithOptions(session.plexToken, { allowLanFallback: false }).catch(() => '')
     if (!remoteOnly) {

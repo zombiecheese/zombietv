@@ -12,6 +12,7 @@ const PLEX_CATALOG_SELECTED_LIBRARY_KEYS = 'plex_catalog_selected_library_keys'
 const PLEX_CATALOG_LIBRARY_CLASSIFICATIONS = 'plex_catalog_library_classifications'
 const PLEX_CATALOG_ACTIVE_PLEX_KEYS = 'plex_catalog_active_plex_keys'
 const PLEX_CATALOG_ACTIVE_CLASS_BY_PLEX_KEY = 'plex_catalog_active_class_by_plex_key'
+const PLEX_CATALOG_SERVER_URL = 'plex_catalog_server_url'
 const CATALOG_STATE_STATION_ID = '__global__'
 export const DEFAULT_PLEX_CATALOG_AUTO_SYNC_MAX_AGE_HOURS = 72
 
@@ -31,6 +32,22 @@ function normalizeLibraryClass(value: unknown): LibraryClass {
     return candidate as LibraryClass
   }
   return 'tv_shows'
+}
+
+function normalizePlexServerUrl(value: unknown): string | null {
+  const text = String(value ?? '').trim()
+  if (!text) return null
+  try {
+    const url = new URL(text)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
+    url.hash = ''
+    url.search = ''
+    url.username = ''
+    url.password = ''
+    return url.toString().replace(/\/$/, '')
+  } catch {
+    return null
+  }
 }
 
 function classGuidanceScore(classification: LibraryClass | undefined, type: 'movie' | 'show'): number {
@@ -1101,4 +1118,53 @@ async function saveActiveClassByPlexKey(map: Record<string, LibraryClass>): Prom
       settingValue: toJson(normalized),
     },
   })
+}
+
+export async function getCatalogPlaybackServerUrl(fallbackUrl?: string | null): Promise<string | null> {
+  const pref = await prisma.adminPreference.findUnique({
+    where: {
+      stationId_settingKey: {
+        stationId: CATALOG_STATE_STATION_ID,
+        settingKey: PLEX_CATALOG_SERVER_URL,
+      },
+    },
+  })
+
+  return normalizePlexServerUrl(pref?.settingValue) ?? normalizePlexServerUrl(fallbackUrl)
+}
+
+export async function saveCatalogPlaybackServerUrl(value: unknown): Promise<string | null> {
+  const normalized = normalizePlexServerUrl(value)
+  const existing = await prisma.adminPreference.findUnique({
+    where: {
+      stationId_settingKey: {
+        stationId: CATALOG_STATE_STATION_ID,
+        settingKey: PLEX_CATALOG_SERVER_URL,
+      },
+    },
+  })
+
+  if (!normalized) {
+    if (existing) {
+      await prisma.adminPreference.delete({ where: { id: existing.id } })
+    }
+    return null
+  }
+
+  if (existing) {
+    await prisma.adminPreference.update({
+      where: { id: existing.id },
+      data: { settingValue: toJson(normalized) },
+    })
+  } else {
+    await prisma.adminPreference.create({
+      data: {
+        stationId: CATALOG_STATE_STATION_ID,
+        settingKey: PLEX_CATALOG_SERVER_URL,
+        settingValue: toJson(normalized),
+      },
+    })
+  }
+
+  return normalized
 }

@@ -132,6 +132,27 @@ function isLanConnection(connection: any): boolean {
   }
 }
 
+function isPlexMediaServer(resource: any): boolean {
+  return resource?.product === 'Plex Media Server' && Boolean(resource?.connections?.length)
+}
+
+function getServerPreferenceScore(resource: any): number {
+  // Prefer owned servers first, then reachable shared servers.
+  if (resource?.owned === true) return 0
+  if (resource?.accessToken) return 1
+  return 2
+}
+
+function getServerDisplayName(resource: any, preferredConnection: any): string {
+  return String(
+    resource?.name ??
+    resource?.title ??
+    resource?.friendlyName ??
+    preferredConnection?.name ??
+    new URL(String(preferredConnection?.uri ?? 'http://localhost')).hostname,
+  )
+}
+
 export async function getPlexServerDetails(authToken: string): Promise<PlexServerDetails> {
   return getPlexServerDetailsWithOptions(authToken, { allowLanFallback: true })
 }
@@ -150,23 +171,18 @@ export async function getPlexServerDetailsWithOptions(
   }
   const data: any[] = await res.json()
 
-  // First owned Plex Media Server
-  const server = data.find(
-    (r) => r.product === 'Plex Media Server' && r.owned === true,
-  )
-  if (!server) {
-    throw new Error('No owned Plex Media Server found on this account.')
+  const servers = data
+    .filter(isPlexMediaServer)
+    .sort((a, b) => getServerPreferenceScore(a) - getServerPreferenceScore(b))
+
+  if (!servers.length) {
+    throw new Error('No Plex Media Server found on this account.')
   }
 
   // Prefer public/remote endpoints first so containerized deployments do not
   // persist private LAN addresses. LAN endpoints are only used as a fallback
   // when explicitly allowed.
-  const connections: any[] = server.connections ?? []
-  const remoteConnections = connections.filter((c) => !isLanConnection(c))
-  const candidatePool = remoteConnections.length
-    ? remoteConnections
-    : (allowLanFallback ? connections : [])
-  const preferredConnections = [...candidatePool].sort((a, b) => {
+  const sortConnections = (connections: any[]) => [...connections].sort((a, b) => {
     const score = (c: any) => {
       const isHttps = c?.protocol === 'https'
       const isRelay = Boolean(c?.relay)
@@ -193,26 +209,33 @@ export async function getPlexServerDetailsWithOptions(
     }
   }
 
-  let preferred = preferredConnections[0]
-  for (const connection of preferredConnections) {
-    const uri = String(connection?.uri ?? '')
-    if (!uri) continue
-    if (await canReach(uri)) {
-      preferred = connection
-      break
+  for (const server of servers) {
+    const connections: any[] = server.connections ?? []
+    const remoteConnections = connections.filter((c) => !isLanConnection(c))
+    const candidatePool = remoteConnections.length
+      ? remoteConnections
+      : (allowLanFallback ? connections : [])
+    const preferredConnections = sortConnections(candidatePool)
+
+    let preferred = preferredConnections[0]
+    for (const connection of preferredConnections) {
+      const uri = String(connection?.uri ?? '')
+      if (!uri) continue
+      if (await canReach(uri)) {
+        preferred = connection
+        break
+      }
+    }
+
+    if (preferred) {
+      return {
+        url: preferred.uri as string,
+        name: getServerDisplayName(server, preferred),
+      }
     }
   }
 
-  if (!preferred) {
-    throw new Error('Plex server has no usable connection endpoints.')
-  }
-
-  const name = String(server.name ?? server.title ?? server.friendlyName ?? preferred.name ?? new URL(preferred.uri as string).hostname)
-
-  return {
-    url: preferred.uri as string,
-    name,
-  }
+  throw new Error('Plex server has no usable connection endpoints.')
 }
 
 export async function getPlexServerUrlWithOptions(
@@ -233,22 +256,20 @@ export async function getPlexRemoteOrigins(authToken: string): Promise<string[]>
   }
   const data: any[] = await res.json()
 
-  const server = data.find(
-    (r) => r.product === 'Plex Media Server' && r.owned === true,
-  )
-  if (!server) return []
-
-  const connections: any[] = server.connections ?? []
-  const remoteConnections = connections.filter((c) => !isLanConnection(c))
   const origins = new Set<string>()
 
-  for (const connection of remoteConnections) {
-    try {
-      const uri = String(connection?.uri ?? '').trim()
-      if (!uri) continue
-      origins.add(new URL(uri).origin)
-    } catch {
-      // Ignore malformed URIs from upstream resource payloads.
+  for (const server of data.filter(isPlexMediaServer).sort((a, b) => getServerPreferenceScore(a) - getServerPreferenceScore(b))) {
+    const connections: any[] = server.connections ?? []
+    const remoteConnections = connections.filter((c) => !isLanConnection(c))
+
+    for (const connection of remoteConnections) {
+      try {
+        const uri = String(connection?.uri ?? '').trim()
+        if (!uri) continue
+        origins.add(new URL(uri).origin)
+      } catch {
+        // Ignore malformed URIs from upstream resource payloads.
+      }
     }
   }
 
