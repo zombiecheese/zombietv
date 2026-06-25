@@ -1657,7 +1657,7 @@ export async function runScheduler(
                 continue
               }
 
-              const isNewsWindow = Boolean(activeStationSlot) && /news/i.test(activeStationSlot.name)
+              const isNewsWindow = /news/i.test(String(activeStationSlot?.name ?? ''))
               const newsLiveVideoId = isNewsWindow
                 ? String(activeStationSlot?.newsLiveVideoId ?? '').trim()
                 : ''
