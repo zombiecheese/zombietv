@@ -10,7 +10,7 @@ import { prisma }                         from './db'
 import { fromJsonArray, fromJsonObject }  from './json'
 import { createHash }                    from 'crypto'
 import { getBroadcastTimezone }          from './app-settings'
-import { getZonedParts }                 from './time'
+import { getZonedParts, zonedTimeToUtc } from './time'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -198,22 +198,11 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
   }
 
   // ── Find the active schedule for today ──────────────────────────────────
-  // Schedules are stored by local calendar day, not UTC date-only midnight.
-  // Match the admin schedule route so after-midnight local playback still
-  // resolves the active schedule row created for that broadcast day.
-  const todayMidnight = new Date(
-    nowDate.getFullYear(),
-    nowDate.getMonth(),
-    nowDate.getDate(),
-    0,
-    0,
-    0,
-    0,
-  )
-  const yesterdayMidnight = new Date(todayMidnight)
-  yesterdayMidnight.setDate(yesterdayMidnight.getDate() - 1)
-  const tomorrowMidnight = new Date(todayMidnight)
-  tomorrowMidnight.setDate(tomorrowMidnight.getDate() + 1)
+  // Resolve schedule boundaries in the configured broadcast timezone so
+  // weekday/weekend day partitions and overnight windows stay aligned.
+  const nowParts = getZonedParts(nowDate, broadcastTimezone)
+  const yesterdayMidnight = zonedTimeToUtc(nowParts.year, nowParts.month - 1, nowParts.day - 1, 0, 0, broadcastTimezone)
+  const tomorrowMidnight = zonedTimeToUtc(nowParts.year, nowParts.month - 1, nowParts.day + 1, 0, 0, broadcastTimezone)
 
   const schedules = await prisma.schedule.findMany({
     where: {

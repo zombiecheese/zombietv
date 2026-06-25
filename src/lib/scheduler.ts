@@ -14,10 +14,10 @@ import { prisma }                        from './db'
 import { getHolidayForDate, loadHolidaySettings }             from './holidays'
 import { PlexClient, type PlexMediaItem }                    from './plex-client'
 import { syncPlexCatalog, shouldSyncCatalog, getCatalogAutoSyncMaxAgeHours, getCatalogCandidates, getCatalogEpisode, getCatalogEpisodeList, applyRatingCeiling, getBlockedPlexKeys, getHolidayTagMap, getActiveClassByPlexKey, getCatalogLibraryClassifications } from './plex-catalog'
-import { getSchedulerYearRange } from './app-settings'
+import { getBroadcastTimezone, getSchedulerYearRange } from './app-settings'
 import { toJson, fromJsonObject }        from './json'
-import { parseClockToMinutes }           from './time'
-import { addDays, startOfDay, getDay, differenceInMinutes, addMinutes, differenceInCalendarDays } from 'date-fns'
+import { parseClockToMinutes, getZonedParts, zonedTimeToUtc } from './time'
+import { differenceInMinutes, addMinutes } from 'date-fns'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -255,8 +255,38 @@ function normalizeDayName(day: string): string {
   return String(day).trim().toLowerCase()
 }
 
-function dayNameForDate(date: Date): string {
-  return ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][getDay(date)]
+function getBroadcastDayStart(date: Date, timezone: string): Date {
+  const parts = getZonedParts(date, timezone)
+  return zonedTimeToUtc(parts.year, parts.month - 1, parts.day, 0, 0, timezone)
+}
+
+function addBroadcastDays(date: Date, days: number, timezone: string): Date {
+  const parts = getZonedParts(date, timezone)
+  return zonedTimeToUtc(parts.year, parts.month - 1, parts.day + days, 0, 0, timezone)
+}
+
+function getBroadcastDayOfWeek(date: Date, timezone: string): number {
+  const parts = getZonedParts(date, timezone)
+  return new Date(Date.UTC(parts.year, parts.month - 1, parts.day)).getUTCDay()
+}
+
+function getBroadcastMinutesOfDay(date: Date, timezone: string): number {
+  const parts = getZonedParts(date, timezone)
+  return parts.hour * 60 + parts.minute
+}
+
+function formatBroadcastTime(date: Date, timezone: string): string {
+  const parts = getZonedParts(date, timezone)
+  return `${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}`
+}
+
+function atBroadcastTime(date: Date, hour: number, minute: number, timezone: string): Date {
+  const parts = getZonedParts(date, timezone)
+  return zonedTimeToUtc(parts.year, parts.month - 1, parts.day, hour, minute, timezone)
+}
+
+function dayNameForDate(date: Date, timezone: string): string {
+  return ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][getBroadcastDayOfWeek(date, timezone)]
 }
 
 function mapStationContentType(spec: StationTimeBlockSpec): TimeBlock['contentType'] {
@@ -285,11 +315,12 @@ function mapStationContentType(spec: StationTimeBlockSpec): TimeBlock['contentTy
 function resolveStationTimeBlocks(
   stationDate: Date,
   rawRules: Record<string, unknown>,
+  timezone: string,
 ): EffectiveStationBlock[] {
   // Preferred: DB-backed weekday/weekend slot_config from the Station Rules editor.
   const slotConfig = (rawRules.slot_config ?? null) as { weekday?: SlotConfigSpec[]; weekend?: SlotConfigSpec[] } | null
   if (slotConfig && (Array.isArray(slotConfig.weekday) || Array.isArray(slotConfig.weekend))) {
-    const isWeekend = [0, 6].includes(getDay(stationDate))
+    const isWeekend = [0, 6].includes(getBroadcastDayOfWeek(stationDate, timezone))
     const list = isWeekend ? slotConfig.weekend : slotConfig.weekday
     const slots = Array.isArray(list) ? list : []
     const out: EffectiveStationBlock[] = []
@@ -325,7 +356,7 @@ function resolveStationTimeBlocks(
   const source = inlineBlocks
   if (!source.length) return []
 
-  const todayName = dayNameForDate(stationDate)
+  const todayName = dayNameForDate(stationDate, timezone)
   const out: EffectiveStationBlock[] = []
 
   for (const spec of source) {
@@ -378,12 +409,13 @@ function getContentTypeForSlot(
   slotStart: Date,
   baseType: TimeBlock['contentType'],
   stationBlocks: EffectiveStationBlock[],
+  timezone: string,
 ): TimeBlock['contentType'] {
   const normalizeType = (value: TimeBlock['contentType']): TimeBlock['contentType'] =>
     (value === 'filler' || value === 'news') ? 'mixed' : value
 
   if (!stationBlocks.length) return normalizeType(baseType)
-  const mins = slotStart.getHours() * 60 + slotStart.getMinutes()
+  const mins = getBroadcastMinutesOfDay(slotStart, timezone)
   const matches = stationBlocks.filter((block) => timeIsInRange(mins, block.startMins, block.endMins))
   if (!matches.length) return normalizeType(baseType)
 
@@ -405,9 +437,10 @@ function getContentTypeForSlot(
 function getMatchingStationBlock(
   slotStart: Date,
   stationBlocks: EffectiveStationBlock[],
+  timezone: string,
 ): EffectiveStationBlock | null {
   if (!stationBlocks.length) return null
-  const mins = slotStart.getHours() * 60 + slotStart.getMinutes()
+  const mins = getBroadcastMinutesOfDay(slotStart, timezone)
   const matches = stationBlocks.filter((block) => timeIsInRange(mins, block.startMins, block.endMins))
   if (!matches.length) return null
   const spanMins = (block: EffectiveStationBlock) => {
@@ -733,8 +766,8 @@ const RATINGS_ORDER = ['G', 'PG', 'M', 'MA15+']
 //   PG     — any time
 //   M      — 20:30–05:00, plus 12:00–15:00 on school days (weekdays)
 //   MA15+  — 21:00–05:00
-function classificationCeiling(date: Date, minutesOfDay: number): 'G' | 'PG' | 'M' | 'MA15+' {
-  const isWeekday = ![0, 6].includes(getDay(date))
+function classificationCeiling(date: Date, minutesOfDay: number, timezone: string): 'G' | 'PG' | 'M' | 'MA15+' {
+  const isWeekday = ![0, 6].includes(getBroadcastDayOfWeek(date, timezone))
   if (minutesOfDay >= 21 * 60 || minutesOfDay < 5 * 60) return 'MA15+'
   if (minutesOfDay >= 20 * 60 + 30) return 'M'
   if (isWeekday && minutesOfDay >= 12 * 60 && minutesOfDay < 15 * 60) return 'M'
@@ -1151,7 +1184,8 @@ export async function runScheduler(
       return
     }
 
-    const today = startOfDay(new Date())
+    const broadcastTimezone = await getBroadcastTimezone()
+    const today = getBroadcastDayStart(new Date(), broadcastTimezone)
     const schedulerYearRange = await getSchedulerYearRange()
     await persistStatus({
       phase: 'loading_catalog',
@@ -1161,7 +1195,7 @@ export async function runScheduler(
         ? `Preparing ${horizonDays}-day regeneration for ${stationId}`
         : `Preparing ${horizonDays}-day generation for ${stations.length} stations`,
     })
-    const finalDate = startOfDay(addDays(today, Math.max(0, horizonDays - 1)))
+    const finalDate = addBroadcastDays(today, Math.max(0, horizonDays - 1), broadcastTimezone)
 
     if (forceRegenerate) {
       await clearSchedulesForRange({ startDate: today, endDate: finalDate, stationId })
@@ -1172,7 +1206,7 @@ export async function runScheduler(
       _max: { date: true },
     })
     const daysRemaining = maxScheduled._max.date
-      ? differenceInCalendarDays(startOfDay(maxScheduled._max.date), today) + 1
+      ? Math.floor((getBroadcastDayStart(maxScheduled._max.date, broadcastTimezone).getTime() - today.getTime()) / 86_400_000) + 1
       : 0
     await persistStatus({
       phase: 'loading_catalog',
@@ -1268,13 +1302,13 @@ export async function runScheduler(
     const movieClaimDays = new Map<string, number[]>()
     const recordMovieClaim = (date: Date, ratingKey: string): void => {
       if (!ratingKey) return
-      const dayMs = startOfDay(date).getTime()
+      const dayMs = getBroadcastDayStart(date, broadcastTimezone).getTime()
       const list = movieClaimDays.get(ratingKey) ?? []
       list.push(dayMs)
       movieClaimDays.set(ratingKey, list)
     }
     const moviesBlockedForDay = (date: Date): Set<string> => {
-      const dayMs = startOfDay(date).getTime()
+      const dayMs = getBroadcastDayStart(date, broadcastTimezone).getTime()
       const blocked = new Set<string>()
       for (const [ratingKey, days] of movieClaimDays) {
         if (days.some((d) => Math.abs(d - dayMs) < MOVIE_EXCLUSIVITY_MS)) blocked.add(ratingKey)
@@ -1284,7 +1318,7 @@ export async function runScheduler(
     {
       const seedDates: Date[] = []
       for (let dayOffset = -7; dayOffset < horizonDays; dayOffset++) {
-        seedDates.push(startOfDay(addDays(today, dayOffset)))
+        seedDates.push(addBroadcastDays(today, dayOffset, broadcastTimezone))
       }
       const existingMovieSlots = await prisma.slot.findMany({
         where: {
@@ -1302,7 +1336,8 @@ export async function runScheduler(
 
     const overrideYears = new Set<number>()
     for (let dayOffset = 0; dayOffset < horizonDays; dayOffset++) {
-      overrideYears.add(startOfDay(addDays(today, dayOffset)).getFullYear())
+      const parts = getZonedParts(addBroadcastDays(today, dayOffset, broadcastTimezone), broadcastTimezone)
+      overrideYears.add(parts.year)
     }
     const holidayOverrideRows = await prisma.holidayOverride.findMany({
       where: {
@@ -1327,7 +1362,7 @@ export async function runScheduler(
       const fillerPools      = fromJsonObject<Record<string, string | null>>(station.fillerPools)
       const holidayOverrides = fromJsonObject<Record<string, any>>(station.holidayOverrides)
       for (let dayOffset = 0; dayOffset < horizonDays; dayOffset++) {
-        const date = startOfDay(addDays(today, dayOffset))
+        const date = addBroadcastDays(today, dayOffset, broadcastTimezone)
 
         try {
 
@@ -1371,8 +1406,9 @@ export async function runScheduler(
           }
 
           // Pick the template — holiday full-replace, else weekday/weekend
-          const blocks = getDay(date) === 6 ? SATURDAY_BLOCKS : getDay(date) === 0 ? SUNDAY_BLOCKS : WEEKDAY_BLOCKS
-          const stationBlocks = resolveStationTimeBlocks(date, rawRules)
+          const broadcastWeekday = getBroadcastDayOfWeek(date, broadcastTimezone)
+          const blocks = broadcastWeekday === 6 ? SATURDAY_BLOCKS : broadcastWeekday === 0 ? SUNDAY_BLOCKS : WEEKDAY_BLOCKS
+          const stationBlocks = resolveStationTimeBlocks(date, rawRules, broadcastTimezone)
 
           // Genre overrides for holidays
           const effectiveAllowGenres = holidayContentOverride && holidayConfig?.content_priority?.length
@@ -1458,8 +1494,8 @@ export async function runScheduler(
           const windowBumperAssigned = new Set<string>()
 
           const reservedIntervals: Array<{ start: number; end: number }> = []
-          const dayStartMs = startOfDay(date).getTime()
-          const dayEndMs = addDays(startOfDay(date), 1).getTime()
+          const dayStartMs = getBroadcastDayStart(date, broadcastTimezone).getTime()
+          const dayEndMs = addBroadcastDays(date, 1, broadcastTimezone).getTime()
           const dayEvents = await prisma.specialEvent.findMany({
             where: {
               consumedAt: null,
@@ -1479,12 +1515,13 @@ export async function runScheduler(
             const evContentId = String(evContent.id ?? '').trim()
             if (!evContentId) continue
 
-            const eventMonthDay = ev.startTime.getMonth() * 100 + ev.startTime.getDate()
-            const currentMonthDay = date.getMonth() * 100 + date.getDate()
+            const eventParts = getZonedParts(ev.startTime, broadcastTimezone)
+            const currentParts = getZonedParts(date, broadcastTimezone)
+            const eventMonthDay = eventParts.month * 100 + eventParts.day
+            const currentMonthDay = currentParts.month * 100 + currentParts.day
             if (eventMonthDay !== currentMonthDay) continue
 
-            const startMs = new Date(date)
-            startMs.setHours(ev.startTime.getHours(), ev.startTime.getMinutes(), 0, 0)
+            const startMs = atBroadcastTime(date, eventParts.hour, eventParts.minute, broadcastTimezone)
             const startTimeMs = startMs.getTime()
             if (startTimeMs < dayStartMs || startTimeMs >= dayEndMs) continue
 
@@ -1541,18 +1578,16 @@ export async function runScheduler(
           }
 
           for (const block of blocks) {
-            const blockStart = new Date(date)
-            blockStart.setHours(block.startHour, block.startMin, 0, 0)
+            const blockStart = atBroadcastTime(date, block.startHour, block.startMin, broadcastTimezone)
 
-            const blockEnd = new Date(date)
-            blockEnd.setHours(
+            let blockEnd = atBroadcastTime(
+              date,
               block.endHour === 24 ? 0 : block.endHour,
               block.endMin,
-              0,
-              0,
+              broadcastTimezone,
             )
             if (block.endHour === 24 || blockEnd <= blockStart) {
-              blockEnd.setDate(blockEnd.getDate() + 1)
+              blockEnd = addBroadcastDays(blockEnd, 1, broadcastTimezone)
             }
 
             const blockDurationMins = differenceInMinutes(blockEnd, blockStart)
@@ -1590,7 +1625,7 @@ export async function runScheduler(
 
             while (differenceInMinutes(blockEnd, slotStart) >= 1) {
               const remainingMins = differenceInMinutes(blockEnd, slotStart)
-              const effectiveContentType = getContentTypeForSlot(slotStart, block.contentType, stationBlocks)
+              const effectiveContentType = getContentTypeForSlot(slotStart, block.contentType, stationBlocks, broadcastTimezone)
 
               const reservedHit = reservedIntervals.find((r) => {
                 const t = slotStart.getTime()
@@ -1602,13 +1637,13 @@ export async function runScheduler(
                 continue
               }
 
-              const activeStationSlot = getMatchingStationBlock(slotStart, stationBlocks)
+              const activeStationSlot = getMatchingStationBlock(slotStart, stationBlocks, broadcastTimezone)
               const applySlotFilter = !holidayContentOverride && !!activeStationSlot
 
               // Apply the Australian classification zone on top of the daypart's
               // own ceiling so nothing airs out of zone (e.g. no M before 8:30pm).
-              const slotMinsOfDay = slotStart.getHours() * 60 + slotStart.getMinutes()
-              const effCeiling = stricterRating(block.ratingCeiling, classificationCeiling(date, slotMinsOfDay))
+              const slotMinsOfDay = getBroadcastMinutesOfDay(slotStart, broadcastTimezone)
+              const effCeiling = stricterRating(block.ratingCeiling, classificationCeiling(date, slotMinsOfDay, broadcastTimezone))
               const ceil = (items: PlexMediaItem[]) => items.filter((i) => ratingAllowed(i.contentRating, effCeiling))
 
               const slotMovies = ceil(applySlotFilter ? filterCandidatesBySlot(validMovies, activeStationSlot, activeClassByPlexKey, activeClassBySectionKey) : validMovies)
@@ -1804,7 +1839,7 @@ export async function runScheduler(
 
                     if (w.plexShowKey) {
                       // Pinned Plex show: place its episodes, advancing progression.
-                      const weekday = getDay(slotStart)
+                      const weekday = getBroadcastDayOfWeek(slotStart, broadcastTimezone)
                       const isStrip = Boolean(w.strip) && weekday >= 1 && weekday <= 5
                       const pinWeekday = isStrip ? STRIP_WEEKDAY : weekday
                       const cadenceDays = isStrip ? 1 : EPISODE_PROGRESS_INTERVAL_DAYS
@@ -1820,7 +1855,7 @@ export async function runScheduler(
                       let placed = 0
 
                       while (slotStart.getTime() < windowEndMs && (fillMode === 'fill' || placed < 1)) {
-                        const timeStr = `${String(slotStart.getHours()).padStart(2, '0')}:${String(slotStart.getMinutes()).padStart(2, '0')}`
+                        const timeStr = formatBroadcastTime(slotStart, broadcastTimezone)
                         const progress = await prisma.showProgress.upsert({
                           where: { stationId_plexShowKey: { stationId: station.id, plexShowKey: w.plexShowKey } },
                           update: {},
@@ -2011,8 +2046,8 @@ export async function runScheduler(
                 // Honour the holiday-tagged pool first; only widen to the general
                 // catalog when the tagged pool yields no eligible series.
                 const showSelectionPool = slotShows.length ? slotShows : slotShowsFallback
-                const weekday = getDay(slotStart)
-                const timeStr = `${String(slotStart.getHours()).padStart(2, '0')}:${String(slotStart.getMinutes()).padStart(2, '0')}`
+                const weekday = getBroadcastDayOfWeek(slotStart, broadcastTimezone)
+                const timeStr = formatBroadcastTime(slotStart, broadcastTimezone)
 
                 // Weeknight strip: Mon–Fri share one series at this time, advancing
                 // one episode per day. Other slots pin per actual weekday + weekly.
