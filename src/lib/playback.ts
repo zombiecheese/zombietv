@@ -75,6 +75,12 @@ interface YoutubeSelection {
   startOffsetMs: number
 }
 
+function preferStationScopedItems<T extends { station: string | null }>(items: T[], stationId: string): T[] {
+  const stationItems = items.filter((item) => item.station === stationId)
+  if (stationItems.length) return stationItems
+  return items.filter((item) => item.station == null)
+}
+
 // ─── Main function ────────────────────────────────────────────────────────────
 
 export async function getPlaybackState(stationId: string, nowMs?: number): Promise<PlaybackState> {
@@ -238,15 +244,19 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
   // Pre-fetch the ad-eligible pool once so each ad break can extend its end to
   // the completion of the last ad video — ads always play to the end before the
   // main programme resumes.
-  const adPool = adBreakDefs.length
-    ? (await prisma.youtubeContent.findMany({
+  const adPoolRaw = adBreakDefs.length
+    ? await prisma.youtubeContent.findMany({
         where: {
           category: { in: ['ads', 'filler', 'music'] },
           OR: [{ station: null }, { station: stationId }],
         },
-        select: { videoId: true, durationMins: true },
-      })).filter((item: any): item is { videoId: string; durationMins: number | null } => Boolean(item.videoId))
+        select: { videoId: true, durationMins: true, station: true },
+      })
     : []
+  const adPool = preferStationScopedItems(
+    adPoolRaw.filter((item: any): item is { videoId: string; durationMins: number | null; station: string | null } => Boolean(item.videoId)),
+    stationId,
+  )
 
   // For a given ad break, return the absolute time at which the last ad video
   // that covers its nominal window finishes (>= the nominal end time).
@@ -509,10 +519,11 @@ async function selectYoutubeSelection(params: {
     ],
   })
 
-  const seeded = seededShuffle(
+  const scopedCandidates = preferStationScopedItems(
     candidates.filter((item: any): item is YoutubePoolItem & { videoId: string } => Boolean(item.videoId)),
-    seed,
+    stationId,
   )
+  const seeded = seededShuffle(scopedCandidates, seed)
 
   // Reserve time at both window edges for opening/closing idents. The playback
   // cursor determines which item is current, so tuning in mid-slot naturally

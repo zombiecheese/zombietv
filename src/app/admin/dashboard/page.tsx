@@ -420,6 +420,10 @@ export default function AdminDashboard() {
     if (!Number.isFinite(parsed)) return maxCatalogYear
     return Math.min(Math.max(parsed, minCatalogYear), maxCatalogYear)
   })()
+  const yearSpan = Math.max(1, maxCatalogYear - minCatalogYear)
+  const selectedMinPct = ((selectedMinYear - minCatalogYear) / yearSpan) * 100
+  const selectedMaxPct = ((selectedMaxYear - minCatalogYear) / yearSpan) * 100
+  const tickYears = [0, 0.25, 0.5, 0.75, 1].map((ratio) => Math.round(minCatalogYear + yearSpan * ratio))
 
   return (
     <AdminShell>
@@ -513,14 +517,36 @@ export default function AdminDashboard() {
             {isSavingSchedulerSettings ? 'SAVING...' : 'SAVE SCHEDULER'}
           </button>
         </div>
-        <div style={{ marginBottom: 8, padding: '8px 10px', border: '1px solid #1e3a5f', backgroundColor: '#07111f' }}>
+        <div style={{ marginBottom: 8, padding: '10px 12px', border: '1px solid #1e3a5f', backgroundColor: '#07111f' }}>
           <div style={{ color: '#a8c4e0', fontSize: '0.7rem', marginBottom: 6 }}>
             {hasCatalogYearBounds
               ? `Catalog year bounds: ${minCatalogYear} - ${maxCatalogYear}`
               : 'Catalog year bounds unavailable. Sync Plex catalog to enable range limits.'}
           </div>
-          <div style={{ display: 'grid', gap: 6 }}>
+          <div style={{ position: 'relative', padding: '36px 6px 18px' }}>
+            <div style={{
+              position: 'absolute',
+              left: 6,
+              right: 6,
+              top: 44,
+              height: 18,
+              borderRadius: 999,
+              border: '1px solid #1e3a5f',
+              backgroundColor: '#d8d8d8',
+              boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.22)',
+            }} />
+            <div style={{
+              position: 'absolute',
+              top: 45,
+              left: `calc(${selectedMinPct}% + 6px)`,
+              width: `calc(${Math.max(0, selectedMaxPct - selectedMinPct)}% - 1px)`,
+              height: 16,
+              borderRadius: 999,
+              background: 'linear-gradient(180deg, #76b8e8, #4996d0)',
+              boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.3)',
+            }} />
             <input
+              className="year-range-slider"
               type="range"
               min={minCatalogYear}
               max={maxCatalogYear}
@@ -531,9 +557,10 @@ export default function AdminDashboard() {
                 setSchedulerYearMin(String(Math.min(next, selectedMaxYear)))
               }}
               disabled={!hasCatalogYearBounds}
-              style={{ accentColor: '#ff6600' }}
+              style={{ zIndex: 3 }}
             />
             <input
+              className="year-range-slider"
               type="range"
               min={minCatalogYear}
               max={maxCatalogYear}
@@ -544,15 +571,115 @@ export default function AdminDashboard() {
                 setSchedulerYearMax(String(Math.max(next, selectedMinYear)))
               }}
               disabled={!hasCatalogYearBounds}
-              style={{ accentColor: '#4a7fb5' }}
+              style={{ zIndex: 4 }}
             />
+            <div
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: `calc(${selectedMinPct}% + 6px)`,
+                transform: 'translateX(-50%)',
+                backgroundColor: '#f2f2f2',
+                border: '1px solid #cfd4da',
+                color: '#3a3a3a',
+                fontSize: '0.8rem',
+                padding: '4px 10px',
+                minWidth: 74,
+                textAlign: 'center',
+              }}
+            >
+              {selectedMinYear.toLocaleString()}
+            </div>
+            <div
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: `calc(${selectedMaxPct}% + 6px)`,
+                transform: 'translateX(-50%)',
+                backgroundColor: '#f2f2f2',
+                border: '1px solid #cfd4da',
+                color: '#3a3a3a',
+                fontSize: '0.8rem',
+                padding: '4px 10px',
+                minWidth: 74,
+                textAlign: 'center',
+              }}
+            >
+              {selectedMaxYear.toLocaleString()}
+            </div>
           </div>
-          <div style={{ color: '#4a7fb5', fontSize: '0.68rem', marginTop: 6 }}>
-            Selected: {selectedMinYear} - {selectedMaxYear}
+          <div style={{ display: 'flex', justifyContent: 'space-between', color: '#8ea7c3', fontSize: '0.72rem', marginTop: 2 }}>
+            {tickYears.map((year, idx) => (
+              <span key={`${year}-${idx}`}>{year.toLocaleString()}</span>
+            ))}
+          </div>
+          <div style={{ color: '#4a7fb5', fontSize: '0.68rem', marginTop: 8 }}>
+            Selected: {selectedMinYear.toLocaleString()} - {selectedMaxYear.toLocaleString()}
           </div>
         </div>
         {schedulerSettingsMsg && <div style={{ fontSize: '0.72rem', color: '#4caf50', marginTop: 4 }}>{schedulerSettingsMsg}</div>}
       </div>
+
+      <style jsx global>{`
+        .year-range-slider {
+          -webkit-appearance: none;
+          appearance: none;
+          position: absolute;
+          left: 6px;
+          right: 6px;
+          top: 36px;
+          width: calc(100% - 12px);
+          height: 34px;
+          background: transparent;
+          pointer-events: none;
+          margin: 0;
+        }
+
+        .year-range-slider::-webkit-slider-runnable-track {
+          height: 18px;
+          background: transparent;
+        }
+
+        .year-range-slider::-moz-range-track {
+          height: 18px;
+          background: transparent;
+        }
+
+        .year-range-slider::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 32px;
+          height: 32px;
+          border-radius: 50%;
+          border: 1px solid #31343a;
+          background: linear-gradient(180deg, #5b5f66, #3f4349);
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
+          margin-top: -7px;
+          pointer-events: auto;
+          cursor: pointer;
+        }
+
+        .year-range-slider::-moz-range-thumb {
+          width: 32px;
+          height: 32px;
+          border-radius: 50%;
+          border: 1px solid #31343a;
+          background: linear-gradient(180deg, #5b5f66, #3f4349);
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
+          pointer-events: auto;
+          cursor: pointer;
+        }
+
+        .year-range-slider:disabled::-webkit-slider-thumb {
+          opacity: 0.45;
+          cursor: not-allowed;
+        }
+
+        .year-range-slider:disabled::-moz-range-thumb {
+          opacity: 0.45;
+          cursor: not-allowed;
+        }
+      `}</style>
 
       {/* ── Broadcast Timezone ──────────────────────────────────────────────── */}
       <div style={{ ...card, marginBottom: 18 }}>

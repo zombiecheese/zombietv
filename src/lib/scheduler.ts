@@ -1213,6 +1213,41 @@ export async function runScheduler(
     // and avoid broadcasting the same title at the same time on another channel.
     const globalAirings = new Map<string, Airing[]>()
 
+    // Cross-station ad-break deconfliction. Every scheduled ad pod start-time is
+    // claimed (UTC ms). New slots shift each break forward by whole minutes until
+    // they land on a free minute so channels do not cut to ads simultaneously.
+    const globalAdBreakStartMs = new Set<number>()
+    const deconflictAdBreaksForSlot = (
+      slotStart: Date,
+      contentDurationMins: number,
+      adBreaks: Array<{ offsetMins: number; durationMins: number }>,
+    ): Array<{ offsetMins: number; durationMins: number }> => {
+      if (!adBreaks.length || contentDurationMins <= 1) return []
+
+      const out: Array<{ offsetMins: number; durationMins: number }> = []
+      const claimedOffsets = new Set<number>()
+      const slotStartMs = slotStart.getTime()
+
+      for (const ad of adBreaks) {
+        let offsetMins = Math.max(1, Math.min(contentDurationMins - 1, Math.round(ad.offsetMins)))
+
+        while (
+          offsetMins < contentDurationMins &&
+          (claimedOffsets.has(offsetMins) || globalAdBreakStartMs.has(slotStartMs + offsetMins * 60_000))
+        ) {
+          offsetMins += 1
+        }
+
+        if (offsetMins >= contentDurationMins) continue
+
+        claimedOffsets.add(offsetMins)
+        globalAdBreakStartMs.add(slotStartMs + offsetMins * 60_000)
+        out.push({ offsetMins, durationMins: ad.durationMins })
+      }
+
+      return out
+    }
+
     // Cross-station movie exclusivity over a rolling one-week window. A movie may
     // air on at most one channel within any 7-day span, so every movie placed by
     // any station is recorded against its broadcast day and excluded from every
@@ -1457,7 +1492,11 @@ export async function runScheduler(
             }
             if (durationMins <= 0) durationMins = 60
 
-            const eventAdBreaks = buildAdBreaks(durationMins, evSource === 'plex' ? adIntervalMovie : adIntervalTv, adEnabled)
+            const eventAdBreaks = deconflictAdBreaksForSlot(
+              new Date(startTimeMs),
+              durationMins,
+              buildAdBreaks(durationMins, evSource === 'plex' ? adIntervalMovie : adIntervalTv, adEnabled),
+            )
             const eventAdMins = eventAdBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
             const endMs = startTimeMs + (durationMins + eventAdMins) * 60_000
             if (reservedIntervals.some((r) => startTimeMs < r.end && endMs > r.start)) continue
@@ -1598,7 +1637,11 @@ export async function runScheduler(
                 )
 
                 if (rescueMovie) {
-                  const rescueAdBreaks = buildAdBreaks(rescueMovie.durationMins, adIntervalMovie, adEnabled)
+                  const rescueAdBreaks = deconflictAdBreaksForSlot(
+                    slotStart,
+                    rescueMovie.durationMins,
+                    buildAdBreaks(rescueMovie.durationMins, adIntervalMovie, adEnabled),
+                  )
                   const rescueAdMins   = rescueAdBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
                   const rescueSlotEnd  = addMinutes(slotStart, rescueMovie.durationMins + rescueAdMins)
                   const rescueAligned  = alignEndTime(rescueSlotEnd)
@@ -1639,7 +1682,11 @@ export async function runScheduler(
                 // block with filler in a single window rather than truncating a
                 // long movie into a short slot.
                 const fallbackDuration = remainingMins
-                const fallbackAdBreaks = buildAdBreaks(fallbackDuration, adIntervalTv, adEnabled)
+                const fallbackAdBreaks = deconflictAdBreaksForSlot(
+                  slotStart,
+                  fallbackDuration,
+                  buildAdBreaks(fallbackDuration, adIntervalTv, adEnabled),
+                )
                 await prisma.slot.create({
                   data: {
                     scheduleId:    schedule.id,
@@ -1707,7 +1754,11 @@ export async function runScheduler(
                   showInEpg = false,
                 ) => {
                   if (mins < 1) return
-                  const ads = buildAdBreaks(mins, adIntervalTv, adEnabled)
+                  const ads = deconflictAdBreaksForSlot(
+                    startAt,
+                    mins,
+                    buildAdBreaks(mins, adIntervalTv, adEnabled),
+                  )
                   const closedownYoutube = closedownContent && (closedownContent.type === 'youtube_video' || closedownContent.type === 'youtube_playlist')
                   const fid = closedownYoutube
                     ? closedownContent!.value
@@ -1790,7 +1841,11 @@ export async function runScheduler(
                         const episode = episodeOrder.find((e) => e.season === progress.nextSeason && e.episode === progress.nextEpisode) ?? null
                         if (!episode) break
 
-                        const adBreaks   = buildAdBreaks(episode.durationMins, adIntervalTv, adEnabled)
+                        const adBreaks   = deconflictAdBreaksForSlot(
+                          slotStart,
+                          episode.durationMins,
+                          buildAdBreaks(episode.durationMins, adIntervalTv, adEnabled),
+                        )
                         const adMins     = adBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
                         const remainWin = Math.max(0, Math.round((windowEndMs - slotStart.getTime()) / 60_000))
                         if (dayUsedMediaKeys.has(episode.ratingKey) || episode.durationMins + adMins > remainWin + MAX_CONTENT_OVERRUN_MINS) break
@@ -1902,7 +1957,11 @@ export async function runScheduler(
                   failedPlacementsAtCurrentStart += 1
                   continue
                 }
-                const adBreaks = buildAdBreaks(chosen.durationMins, adIntervalMovie, adEnabled)
+                const adBreaks = deconflictAdBreaksForSlot(
+                  slotStart,
+                  chosen.durationMins,
+                  buildAdBreaks(chosen.durationMins, adIntervalMovie, adEnabled),
+                )
                 const adMins   = adBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
                 const slotEnd  = addMinutes(slotStart, chosen.durationMins + adMins)
                 const alignedEnd = alignEndTime(slotEnd)
@@ -2070,7 +2129,11 @@ export async function runScheduler(
                     // used today on this station, already on air on another
                     // station, or too long for the time remaining. Preserving the
                     // progression pointer keeps the series alive for later slots.
-                    const episodeAdBreaks = buildAdBreaks(episode.durationMins, adIntervalTv, adEnabled)
+                    const episodeAdBreaks = deconflictAdBreaksForSlot(
+                      slotStart,
+                      episode.durationMins,
+                      buildAdBreaks(episode.durationMins, adIntervalTv, adEnabled),
+                    )
                     const episodeAdMins = episodeAdBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
                     const episodeTooLong = episode.durationMins + episodeAdMins > remainingMins + MAX_CONTENT_OVERRUN_MINS
                     if (excludeKeys.has(episode.ratingKey) || episodeTooLong) {
@@ -2149,7 +2212,11 @@ export async function runScheduler(
               }
 
               const fallbackDuration = Math.max(1, Math.min(30, remainingMins))
-              const fallbackAdBreaks = buildAdBreaks(fallbackDuration, adIntervalTv, adEnabled)
+              const fallbackAdBreaks = deconflictAdBreaksForSlot(
+                slotStart,
+                fallbackDuration,
+                buildAdBreaks(fallbackDuration, adIntervalTv, adEnabled),
+              )
 
               const rescuePool = applyRatingCeiling(slotRescueMovies, effCeiling)
               const rescueCandidates = rescuePool.length ? rescuePool : slotRescueMovies
@@ -2165,7 +2232,11 @@ export async function runScheduler(
               )
 
               if (rescueMovie) {
-                const rescueAdBreaks = buildAdBreaks(rescueMovie.durationMins, adIntervalMovie, adEnabled)
+                const rescueAdBreaks = deconflictAdBreaksForSlot(
+                  slotStart,
+                  rescueMovie.durationMins,
+                  buildAdBreaks(rescueMovie.durationMins, adIntervalMovie, adEnabled),
+                )
                 const rescueAdMins   = rescueAdBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
                 const rescueSlotEnd  = addMinutes(slotStart, rescueMovie.durationMins + rescueAdMins)
                 const rescueAligned  = alignEndTime(rescueSlotEnd)
