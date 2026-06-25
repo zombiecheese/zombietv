@@ -1,5 +1,6 @@
-// GET  /api/admin/youtube — list all YoutubeContent entries
-// POST /api/admin/youtube — add a new entry
+// GET    /api/admin/youtube — list all YoutubeContent entries
+// POST   /api/admin/youtube — add a new entry
+// DELETE /api/admin/youtube — bulk remove entries by id
 
 import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
@@ -140,4 +141,24 @@ export async function POST(req: NextRequest) {
   })
 
   return NextResponse.json(entry, { status: 201 })
+}
+
+export async function DELETE(req: NextRequest) {
+  const guard = await requireAdmin(req)
+  if (!guard.ok) return guard.response
+
+  const body = await req.json().catch(() => ({}))
+  const ids = Array.isArray(body?.ids)
+    ? body.ids.map((id: unknown) => String(id || '').trim()).filter(Boolean)
+    : []
+
+  if (!ids.length) {
+    return NextResponse.json({ error: 'ids array is required' }, { status: 400 })
+  }
+
+  const result = await prisma.youtubeContent.deleteMany({
+    where: { id: { in: ids } },
+  })
+
+  return NextResponse.json({ ok: true, deletedCount: result.count })
 }

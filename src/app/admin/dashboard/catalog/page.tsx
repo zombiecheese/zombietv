@@ -34,6 +34,8 @@ export default function CatalogPage() {
   const [holidayName, setHolidayName] = useState('christmas')
   const [holidayTaggedItems, setHolidayTaggedItems] = useState<CatalogItem[]>([])
   const [holidayTaggedKeys, setHolidayTaggedKeys] = useState<string[]>([])
+  const [holidayListTypeFilter, setHolidayListTypeFilter] = useState<'all' | 'movie' | 'show'>('movie')
+  const [selectedHolidayKeys, setSelectedHolidayKeys] = useState<string[]>([])
   const [msg, setMsg] = useState('')
 
   const loadBlocked = async (query = '', type: 'all' | 'movie' | 'show' = searchType, library = libraryFilter) => {
@@ -81,6 +83,7 @@ export default function CatalogPage() {
 
   useEffect(() => {
     loadHolidayTags(holidayName).catch(() => {})
+    setSelectedHolidayKeys([])
   }, [holidayName])
 
   const doSearch = async () => {
@@ -156,7 +159,48 @@ export default function CatalogPage() {
     }
     setHolidayTaggedItems(data.taggedItems || [])
     setHolidayTaggedKeys((data.taggedItems || []).map((x: CatalogItem) => x.plexKey))
+    setSelectedHolidayKeys((prev) => prev.filter((key) => key !== plexKey))
     setMsg(`✓ Removed holiday tag for ${holidayLabel}.`)
+  }
+
+  const filteredHolidayTaggedItems = holidayTaggedItems.filter((item) => (
+    holidayListTypeFilter === 'all' ? true : item.type === holidayListTypeFilter
+  ))
+
+  const toggleHolidaySelection = (plexKey: string) => {
+    setSelectedHolidayKeys((prev) => (prev.includes(plexKey) ? prev.filter((x) => x !== plexKey) : [...prev, plexKey]))
+  }
+
+  const selectAllHolidayVisible = () => {
+    setSelectedHolidayKeys(filteredHolidayTaggedItems.map((item) => item.plexKey))
+  }
+
+  const unselectAllHolidayVisible = () => {
+    setSelectedHolidayKeys([])
+  }
+
+  const bulkRemoveHolidayTags = async () => {
+    if (!selectedHolidayKeys.length) {
+      setMsg('Select at least one tagged catalog item to remove.')
+      return
+    }
+    if (!confirm(`Remove ${selectedHolidayKeys.length} selected holiday tag(s)?`)) return
+
+    const r = await fetch('/api/admin/catalog/holiday-tags', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ holidayName, plexKeys: selectedHolidayKeys }),
+    })
+    const data = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      setMsg(data.error || 'Failed to bulk remove holiday tags.')
+      return
+    }
+    const taggedItems = data.taggedItems || []
+    setHolidayTaggedItems(taggedItems)
+    setHolidayTaggedKeys(taggedItems.map((x: CatalogItem) => x.plexKey))
+    setSelectedHolidayKeys([])
+    setMsg(`✓ Removed ${selectedHolidayKeys.length} holiday tag(s) for ${holidayLabel}.`)
   }
 
   const holidayOptionItems = holidaySettings.length > 0 ? holidaySettings : DEFAULT_HOLIDAY_SETTINGS
@@ -245,10 +289,28 @@ export default function CatalogPage() {
           <h3 style={{ margin: '0 0 8px', color: '#ff6600', fontSize: '0.85rem', letterSpacing: '0.06em' }}>
           Holiday Tagged Media ({holidayLabel})
         </h3>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
+          <select
+            value={holidayListTypeFilter}
+            onChange={(e) => {
+              setHolidayListTypeFilter(e.target.value as 'all' | 'movie' | 'show')
+              setSelectedHolidayKeys([])
+            }}
+            style={{ ...sel, width: 160 }}
+          >
+            <option value="all">All tagged</option>
+            <option value="movie">Movies only</option>
+            <option value="show">Shows only</option>
+          </select>
+          <button onClick={selectAllHolidayVisible} style={{ ...btn, backgroundColor: '#2d5a24' }} disabled={!filteredHolidayTaggedItems.length}>Select All</button>
+          <button onClick={unselectAllHolidayVisible} style={{ ...btn, backgroundColor: '#333' }} disabled={!selectedHolidayKeys.length}>Unselect All</button>
+          <button onClick={bulkRemoveHolidayTags} style={{ ...btn, backgroundColor: '#3d0000' }} disabled={!selectedHolidayKeys.length}>Remove Selected ({selectedHolidayKeys.length})</button>
+        </div>
         <div style={{ maxHeight: 240, overflowY: 'auto', border: '1px solid #0d1f3c' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.74rem' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid #1e3a5f', color: '#4a7fb5' }}>
+                <th style={{ ...td, fontWeight: 600 }}></th>
                 <th style={{ ...td, fontWeight: 600 }}>Title</th>
                 <th style={{ ...td, fontWeight: 600 }}>Type</th>
                 <th style={{ ...td, fontWeight: 600 }}>Year</th>
@@ -256,17 +318,25 @@ export default function CatalogPage() {
               </tr>
             </thead>
             <tbody>
-              {holidayTaggedItems.map((item) => (
+              {filteredHolidayTaggedItems.map((item) => (
                 <tr key={`holiday-${item.plexKey}`} style={{ borderBottom: '1px solid #0d1f3c' }}>
+                  <td style={td}>
+                    <input
+                      type="checkbox"
+                      checked={selectedHolidayKeys.includes(item.plexKey)}
+                      onChange={() => toggleHolidaySelection(item.plexKey)}
+                      aria-label={`Select ${item.title}`}
+                    />
+                  </td>
                   <td style={td}>{item.title}</td>
                   <td style={td}>{item.type}</td>
                   <td style={td}>{item.year || '-'}</td>
                   <td style={td}><button onClick={() => removeHolidayTag(item.plexKey)} style={{ ...btn, padding: '3px 8px', fontSize: '0.65rem', backgroundColor: '#3d0000' }}>Untag</button></td>
                 </tr>
               ))}
-              {holidayTaggedItems.length === 0 && (
+              {filteredHolidayTaggedItems.length === 0 && (
                 <tr>
-                  <td colSpan={4} style={{ ...td, color: '#4a7fb5', fontStyle: 'italic' }}>No tagged titles for this holiday.</td>
+                  <td colSpan={5} style={{ ...td, color: '#4a7fb5', fontStyle: 'italic' }}>No tagged titles for this filter.</td>
                 </tr>
               )}
             </tbody>

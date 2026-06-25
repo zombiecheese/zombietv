@@ -61,12 +61,19 @@ export async function DELETE(req: NextRequest) {
   const body = await req.json().catch(() => ({}))
   const holidayName = String(body?.holidayName || '').trim()
   const plexKey = String(body?.plexKey || '').trim()
+  const plexKeys = Array.isArray(body?.plexKeys)
+    ? body.plexKeys.map((key: unknown) => String(key || '').trim()).filter(Boolean)
+    : []
 
-  if (!holidayName || !plexKey) {
-    return NextResponse.json({ error: 'holidayName and plexKey are required' }, { status: 400 })
+  if (!holidayName || (!plexKey && !plexKeys.length)) {
+    return NextResponse.json({ error: 'holidayName and plexKey or plexKeys are required' }, { status: 400 })
   }
 
-  await removeHolidayTag(holidayName, plexKey)
+  if (plexKeys.length) {
+    await Promise.all(plexKeys.map((key: string) => removeHolidayTag(holidayName, key)))
+  } else {
+    await removeHolidayTag(holidayName, plexKey)
+  }
   const taggedItems = await listHolidayTaggedItems(holidayName)
   return NextResponse.json({ ok: true, holidayName, taggedItems })
 }

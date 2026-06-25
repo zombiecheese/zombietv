@@ -20,6 +20,7 @@ const ChannelChange = dynamic(() => import('@/components/ChannelChange'), { ssr:
 const EPG_HEIGHT_PX    = 440   // height of the EPG panel at the bottom (increased to show 8+ stations)
 const EPG_BAR_HEIGHT_PX = 38   // compact bar height when EPG is minimized
 const NOWBAR_HEIGHT_PX = 36
+const MOBILE_BREAKPOINT_PX = 900
 
 function authReasonMessage(reason: string | null): string {
   if (!reason) return ''
@@ -34,7 +35,9 @@ function authReasonMessage(reason: string | null): string {
 export default function Home() {
   const [mounted, setMounted] = useState(false)
   const [station, setStation]             = useState('zbc')
+  const [stationOrder, setStationOrder]   = useState<string[]>(['stn', 'zbc', 'nnwk', 'seven', 'nine', 'ten'])
   const [epgMinimized, setEpgMinimized]   = useState(false)
+  const [isMobileViewport, setIsMobileViewport] = useState(false)
   const [pendingStation, setPending]      = useState<string | null>(null)
   const [staticActive, setStaticActive]   = useState(false)
   const [checkingSession, setCheckingSession] = useState(true)
@@ -47,6 +50,7 @@ export default function Home() {
   }>({ isLoggedIn: false, plexToken: null, plexServerUrl: null })
 
   const { state, clockOffsetMs, isLoading } = usePlayback(station, session.isLoggedIn)
+  const mobileEpgInitRef = useRef(false)
 
   const completePlexSignInFromPin = useCallback(async (pinId: string): Promise<boolean> => {
     try {
@@ -80,6 +84,42 @@ export default function Home() {
   // ── Fetch app name ────────────────────────────────────────────────────────
   useEffect(() => {
     fetch('/api/app-settings').then((r) => r.ok ? r.json() : null).then((d) => { if (d?.appName) setAppName(d.appName) }).catch(() => {})
+  }, [])
+
+  // ── Responsive viewer mode for mobile EPG positioning ────────────────────
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const media = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT_PX - 1}px)`)
+
+    const applyViewportMode = (matches: boolean) => {
+      setIsMobileViewport(matches)
+      if (matches && !mobileEpgInitRef.current) {
+        // Default to compact guide on mobile so the video remains visible.
+        setEpgMinimized(true)
+        mobileEpgInitRef.current = true
+      }
+    }
+
+    applyViewportMode(media.matches)
+    const onChange = (event: MediaQueryListEvent) => applyViewportMode(event.matches)
+    media.addEventListener('change', onChange)
+    return () => media.removeEventListener('change', onChange)
+  }, [])
+
+  // ── Fetch station order for keyboard channel switching ───────────────────
+  useEffect(() => {
+    let alive = true
+    fetch('/api/stations')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: Array<{ id: string }>) => {
+        if (!alive || !Array.isArray(rows) || rows.length === 0) return
+        const ordered = rows
+          .map((row) => row.id)
+          .filter((id): id is string => typeof id === 'string' && id.length > 0)
+        if (ordered.length) setStationOrder(ordered)
+      })
+      .catch(() => {})
+    return () => { alive = false }
   }, [])
 
   // ── Sync URL params to station state ──────────────────────────────────────
@@ -216,9 +256,37 @@ export default function Home() {
     }
   }, [])
 
+  // ── Keyboard channel switching (ArrowUp / ArrowDown) ─────────────────────
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+
+      const target = event.target as HTMLElement | null
+      const tag = target?.tagName?.toLowerCase() ?? ''
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || target?.isContentEditable) {
+        return
+      }
+
+      if (!stationOrder.length) return
+      event.preventDefault()
+
+      const currentIndex = stationOrder.indexOf(station)
+      const startIndex = currentIndex >= 0 ? currentIndex : 0
+      const delta = event.key === 'ArrowUp' ? -1 : 1
+      const nextIndex = (startIndex + delta + stationOrder.length) % stationOrder.length
+      handleSelectStation(stationOrder[nextIndex])
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [stationOrder, station, handleSelectStation])
+
   // ── Render ───────────────────────────────────────────────────────────────
-  const epgHeight = epgMinimized ? EPG_BAR_HEIGHT_PX : EPG_HEIGHT_PX
-  const nowBarHeight = epgMinimized ? 0 : NOWBAR_HEIGHT_PX  // Hide NowBar when EPG is minimized (buttons are in compact EPG bar)
+  const epgHeight: number | string = epgMinimized
+    ? EPG_BAR_HEIGHT_PX
+    : (isMobileViewport ? '56vh' : EPG_HEIGHT_PX)
+  const nowBarHeight = (!epgMinimized && !isMobileViewport) ? NOWBAR_HEIGHT_PX : 0
+  const epgBottom: number | string = isMobileViewport ? 'env(safe-area-inset-bottom)' : nowBarHeight
 
   return (
     <div style={{
@@ -342,10 +410,11 @@ export default function Home() {
           {/* ── EPG panel overlay (on top of video) ── */}
           <div style={{
             position:   'fixed',
-            bottom:     nowBarHeight,
+            bottom:     epgBottom,
             left:       0,
             right:      0,
             height:     epgHeight,
+            maxHeight:  isMobileViewport ? 'calc(100vh - env(safe-area-inset-top) - 12px)' : undefined,
             zIndex:     100,
             borderTop:  '1px solid #1e3a5f',
           }}>
@@ -359,7 +428,7 @@ export default function Home() {
           </div>
 
           {/* ── Now Bar (only when EPG is expanded, buttons are in compact EPG bar when minimized) ── */}
-          {!epgMinimized && (
+          {!epgMinimized && !isMobileViewport && (
             <NowBar
               state={state}
               clockOffsetMs={clockOffsetMs}

@@ -55,13 +55,16 @@ export default function YouTubePage() {
   const [msg, setMsg]           = useState('')
   const [editId, setEditId]     = useState<string | null>(null)
   const [editForm, setEditForm] = useState({ title: '', category: '', station: '', durationMins: '' })
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
 
   const load = useCallback(async () => {
     const params = new URLSearchParams()
     if (filter.category) params.set('category', filter.category)
     if (filter.station)  params.set('station',  filter.station)
     const r = await fetch(`/api/admin/youtube?${params}`)
-    setItems(await r.json())
+    const loaded = await r.json()
+    setItems(loaded)
+    setSelectedIds((prev) => prev.filter((id) => loaded.some((item: YTEntry) => item.id === id)))
   }, [filter])
 
   useEffect(() => { load() }, [load])
@@ -94,6 +97,41 @@ export default function YouTubePage() {
   const remove = async (id: string) => {
     if (!confirm('Delete this entry?')) return
     await fetch(`/api/admin/youtube/${id}`, { method: 'DELETE' })
+    setSelectedIds((prev) => prev.filter((x) => x !== id))
+    load()
+  }
+
+  const toggleSelection = (id: string) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+  }
+
+  const selectAllVisible = () => {
+    setSelectedIds(items.map((item) => item.id))
+  }
+
+  const unselectAllVisible = () => {
+    setSelectedIds([])
+  }
+
+  const bulkRemoveSelected = async () => {
+    if (!selectedIds.length) {
+      setMsg('Select at least one filler item to remove.')
+      return
+    }
+    if (!confirm(`Delete ${selectedIds.length} selected filler item(s)?`)) return
+
+    const r = await fetch('/api/admin/youtube', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: selectedIds }),
+    })
+    const data = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      setMsg(data?.error || 'Bulk delete failed.')
+      return
+    }
+    setMsg(`✓ Deleted ${data?.deletedCount ?? selectedIds.length} filler item(s).`)
+    setSelectedIds([])
     load()
   }
 
@@ -159,6 +197,9 @@ export default function YouTubePage() {
         <button onClick={backfillDurations} style={{ ...btn, backgroundColor: '#1a3a6e' }} title="Fetch missing runtimes for better filler fitting">
           Backfill Runtimes
         </button>
+        <button onClick={selectAllVisible} style={{ ...btn, backgroundColor: '#2d5a24' }} disabled={!items.length}>Select All</button>
+        <button onClick={unselectAllVisible} style={{ ...btn, backgroundColor: '#333' }} disabled={!selectedIds.length}>Unselect All</button>
+        <button onClick={bulkRemoveSelected} style={{ ...btn, backgroundColor: '#3d0000' }} disabled={!selectedIds.length}>Remove Selected ({selectedIds.length})</button>
       </div>
 
       {/* Table */}
@@ -166,7 +207,7 @@ export default function YouTubePage() {
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid #1e3a5f', color: '#4a7fb5' }}>
-              {['Title','ID','Type','Category','Station','Duration','Used','Actions'].map(h => (
+              {['', 'Title','ID','Type','Category','Station','Duration','Used','Actions'].map(h => (
                 <th key={h} style={{ padding: '7px 10px', textAlign: 'left', fontWeight: 600, whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
@@ -175,6 +216,14 @@ export default function YouTubePage() {
             {items.map(item => (
               <Fragment key={item.id}>
                 <tr style={{ borderBottom: '1px solid #0d1f3c' }}>
+                  <td style={tdc}>
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.includes(item.id)}
+                      onChange={() => toggleSelection(item.id)}
+                      aria-label={`Select ${item.title}`}
+                    />
+                  </td>
                   <td style={tdc}>{item.title}</td>
                   <td style={{ ...tdc, fontFamily: 'monospace', fontSize: '0.7rem' }}>{item.videoId ?? item.playlistId}</td>
                   <td style={tdc}>{item.isPlaylist ? 'Playlist' : 'Video'}</td>
@@ -199,7 +248,7 @@ export default function YouTubePage() {
                 </tr>
               </Fragment>
             ))}
-            {items.length === 0 && <tr><td colSpan={8} style={{ ...tdc, color: '#4a7fb5', fontStyle: 'italic' }}>No entries yet.</td></tr>}
+            {items.length === 0 && <tr><td colSpan={9} style={{ ...tdc, color: '#4a7fb5', fontStyle: 'italic' }}>No entries yet.</td></tr>}
           </tbody>
         </table>
       </div>
