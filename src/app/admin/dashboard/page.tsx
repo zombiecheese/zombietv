@@ -41,6 +41,7 @@ export default function AdminDashboard() {
       itemCount: number
       lastSyncAt: string | null
       autoSyncMaxAgeHours: number
+      yearBounds?: { minYear: number | null; maxYear: number | null }
       selectedLibraryKeys?: string[]
       libraryClassifications?: Record<string, string>
       libraryClassOptions?: string[]
@@ -75,6 +76,9 @@ export default function AdminDashboard() {
   const [appNameMsg, setAppNameMsg] = useState('')
   const [schedulerHorizonDays, setSchedulerHorizonDays]       = useState('7')
   const [schedulerIntervalHours, setSchedulerIntervalHours]   = useState('24')
+  const [schedulerYearMin, setSchedulerYearMin]               = useState('')
+  const [schedulerYearMax, setSchedulerYearMax]               = useState('')
+  const [catalogYearBounds, setCatalogYearBounds]             = useState<{ minYear: number | null; maxYear: number | null } | null>(null)
   const [isSavingSchedulerSettings, setIsSavingSchedulerSettings] = useState(false)
   const [schedulerSettingsMsg, setSchedulerSettingsMsg]       = useState('')
   const [broadcastTimezone, setBroadcastTimezone]             = useState('')
@@ -137,17 +141,51 @@ export default function AdminDashboard() {
       setSchedulerSettingsMsg('Both fields must be numbers.')
       return
     }
+
+    const parseYear = (value: string): number | null => {
+      const trimmed = value.trim()
+      if (!trimmed) return null
+      const parsed = Number(trimmed)
+      return Number.isFinite(parsed) ? Math.round(parsed) : null
+    }
+    let yearMin = parseYear(schedulerYearMin)
+    let yearMax = parseYear(schedulerYearMax)
+    if ((schedulerYearMin.trim() && yearMin == null) || (schedulerYearMax.trim() && yearMax == null)) {
+      setSchedulerSettingsMsg('Year range values must be valid years.')
+      return
+    }
+    if (catalogYearBounds?.minYear != null) {
+      if (yearMin != null) yearMin = Math.max(catalogYearBounds.minYear, yearMin)
+      if (yearMax != null) yearMax = Math.max(catalogYearBounds.minYear, yearMax)
+    }
+    if (catalogYearBounds?.maxYear != null) {
+      if (yearMin != null) yearMin = Math.min(catalogYearBounds.maxYear, yearMin)
+      if (yearMax != null) yearMax = Math.min(catalogYearBounds.maxYear, yearMax)
+    }
+    if (yearMin != null && yearMax != null && yearMin > yearMax) {
+      const tmp = yearMin
+      yearMin = yearMax
+      yearMax = tmp
+    }
+
     setIsSavingSchedulerSettings(true)
     const r = await fetch('/api/app-settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ schedulerHorizonDays: horizonDays, schedulerIntervalHours: intervalHours }),
+      body: JSON.stringify({
+        schedulerHorizonDays: horizonDays,
+        schedulerIntervalHours: intervalHours,
+        schedulerYearMin: yearMin,
+        schedulerYearMax: yearMax,
+      }),
     })
     const data = await r.json().catch(() => ({}))
     setIsSavingSchedulerSettings(false)
     if (!r.ok) { setSchedulerSettingsMsg(data?.error || 'Could not save scheduler settings.'); return }
     setSchedulerHorizonDays(String(data.schedulerHorizonDays ?? horizonDays))
     setSchedulerIntervalHours(String(data.schedulerIntervalHours ?? intervalHours))
+    setSchedulerYearMin(data.schedulerYearMin != null ? String(data.schedulerYearMin) : '')
+    setSchedulerYearMax(data.schedulerYearMax != null ? String(data.schedulerYearMax) : '')
     setSchedulerSettingsMsg('Scheduler settings saved. Next auto-run rescheduled.')
   }
 
@@ -170,6 +208,16 @@ export default function AdminDashboard() {
     if (!data) return
     setPlexStatus(data)
     setIsCatalogSyncing(!!data.catalogSyncRunning)
+    if (data.catalog?.yearBounds && typeof data.catalog.yearBounds === 'object') {
+      const minYear = Number((data.catalog.yearBounds as { minYear?: unknown }).minYear)
+      const maxYear = Number((data.catalog.yearBounds as { maxYear?: unknown }).maxYear)
+      setCatalogYearBounds({
+        minYear: Number.isFinite(minYear) ? minYear : null,
+        maxYear: Number.isFinite(maxYear) ? maxYear : null,
+      })
+    } else {
+      setCatalogYearBounds(null)
+    }
     if (typeof data.catalog?.autoSyncMaxAgeHours === 'number') {
       setCatalogAutoSyncHours(String(data.catalog.autoSyncMaxAgeHours))
     }
@@ -201,6 +249,8 @@ export default function AdminDashboard() {
       if (!d) return
       if (d.schedulerHorizonDays  != null) setSchedulerHorizonDays(String(d.schedulerHorizonDays))
       if (d.schedulerIntervalHours != null) setSchedulerIntervalHours(String(d.schedulerIntervalHours))
+      setSchedulerYearMin(d.schedulerYearMin != null ? String(d.schedulerYearMin) : '')
+      setSchedulerYearMax(d.schedulerYearMax != null ? String(d.schedulerYearMax) : '')
       if (typeof d.broadcastTimezone === 'string') setBroadcastTimezone(d.broadcastTimezone)
     }).catch(() => {})
   }, [])
@@ -357,6 +407,20 @@ export default function AdminDashboard() {
     return () => clearInterval(id)
   }, [isCatalogSyncing, schedulerStatus?.status?.isRunning])
 
+  const hasCatalogYearBounds = catalogYearBounds?.minYear != null && catalogYearBounds?.maxYear != null
+  const minCatalogYear = hasCatalogYearBounds ? Number(catalogYearBounds.minYear) : 1980
+  const maxCatalogYear = hasCatalogYearBounds ? Number(catalogYearBounds.maxYear) : 2020
+  const selectedMinYear = (() => {
+    const parsed = Number(schedulerYearMin)
+    if (!Number.isFinite(parsed)) return minCatalogYear
+    return Math.min(Math.max(parsed, minCatalogYear), maxCatalogYear)
+  })()
+  const selectedMaxYear = (() => {
+    const parsed = Number(schedulerYearMax)
+    if (!Number.isFinite(parsed)) return maxCatalogYear
+    return Math.min(Math.max(parsed, minCatalogYear), maxCatalogYear)
+  })()
+
   return (
     <AdminShell>
       <h2 style={h2}>Overview</h2>
@@ -408,6 +472,7 @@ export default function AdminDashboard() {
         <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#e8f0fe', marginBottom: 6 }}>Scheduler Settings</div>
         <div style={{ fontSize: '0.72rem', color: '#4a7fb5', lineHeight: 1.5, marginBottom: 10 }}>
           Schedule horizon: how many days ahead to generate. Auto-run interval: how often the scheduler checks for missing days.
+          Year range: constrain auto-scheduled Plex movies and shows to releases within the selected bounds.
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 6 }}>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.72rem', color: '#a8c4e0' }}>
@@ -420,9 +485,71 @@ export default function AdminDashboard() {
             <input type="number" min={1} max={168} step={1} value={schedulerIntervalHours}
               onChange={(e) => setSchedulerIntervalHours(e.target.value)} style={numberInput} />
           </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.72rem', color: '#a8c4e0', minWidth: 220 }}>
+            Start year
+            <input
+              type="number"
+              min={minCatalogYear}
+              max={selectedMaxYear}
+              step={1}
+              value={schedulerYearMin}
+              onChange={(e) => setSchedulerYearMin(e.target.value)}
+              style={numberInput}
+            />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.72rem', color: '#a8c4e0', minWidth: 220 }}>
+            End year
+            <input
+              type="number"
+              min={selectedMinYear}
+              max={maxCatalogYear}
+              step={1}
+              value={schedulerYearMax}
+              onChange={(e) => setSchedulerYearMax(e.target.value)}
+              style={numberInput}
+            />
+          </label>
           <button onClick={saveSchedulerSettings} style={secondaryBtn} disabled={isSavingSchedulerSettings}>
             {isSavingSchedulerSettings ? 'SAVING...' : 'SAVE SCHEDULER'}
           </button>
+        </div>
+        <div style={{ marginBottom: 8, padding: '8px 10px', border: '1px solid #1e3a5f', backgroundColor: '#07111f' }}>
+          <div style={{ color: '#a8c4e0', fontSize: '0.7rem', marginBottom: 6 }}>
+            {hasCatalogYearBounds
+              ? `Catalog year bounds: ${minCatalogYear} - ${maxCatalogYear}`
+              : 'Catalog year bounds unavailable. Sync Plex catalog to enable range limits.'}
+          </div>
+          <div style={{ display: 'grid', gap: 6 }}>
+            <input
+              type="range"
+              min={minCatalogYear}
+              max={maxCatalogYear}
+              step={1}
+              value={selectedMinYear}
+              onChange={(e) => {
+                const next = Number(e.target.value)
+                setSchedulerYearMin(String(Math.min(next, selectedMaxYear)))
+              }}
+              disabled={!hasCatalogYearBounds}
+              style={{ accentColor: '#ff6600' }}
+            />
+            <input
+              type="range"
+              min={minCatalogYear}
+              max={maxCatalogYear}
+              step={1}
+              value={selectedMaxYear}
+              onChange={(e) => {
+                const next = Number(e.target.value)
+                setSchedulerYearMax(String(Math.max(next, selectedMinYear)))
+              }}
+              disabled={!hasCatalogYearBounds}
+              style={{ accentColor: '#4a7fb5' }}
+            />
+          </div>
+          <div style={{ color: '#4a7fb5', fontSize: '0.68rem', marginTop: 6 }}>
+            Selected: {selectedMinYear} - {selectedMaxYear}
+          </div>
         </div>
         {schedulerSettingsMsg && <div style={{ fontSize: '0.72rem', color: '#4caf50', marginTop: 4 }}>{schedulerSettingsMsg}</div>}
       </div>

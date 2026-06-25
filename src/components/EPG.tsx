@@ -840,6 +840,7 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
                     const isNow        = slotStartMs <= nowMs && slotEndMs > nowMs
                     const isPast       = slotEndMs <= nowMs
                     const isAdBreak    = slot.inAdBreak && isNow
+                    const isLive       = slot.isLive
                     const episodeLabel = slot.seasonNumber != null
                       ? `S${slot.seasonNumber}E${slot.episodeNumber}`
                       : null
@@ -863,16 +864,20 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
                           top:             4,
                           bottom:          4,
                           width:           widthPx,
-                          backgroundColor: isAdBreak
-                            ? (isNow ? '#5a3110' : isPast ? '#24160a' : '#40220d')
+                          backgroundColor: isLive
+                            ? (isNow ? '#7d1f3a' : isPast ? '#2a0d16' : '#4f1425')
+                            : isAdBreak
+                              ? (isNow ? '#5a3110' : isPast ? '#24160a' : '#40220d')
+                              : isNow
+                                ? '#1a3a6e'
+                                : isPast
+                                  ? '#0a0f1a'
+                                  : '#0f2040',
+                          border:          isLive
+                            ? (isNow ? '1px solid #ff8db1' : '1px solid #b34f74')
                             : isNow
-                              ? '#1a3a6e'
-                              : isPast
-                                ? '#0a0f1a'
-                                : '#0f2040',
-                          border:          isNow
-                            ? isAdBreak ? '1px solid #ff9f4d' : '1px solid #4a7fb5'
-                            : isAdBreak ? '1px solid #ff6600' : '1px solid #1e3a5f',
+                              ? isAdBreak ? '1px solid #ff9f4d' : '1px solid #4a7fb5'
+                              : isAdBreak ? '1px solid #ff6600' : '1px solid #1e3a5f',
                           borderRadius:    2,
                           padding:         '3px 5px',
                           cursor:          'pointer',
@@ -889,9 +894,11 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
                       >
                         <span style={{
                           fontWeight:   isNow || isAdBreak ? 700 : 400,
-                          color:        isAdBreak
-                            ? (isPast ? '#ffb06a' : '#fff1e5')
-                            : isNow ? '#e8f0fe' : isPast ? '#3a5f8a' : '#a8c4e0',
+                          color:        isLive
+                            ? (isNow ? '#ffe7f0' : isPast ? '#c27b95' : '#ffd0df')
+                            : isAdBreak
+                              ? (isPast ? '#ffb06a' : '#fff1e5')
+                              : isNow ? '#e8f0fe' : isPast ? '#3a5f8a' : '#a8c4e0',
                           overflow:     'hidden',
                           textOverflow: 'ellipsis',
                           whiteSpace:   'nowrap',
@@ -960,6 +967,10 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
         <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           <span style={{ width: 10, height: 10, backgroundColor: '#1a3a6e', border: '1px solid #4a7fb5', display: 'inline-block' }} />
           ON AIR
+        </span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span style={{ width: 10, height: 10, backgroundColor: '#7d1f3a', border: '1px solid #ff8db1', display: 'inline-block' }} />
+          LIVE
         </span>
         <span style={{ marginLeft: 'auto' }}>
           48HR GUIDE · DRAG LEFT/RIGHT OR CLICK TO TUNE

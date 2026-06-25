@@ -22,6 +22,7 @@ export interface EPGSlot {
   isOverride:    boolean
   overrideReason: string | null
   inAdBreak:     boolean  // true if this slot has ad breaks
+  isLive:        boolean
 }
 
 export async function GET(
@@ -82,20 +83,24 @@ export async function GET(
     if (slotStartMs >= to.getTime() || slotEndMs <= from.getTime()) continue
     if (!showInEpg) continue
 
+    const isLiveNewsSlot = String(meta.reason ?? '') === 'news_live_window'
+    const liveTitle = `LIVE: ${stationId.toUpperCase()} News`
+
     // Main scheduled content segment.
     epgSlots.push({
       id:            slot.id,
       startTime:     slot.startTime.toISOString(),
       endTime:       new Date(slotEndMs).toISOString(),
       durationMins:  effectiveDurationMins,
-      title:         meta.title ?? slot.showTitle ?? slot.contentSource ?? 'Programme',
-      showTitle:     slot.showTitle,
+      title:         isLiveNewsSlot ? liveTitle : (meta.title ?? slot.showTitle ?? slot.contentSource ?? 'Programme'),
+      showTitle:     isLiveNewsSlot ? liveTitle : slot.showTitle,
       seasonNumber:  slot.seasonNumber,
       episodeNumber: slot.episodeNumber,
       contentSource: slot.contentSource,
       isOverride:    slot.isOverride,
       overrideReason: slot.overrideReason,
       inAdBreak:     adBreaks.length > 0,
+      isLive:        isLiveNewsSlot,
     })
   }
 

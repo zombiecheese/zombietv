@@ -8,7 +8,7 @@ interface SlotVideo { enabled: boolean; videoId: string }
 interface SlotLibraryWeights { tv_shows: number; movies: number; animation: number; fitness: number }
 interface FillerWindow {
   durationMins: number  // Must be multiple of 30
-  category: string      // 'ads', 'filler', 'music', 'news'
+  category: string      // 'ads', 'filler', 'music', 'infomercial'
   displayName?: string
   openVideo: SlotVideo
   closeVideo: SlotVideo
@@ -27,6 +27,7 @@ interface SlotConfig {
   disabledLibraries: string[]
   openVideo: SlotVideo
   closeVideo: SlotVideo
+  newsVideo: SlotVideo       // optional: YouTube live/video source used only for news slots
   libraryWeights: SlotLibraryWeights
   allowGenres: string[]      // empty = any
   strip: boolean             // weeknight strip: Mon–Fri, one series, daily episodes
@@ -84,6 +85,7 @@ function defaultSlot(t: { key: string; name: string; start: string; end: string 
     disabledLibraries: [],
     openVideo: { enabled: false, videoId: '' },
     closeVideo: { enabled: false, videoId: '' },
+    newsVideo: { enabled: false, videoId: '' },
     libraryWeights: { tv_shows: 1, movies: 1, animation: 0, fitness: 0 },
     allowGenres: [],
     strip: false,
@@ -122,6 +124,7 @@ function mergeSlots(saved: unknown): SlotConfig[] {
       key: t.key, name: t.name, start: t.start, end: t.end,
       openVideo: { ...base.openVideo, ...(found.openVideo ?? {}) },
       closeVideo: { ...base.closeVideo, ...(found.closeVideo ?? {}) },
+      newsVideo: { ...base.newsVideo, ...(found.newsVideo ?? {}) },
       libraryWeights: { ...base.libraryWeights, ...(found.libraryWeights ?? {}) },
       fillerWindows: Array.isArray(found.fillerWindows) ? found.fillerWindows : base.fillerWindows,
       disabledLibraries: normalizeDisabledLibraryTypes(found.disabledLibraries),
@@ -645,6 +648,30 @@ export default function StationsPage() {
                             </div>
                           </div>
 
+                          {isNewsSlot(slot) && (
+                            <div style={{ border: '1px solid #1e3a5f', padding: 10, marginBottom: 12 }}>
+                              <label style={checkLabel}>
+                                <input
+                                  type="checkbox"
+                                  checked={slot.newsVideo.enabled}
+                                  onChange={e => updateSlot(index, { newsVideo: { ...slot.newsVideo, enabled: e.target.checked } })}
+                                />
+                                News live source (YouTube video / stream / playlist)
+                              </label>
+                              <p style={{ color: '#4a7fb5', fontSize: '0.66rem', margin: '6px 0 0' }}>
+                                When set, this news slot plays the configured YouTube source only for this slot window. If unset, this slot falls back to normal programming selection.
+                              </p>
+                              {slot.newsVideo.enabled && (
+                                <input
+                                  value={slot.newsVideo.videoId}
+                                  onChange={e => updateSlot(index, { newsVideo: { ...slot.newsVideo, videoId: e.target.value } })}
+                                  style={{ ...inp, marginTop: 8 }}
+                                  placeholder="YouTube video/stream URL or ID"
+                                />
+                              )}
+                            </div>
+                          )}
+
                           <LibraryWeightsEditor slot={slot} index={index} updateSlot={updateSlot} />
 
                           <label style={{ ...checkLabel, marginBottom: 12 }}>
@@ -833,7 +860,7 @@ function PlexShowPicker({ plexShowKey, plexShowTitle, onSelect, onClear }: {
 }
 
 function FillerWindowsBuilder({ slot, index, updateSlot }: { slot: SlotConfig; index: number; updateSlot: (idx: number, patch: Partial<SlotConfig>) => void }) {
-  const FILLER_CATEGORIES = ['ads', 'filler', 'music', 'news'] as const
+  const FILLER_CATEGORIES = ['ads', 'filler', 'music', 'infomercial'] as const
   const slotDurationMins = (() => {
     const start = slot.start === 'first' ? 0 : (parseClockToMinutes(slot.start) ?? 0)
     const end = slot.end === 'until_finished' ? 24 * 60 : (parseClockToMinutes(slot.end) ?? 24 * 60)
@@ -1078,11 +1105,18 @@ function slotSummary(slot: SlotConfig): string {
   const mix = weightBreakdown(slot).filter((b) => b.weight > 0).map((b) => `${labelForLib(b.lib)} ${b.pct}%`)
   const parts = mix.length ? [mix.join(' · ')] : ['No library weight — will fall back to filler']
   if (slot.strip) parts.push('stripped Mon–Fri')
+  if (isNewsSlot(slot) && slot.newsVideo.enabled && slot.newsVideo.videoId.trim()) parts.push('news live source')
   if (slot.allowGenres.length) parts.push(`${slot.allowGenres.length} genre${slot.allowGenres.length > 1 ? 's' : ''}`)
   if (slot.disabledLibraries.length) parts.push(`${slot.disabledLibraries.length} library exclusion${slot.disabledLibraries.length > 1 ? 's' : ''}`)
   if (slot.openVideo.enabled) parts.push('open ident')
   if (slot.closeVideo.enabled) parts.push('close ident')
   return parts.join(' · ')
+}
+
+function isNewsSlot(slot: SlotConfig): boolean {
+  const key = String(slot.key ?? '').toLowerCase()
+  const name = String(slot.name ?? '').toLowerCase()
+  return key.includes('news') || name.includes('news')
 }
 
 // Horizontal 24-hour coverage bar. Surfaces gaps (uncovered time that falls back

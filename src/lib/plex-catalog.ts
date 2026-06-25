@@ -558,7 +558,14 @@ interface CatalogPickFilters {
   denyGenres: string[]
   allowLanguages?: string[]
   denyLanguages?: string[]
+  yearMin?: number | null
+  yearMax?: number | null
   type: 'movie' | 'show'
+}
+
+export interface CatalogYearBounds {
+  minYear: number | null
+  maxYear: number | null
 }
 
 export interface CatalogSearchItem {
@@ -601,6 +608,22 @@ function parseCsvList(value: string | null | undefined): string[] {
     .split(',')
     .map((v) => v.trim().toLowerCase())
     .filter(Boolean)
+}
+
+function normalizeYearBound(value: unknown): number | null {
+  if (value == null) return null
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return null
+  return Math.max(1888, Math.min(3000, Math.round(parsed)))
+}
+
+function yearIsWithinRange(year: number, yearMin?: number | null, yearMax?: number | null): boolean {
+  const min = normalizeYearBound(yearMin)
+  const max = normalizeYearBound(yearMax)
+  if (min == null && max == null) return true
+  if (min != null && year < min) return false
+  if (max != null && year > max) return false
+  return true
 }
 
 export interface CatalogFilterOption {
@@ -662,6 +685,33 @@ function ratingToRank(rating: string): number {
   return 2
 }
 
+export async function getCatalogYearBounds(): Promise<CatalogYearBounds> {
+  const activeKeys = await getActiveCatalogPlexKeys()
+  const where: {
+    type: { in: Array<'movie' | 'show'> }
+    year: { gt: number }
+    plexKey?: { in: string[] }
+  } = {
+    type: { in: ['movie', 'show'] },
+    year: { gt: 0 },
+  }
+
+  if (activeKeys.size) {
+    where.plexKey = { in: Array.from(activeKeys) }
+  }
+
+  const agg = await prisma.mediaItem.aggregate({
+    where,
+    _min: { year: true },
+    _max: { year: true },
+  })
+
+  return {
+    minYear: agg._min.year ?? null,
+    maxYear: agg._max.year ?? null,
+  }
+}
+
 export async function getCatalogCandidates(filters: CatalogPickFilters): Promise<PlexMediaItem[]> {
   const activeKeys = await getActiveCatalogPlexKeys()
   const activeClassByPlexKey = await getActiveClassByPlexKey()
@@ -691,12 +741,15 @@ export async function getCatalogCandidates(filters: CatalogPickFilters): Promise
   const deny = filters.denyGenres.map((g) => g.toLowerCase())
   const allowLanguages = (filters.allowLanguages ?? []).map((language) => language.toLowerCase())
   const denyLanguages = (filters.denyLanguages ?? []).map((language) => language.toLowerCase())
+  const yearMin = normalizeYearBound(filters.yearMin)
+  const yearMax = normalizeYearBound(filters.yearMax)
 
   return rows
     .filter((row) => !activeKeys.size || activeKeys.has(row.plexKey))
     .filter((row) => {
       const genres = parseCsvList(row.genres)
       const languages = parseCsvList(row.languages)
+      if (!yearIsWithinRange(row.year, yearMin, yearMax)) return false
       if (allow.length && !allow.some((g) => genres.includes(g))) return false
       if (deny.some((g) => genres.includes(g))) return false
       if (allowLanguages.length && !allowLanguages.some((language) => languages.includes(language))) return false
@@ -718,12 +771,15 @@ export async function getCatalogEpisodeList(
   showPlexKey: string,
   allowLanguages?: string[],
   denyLanguages?: string[],
+  yearMin?: number | null,
+  yearMax?: number | null,
 ): Promise<CatalogEpisodeRef[]> {
   const activeKeys = await getActiveCatalogPlexKeys()
   const showRow = await prisma.mediaItem.findUnique({
     where: { plexKey: showPlexKey },
-    select: { title: true },
+    select: { title: true, year: true },
   })
+  if (showRow?.year != null && !yearIsWithinRange(showRow.year, yearMin, yearMax)) return []
 
   const rows = await prisma.$queryRaw<CatalogMediaRow[]>`
     SELECT
@@ -782,12 +838,15 @@ export async function getCatalogEpisode(
   episode: number,
   allowLanguages?: string[],
   denyLanguages?: string[],
+  yearMin?: number | null,
+  yearMax?: number | null,
 ): Promise<PlexMediaItem | null> {
   const activeKeys = await getActiveCatalogPlexKeys()
   const showRow = await prisma.mediaItem.findUnique({
     where: { plexKey: showPlexKey },
-    select: { title: true },
+    select: { title: true, year: true },
   })
+  if (showRow?.year != null && !yearIsWithinRange(showRow.year, yearMin, yearMax)) return null
 
   const rows = await prisma.$queryRaw<CatalogMediaRow[]>`
     SELECT

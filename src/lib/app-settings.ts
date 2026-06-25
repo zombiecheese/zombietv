@@ -8,12 +8,18 @@ const APP_NAME_KEY              = 'app_name'
 const APP_TAGLINE_KEY          = 'app_tagline'
 const SCHEDULER_HORIZON_KEY     = 'scheduler_horizon_days'
 const SCHEDULER_INTERVAL_KEY    = 'scheduler_interval_hours'
+const SCHEDULER_YEAR_MIN_KEY    = 'scheduler_year_min'
+const SCHEDULER_YEAR_MAX_KEY    = 'scheduler_year_max'
 const BROADCAST_TIMEZONE_KEY    = 'broadcast_timezone'
 
 export const DEFAULT_APP_NAME               = 'Zombie TV'
 export const DEFAULT_APP_TAGLINE            = '1990s Broadcast Simulator'
 export const DEFAULT_SCHEDULER_HORIZON_DAYS  = 7
 export const DEFAULT_SCHEDULER_INTERVAL_HOURS = 24
+export const DEFAULT_SCHEDULER_YEAR_RANGE: { minYear: number | null; maxYear: number | null } = {
+  minYear: null,
+  maxYear: null,
+}
 
 // Falls back to the container/host TZ, then to an Australian default to match
 // the broadcast simulator's intent. Always a valid IANA zone.
@@ -131,6 +137,68 @@ export const getSchedulerIntervalHours = () => getNumericSetting(SCHEDULER_INTER
 
 export const saveSchedulerHorizonDays   = (v: unknown) => saveNumericSetting(SCHEDULER_HORIZON_KEY,  v, 1, 60,  DEFAULT_SCHEDULER_HORIZON_DAYS)
 export const saveSchedulerIntervalHours = (v: unknown) => saveNumericSetting(SCHEDULER_INTERVAL_KEY, v, 1, 168, DEFAULT_SCHEDULER_INTERVAL_HOURS)
+
+function normalizeOptionalYear(value: unknown): number | null {
+  if (value == null || value === '') return null
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return null
+  // Broad guardrail that safely covers practical film/TV years.
+  return Math.max(1888, Math.min(3000, Math.round(parsed)))
+}
+
+async function saveOptionalNumericSetting(key: string, value: number | null): Promise<void> {
+  const serialized = value == null ? 'null' : JSON.stringify(value)
+  const existing = await prisma.adminPreference.findFirst({
+    where: { stationId: null, settingKey: key },
+  })
+  if (existing) {
+    await prisma.adminPreference.update({
+      where: { id: existing.id },
+      data: { settingValue: serialized },
+    })
+  } else {
+    await prisma.adminPreference.create({
+      data: { stationId: null, settingKey: key, settingValue: serialized },
+    })
+  }
+}
+
+export async function getSchedulerYearRange(): Promise<{ minYear: number | null; maxYear: number | null }> {
+  try {
+    const [minRow, maxRow] = await Promise.all([
+      prisma.adminPreference.findFirst({ where: { stationId: null, settingKey: SCHEDULER_YEAR_MIN_KEY } }),
+      prisma.adminPreference.findFirst({ where: { stationId: null, settingKey: SCHEDULER_YEAR_MAX_KEY } }),
+    ])
+
+    const parsedMin = minRow?.settingValue ? normalizeOptionalYear(JSON.parse(minRow.settingValue)) : null
+    const parsedMax = maxRow?.settingValue ? normalizeOptionalYear(JSON.parse(maxRow.settingValue)) : null
+
+    if (parsedMin != null && parsedMax != null && parsedMin > parsedMax) {
+      return { minYear: parsedMax, maxYear: parsedMin }
+    }
+
+    return {
+      minYear: parsedMin,
+      maxYear: parsedMax,
+    }
+  } catch {
+    return { ...DEFAULT_SCHEDULER_YEAR_RANGE }
+  }
+}
+
+export async function saveSchedulerYearRange(range: { minYear?: unknown; maxYear?: unknown }): Promise<{ minYear: number | null; maxYear: number | null }> {
+  const parsedMin = normalizeOptionalYear(range?.minYear)
+  const parsedMax = normalizeOptionalYear(range?.maxYear)
+  const minYear = parsedMin != null && parsedMax != null && parsedMin > parsedMax ? parsedMax : parsedMin
+  const maxYear = parsedMin != null && parsedMax != null && parsedMin > parsedMax ? parsedMin : parsedMax
+
+  await Promise.all([
+    saveOptionalNumericSetting(SCHEDULER_YEAR_MIN_KEY, minYear),
+    saveOptionalNumericSetting(SCHEDULER_YEAR_MAX_KEY, maxYear),
+  ])
+
+  return { minYear, maxYear }
+}
 
 // ─── Broadcast timezone ───────────────────────────────────────────────────────
 // The single IANA timezone all schedule generation, the EPG, the schedule

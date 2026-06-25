@@ -11,6 +11,7 @@ import {
   getCatalogLibraryClassifications,
   getCatalogSelectedLibraryKeys,
   getCatalogStatus,
+  getCatalogYearBounds,
   isCatalogSyncRunning,
   LIBRARY_CLASS_OPTIONS,
 } from '@/lib/plex-catalog'
@@ -45,6 +46,7 @@ export async function GET(req: NextRequest) {
   const autoSyncMaxAgeHours = await getCatalogAutoSyncMaxAgeHours()
   const selectedLibraryKeys = await getCatalogSelectedLibraryKeys()
   const libraryClassifications = await getCatalogLibraryClassifications()
+  const yearBounds = await getCatalogYearBounds()
   const authRedirectBaseUrl = await getPlexAuthRedirectBaseUrl()
   const mediaCatalogCount = await prisma.mediaItem.count()
   const plexServerName = plexToken && plexServerUrl
@@ -68,6 +70,7 @@ export async function GET(req: NextRequest) {
       autoSyncMaxAgeHours,
       selectedLibraryKeys,
       libraryClassifications,
+      yearBounds,
       libraryClassOptions: LIBRARY_CLASS_OPTIONS,
       libraries,
       lastSummary: catalogStatus.lastSummary,

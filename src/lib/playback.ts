@@ -320,7 +320,7 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
     }
   }
 
-  let fillerCategories: string[] = ['ads', 'filler', 'music']
+  let fillerCategories: string[] = ['ads', 'filler', 'music', 'infomercial']
   
   // Check for new fillerWindows format
   if (Array.isArray(slotMetadata?.fillerWindows)) {
@@ -460,7 +460,7 @@ async function selectYoutubeSelection(params: {
   openBumperId?: string | null
   closeBumperId?: string | null
 }): Promise<YoutubeSelection | null> {
-  const { stationId, now, slotStartMs, contentEndMs, fillerDurationMins, inAdBreak, currentAdBreak, inFiller, fallbackId, fillerCategories = ['ads', 'filler', 'music', 'news'], windowSegment = null, openBumperId = null, closeBumperId = null } = params
+  const { stationId, now, slotStartMs, contentEndMs, fillerDurationMins, inAdBreak, currentAdBreak, inFiller, fallbackId, fillerCategories = ['ads', 'filler', 'music', 'infomercial'], windowSegment = null, openBumperId = null, closeBumperId = null } = params
   if (windowSegment) {
     const windowEndMs = windowSegment.startMs + windowSegment.durationMins * 60_000
     // Bumpers and window queues are strictly scoped to the window itself.
@@ -514,17 +514,15 @@ async function selectYoutubeSelection(params: {
     seed,
   )
 
-  // Reserve time at the window edges for opening/closing idents. Bumpers are
-  // only eligible when the current time is very close to the segment edge, so
-  // tuning into a channel after slot start does not replay edge idents.
+  // Reserve time at both window edges for opening/closing idents. The playback
+  // cursor determines which item is current, so tuning in mid-slot naturally
+  // skips the opener while still allowing the closer at the window end.
   const BUMPER_MINS = 1
-  const EDGE_GRACE_MS = 10_000
   const elapsedMs = Math.max(0, now - segmentStartMs)
   const segmentDurationMs = segmentDurationMins * 60_000
-  const remainingMs = Math.max(0, segmentDurationMs - elapsedMs)
   const elapsedMins = elapsedMs / 60_000
-  const wantOpen = !inAdBreak && Boolean(openBumperId) && elapsedMs <= EDGE_GRACE_MS
-  const wantClose = !inAdBreak && Boolean(closeBumperId) && remainingMs <= EDGE_GRACE_MS
+  const wantOpen = !inAdBreak && Boolean(openBumperId)
+  const wantClose = !inAdBreak && Boolean(closeBumperId)
   const reservedMins = (wantOpen ? BUMPER_MINS : 0) + (wantClose ? BUMPER_MINS : 0)
   const middleTargetMins = Math.max(0, segmentDurationMins - reservedMins)
 

@@ -14,6 +14,7 @@ import { prisma }                        from './db'
 import { getHolidayForDate, loadHolidaySettings }             from './holidays'
 import { PlexClient, type PlexMediaItem }                    from './plex-client'
 import { syncPlexCatalog, shouldSyncCatalog, getCatalogAutoSyncMaxAgeHours, getCatalogCandidates, getCatalogEpisode, getCatalogEpisodeList, applyRatingCeiling, getBlockedPlexKeys, getHolidayTagMap, getActiveClassByPlexKey, getCatalogLibraryClassifications } from './plex-catalog'
+import { getSchedulerYearRange } from './app-settings'
 import { toJson, fromJsonObject }        from './json'
 import { parseClockToMinutes }           from './time'
 import { addDays, startOfDay, getDay, differenceInMinutes, addMinutes, differenceInCalendarDays } from 'date-fns'
@@ -68,6 +69,7 @@ interface EffectiveStationBlock {
   libraryWeights?: Record<string, number>
   openVideoId?: string
   closeVideoId?: string
+  newsLiveVideoId?: string
   strip?: boolean
 }
 
@@ -101,6 +103,7 @@ interface SlotConfigSpec {
   allowGenres?: string[]
   openVideo?: { enabled?: boolean; videoId?: string }
   closeVideo?: { enabled?: boolean; videoId?: string }
+  newsVideo?: { enabled?: boolean; videoId?: string }
   strip?: boolean
 }
 
@@ -234,12 +237,14 @@ async function buildEpisodeSnapshotList(
   showPlexKey: string,
   allowLanguages?: string[],
   denyLanguages?: string[],
+  yearMin?: number | null,
+  yearMax?: number | null,
 ): Promise<EpisodeSnapshotItem[]> {
-  const refs = await getCatalogEpisodeList(showPlexKey, allowLanguages, denyLanguages).catch(() => [])
+  const refs = await getCatalogEpisodeList(showPlexKey, allowLanguages, denyLanguages, yearMin, yearMax).catch(() => [])
   const snapshots: EpisodeSnapshotItem[] = []
 
   for (const ref of refs) {
-    const episode = await getCatalogEpisode(showPlexKey, ref.season, ref.episode, allowLanguages, denyLanguages).catch(() => null)
+    const episode = await getCatalogEpisode(showPlexKey, ref.season, ref.episode, allowLanguages, denyLanguages, yearMin, yearMax).catch(() => null)
     if (episode) snapshots.push(snapshotEpisode(episode))
   }
 
@@ -306,6 +311,7 @@ function resolveStationTimeBlocks(
         libraryWeights: slot.libraryWeights as Record<string, number> | undefined,
         openVideoId: slot.openVideo?.enabled && slot.openVideo.videoId ? String(slot.openVideo.videoId).trim() : undefined,
         closeVideoId: slot.closeVideo?.enabled && slot.closeVideo.videoId ? String(slot.closeVideo.videoId).trim() : undefined,
+        newsLiveVideoId: slot.newsVideo?.enabled && slot.newsVideo.videoId ? String(slot.newsVideo.videoId).trim() : undefined,
         strip: Boolean(slot.strip),
       })
     }
@@ -561,12 +567,14 @@ async function loadEpisodeSnapshot(
   progress: { id: string; plexShowKey: string; episodeOrderJson: string | null },
   allowLanguages?: string[],
   denyLanguages?: string[],
+  yearMin?: number | null,
+  yearMax?: number | null,
 ): Promise<EpisodeSnapshotItem[]> {
   const existing = parseEpisodeSnapshot(progress.episodeOrderJson)
   if (existing.length) {
     // Guard against stale snapshots when language rules change over time.
-    if (!(allowLanguages?.length || denyLanguages?.length)) return existing
-    const allowedRefs = await getCatalogEpisodeList(progress.plexShowKey, allowLanguages, denyLanguages).catch(() => null)
+    if (!(allowLanguages?.length || denyLanguages?.length || yearMin != null || yearMax != null)) return existing
+    const allowedRefs = await getCatalogEpisodeList(progress.plexShowKey, allowLanguages, denyLanguages, yearMin, yearMax).catch(() => null)
     if (!allowedRefs) return existing
     const allowedKeys = new Set(allowedRefs.map((ref) => ref.ratingKey))
     const filtered = existing.filter((ref) => allowedKeys.has(ref.ratingKey))
@@ -580,7 +588,7 @@ async function loadEpisodeSnapshot(
     }
   }
 
-  const snapshot = await buildEpisodeSnapshotList(progress.plexShowKey, allowLanguages, denyLanguages)
+  const snapshot = await buildEpisodeSnapshotList(progress.plexShowKey, allowLanguages, denyLanguages, yearMin, yearMax)
   if (!snapshot.length) return []
 
   await prisma.showProgress.update({
@@ -597,6 +605,8 @@ async function loadStationCandidates(params: {
   denyGenres: string[]
   allowLanguages: string[]
   denyLanguages: string[]
+  yearMin?: number | null
+  yearMax?: number | null
 }): Promise<PlexMediaItem[]> {
   const strict = await getCatalogCandidates(params).catch(() => [])
   if (strict.length) return strict
@@ -1133,6 +1143,7 @@ export async function runScheduler(
     }
 
     const today = startOfDay(new Date())
+    const schedulerYearRange = await getSchedulerYearRange()
     await persistStatus({
       phase: 'loading_catalog',
       stationsTotal: stations.length,
@@ -1335,6 +1346,8 @@ export async function runScheduler(
             denyGenres: rules.deny_genres,
             allowLanguages: rules.allow_languages,
             denyLanguages: rules.deny_languages,
+            yearMin: schedulerYearRange.minYear,
+            yearMax: schedulerYearRange.maxYear,
           }).catch(() => [])
 
           let availableShows = await loadStationCandidates({
@@ -1343,6 +1356,8 @@ export async function runScheduler(
             denyGenres: rules.deny_genres,
             allowLanguages: rules.allow_languages,
             denyLanguages: rules.deny_languages,
+            yearMin: schedulerYearRange.minYear,
+            yearMax: schedulerYearRange.maxYear,
           }).catch(() => [])
 
           availableMovies = availableMovies.filter((movie) => !blockedKeys.has(movie.ratingKey))
@@ -1376,6 +1391,8 @@ export async function runScheduler(
             denyGenres: [],
             allowLanguages: [],
             denyLanguages: [],
+            yearMin: schedulerYearRange.minYear,
+            yearMax: schedulerYearRange.maxYear,
           }).catch(() => [])).filter((movie) => !blockedKeys.has(movie.ratingKey))
           shuffle(rescueMovies)
 
@@ -1640,11 +1657,40 @@ export async function runScheduler(
                 continue
               }
 
-              if (effectiveContentType === 'filler' || effectiveContentType === 'news') {
-                const isNews = effectiveContentType === 'news'
+              const isNewsWindow = Boolean(activeStationSlot) && /news/i.test(activeStationSlot.name)
+              const newsLiveVideoId = isNewsWindow
+                ? String(activeStationSlot?.newsLiveVideoId ?? '').trim()
+                : ''
+              if (isNewsWindow && newsLiveVideoId) {
+                // News slots can be bound to a dedicated YouTube live/video source.
+                // This slot runs strictly for its own window duration only.
+                await prisma.slot.create({
+                  data: {
+                    scheduleId:    schedule.id,
+                    startTime:     slotStart,
+                    durationMins:  remainingMins,
+                    contentSource: 'youtube',
+                    contentId:     newsLiveVideoId,
+                    adBreaks:      null,
+                    fillerId:      null,
+                    fillerDuration: null,
+                    metadata:      toJson({
+                      blockName: block.name,
+                      title: activeStationSlot?.name || block.name,
+                      reason: 'news_live_window',
+                      showInEpg: true,
+                    }),
+                  },
+                })
+                slotStart = new Date(blockEnd)
+                failedPlacementsAtCurrentStart = 0
+                continue
+              }
+
+              if (effectiveContentType === 'filler') {
                 const isClosedownBlock = overnightClosedown && /infomercial/i.test(block.name)
                 const closedownContent = isClosedownBlock ? resolveClosedownContent(rawRules) : null
-                const windows: FillerWindow[] = (!isNews && activeStationSlot?.fillerWindows?.length)
+                const windows: FillerWindow[] = (activeStationSlot?.fillerWindows?.length)
                   ? activeStationSlot.fillerWindows
                   : []
 
@@ -1663,11 +1709,9 @@ export async function runScheduler(
                   if (mins < 1) return
                   const ads = buildAdBreaks(mins, adIntervalTv, adEnabled)
                   const closedownYoutube = closedownContent && (closedownContent.type === 'youtube_video' || closedownContent.type === 'youtube_playlist')
-                  const fid = categories.includes('news')
-                    ? (fillerPools.news ?? fillerPools.ads ?? fillerPools.music ?? null)
-                    : closedownYoutube
-                      ? closedownContent!.value
-                      : (fillerPools.ads ?? fillerPools.music ?? null)
+                  const fid = closedownYoutube
+                    ? closedownContent!.value
+                    : (fillerPools.ads ?? fillerPools.music ?? null)
                   await prisma.slot.create({
                     data: {
                       scheduleId:    schedule.id,
@@ -1706,7 +1750,13 @@ export async function runScheduler(
                       const pinWeekday = isStrip ? STRIP_WEEKDAY : weekday
                       const cadenceDays = isStrip ? 1 : EPISODE_PROGRESS_INTERVAL_DAYS
                       const fillMode = w.fillMode === 'single' ? 'single' : 'fill'
-                      const pinnedSnapshot = await buildEpisodeSnapshotList(w.plexShowKey, rules.allow_languages, rules.deny_languages)
+                      const pinnedSnapshot = await buildEpisodeSnapshotList(
+                        w.plexShowKey,
+                        rules.allow_languages,
+                        rules.deny_languages,
+                        schedulerYearRange.minYear,
+                        schedulerYearRange.maxYear,
+                      )
                       const pinnedFirst = firstRegularEpisode(pinnedSnapshot)
                       let placed = 0
 
@@ -1730,7 +1780,13 @@ export async function runScheduler(
                         }).catch(() => null)
                         if (!progress) break
 
-                        const episodeOrder = await loadEpisodeSnapshot(progress, rules.allow_languages, rules.deny_languages)
+                        const episodeOrder = await loadEpisodeSnapshot(
+                          progress,
+                          rules.allow_languages,
+                          rules.deny_languages,
+                          schedulerYearRange.minYear,
+                          schedulerYearRange.maxYear,
+                        )
                         const episode = episodeOrder.find((e) => e.season === progress.nextSeason && e.episode === progress.nextEpisode) ?? null
                         if (!episode) break
 
@@ -1768,7 +1824,14 @@ export async function runScheduler(
                         })
                         await prisma.slotMediaItem.create({ data: { slotId: slot.id, mediaItemId: mediaItem.id, orderIndex: 0 } })
                         await prisma.mediaItem.update({ where: { id: mediaItem.id }, data: { scheduledCount: { increment: 1 }, lastScheduled: new Date() } })
-                        await advanceShowProgress(progress, cadenceDays, rules.allow_languages, rules.deny_languages)
+                        await advanceShowProgress(
+                          progress,
+                          cadenceDays,
+                          rules.allow_languages,
+                          rules.deny_languages,
+                          schedulerYearRange.minYear,
+                          schedulerYearRange.maxYear,
+                        )
 
                         incrementCount(dayTitleCounts, episode.showTitle ?? episode.title)
                         incrementCount(daySeriesCounts, episode.showTitle)
@@ -1810,12 +1873,10 @@ export async function runScheduler(
                 // No per-window config (engine filler/news block or close-down) →
                 // a single filler block for the remainder.
                 const fillerDuration = remainingMins
-                const fillerCategories = isNews
-                  ? ['news']
-                  : isClosedownBlock
+                const fillerCategories = isClosedownBlock
                     ? ['closedown']
                     : /infomercial/i.test(block.name)
-                      ? ['ads']
+                      ? ['infomercial']
                       : ['filler', 'music']
                 await createFillerSlot(slotStart, fillerDuration, fillerCategories)
                 slotStart = new Date(blockEnd)
@@ -1942,7 +2003,13 @@ export async function runScheduler(
                     const idx = remainingShows.findIndex((entry) => entry.item.ratingKey === show.ratingKey)
                     if (idx >= 0) remainingShows.splice(idx, 1)
 
-                    const epList = await getCatalogEpisodeList(show.ratingKey, rules.allow_languages, rules.deny_languages).catch(() => [])
+                    const epList = await getCatalogEpisodeList(
+                      show.ratingKey,
+                      rules.allow_languages,
+                      rules.deny_languages,
+                      schedulerYearRange.minYear,
+                      schedulerYearRange.maxYear,
+                    ).catch(() => [])
                     if (!epList.length) {
                       continue
                     }
@@ -1964,7 +2031,13 @@ export async function runScheduler(
                         stationId:     station.id,
                         plexShowKey:   show.ratingKey,
                         showTitle:     show.title,
-                        episodeOrderJson: toJson(await buildEpisodeSnapshotList(show.ratingKey, rules.allow_languages, rules.deny_languages)),
+                        episodeOrderJson: toJson(await buildEpisodeSnapshotList(
+                          show.ratingKey,
+                          rules.allow_languages,
+                          rules.deny_languages,
+                          schedulerYearRange.minYear,
+                          schedulerYearRange.maxYear,
+                        )),
                         nextSeason:    firstEp.season,
                         nextEpisode:   firstEp.episode,
                         totalSeasons:  Math.max(...epList.map((e) => e.season)),
@@ -1981,7 +2054,13 @@ export async function runScheduler(
                 }
 
                 if (progress) {
-                  const episodeOrder = await loadEpisodeSnapshot(progress, rules.allow_languages, rules.deny_languages)
+                  const episodeOrder = await loadEpisodeSnapshot(
+                    progress,
+                    rules.allow_languages,
+                    rules.deny_languages,
+                    schedulerYearRange.minYear,
+                    schedulerYearRange.maxYear,
+                  )
                   const episode = episodeOrder.find(
                     (ref) => ref.season === progress.nextSeason && ref.episode === progress.nextEpisode,
                   ) ?? null
@@ -2041,7 +2120,14 @@ export async function runScheduler(
                       data: { scheduledCount: { increment: 1 }, lastScheduled: new Date() },
                     })
 
-                    await advanceShowProgress(progress, cadenceDays, rules.allow_languages, rules.deny_languages)
+                    await advanceShowProgress(
+                      progress,
+                      cadenceDays,
+                      rules.allow_languages,
+                      rules.deny_languages,
+                      schedulerYearRange.minYear,
+                      schedulerYearRange.maxYear,
+                    )
 
                     incrementCount(dayTitleCounts, episode.showTitle ?? episode.title)
                     incrementCount(daySeriesCounts, episode.showTitle)
@@ -2181,6 +2267,8 @@ async function advanceShowProgress(
   cadenceDays: number = EPISODE_PROGRESS_INTERVAL_DAYS,
   allowLanguages?: string[],
   denyLanguages?: string[],
+  yearMin?: number | null,
+  yearMax?: number | null,
 ): Promise<void> {
   const now = new Date()
   if (!progress.lastAiredAt) {
@@ -2200,7 +2288,9 @@ async function advanceShowProgress(
   }
 
   const storedSnapshot = parseEpisodeSnapshot(progress.episodeOrderJson)
-  const epList = storedSnapshot.length ? storedSnapshot : await buildEpisodeSnapshotList(progress.plexShowKey, allowLanguages, denyLanguages)
+  const epList = storedSnapshot.length
+    ? storedSnapshot
+    : await buildEpisodeSnapshotList(progress.plexShowKey, allowLanguages, denyLanguages, yearMin, yearMax)
   if (!epList.length) {
     await prisma.showProgress.update({
       where: { id: progress.id },
