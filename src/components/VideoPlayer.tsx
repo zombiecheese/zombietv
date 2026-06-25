@@ -24,8 +24,6 @@ import { DEFAULT_VHS_SETTINGS } from '@/lib/vhs-defaults'
 
 interface Props {
   state:          PlaybackState | null
-  plexServerUrl:  string | null  // From session — null if not logged in
-  plexToken:      string | null
   clockOffsetMs:  number
   isLoading:      boolean
 }
@@ -124,8 +122,6 @@ function youtubeEmbedUrl(videoIds: string[], offsetSecs = 0, withSound = false):
 
 export default function VideoPlayer({
   state,
-  plexServerUrl,
-  plexToken,
   clockOffsetMs,
   isLoading,
 }: Props) {
@@ -953,8 +949,6 @@ export default function VideoPlayer({
             `youtubeQueue      : ${(state?.youtubeQueue?.slice(0, 4).join(', ') || '-')}`,
             `fillerId          : ${state?.fillerId ?? '-'}`,
             `adFillerId        : ${state?.adFillerId ?? '-'}`,
-            `plexServerUrl     : ${plexServerUrl ?? '-'}`,
-            `plexTokenLoaded   : ${plexToken ? 'yes' : 'no'}`,
             `plexUrl           : ${plexHlsUrl || '-'}`,
             `youtubeSrc        : ${youtubeSrc || '-'}`,
           ].join('\n')}

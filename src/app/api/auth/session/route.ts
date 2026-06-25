@@ -6,13 +6,10 @@ export const dynamic = 'force-dynamic'
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getIronSession }            from 'iron-session'
-import { sessionOptions, SessionData, defaultSession } from '@/lib/session'
+import { sessionOptions, SessionData } from '@/lib/session'
 
 export async function GET(req: NextRequest) {
-  const response = new NextResponse()
-  const session  = await getIronSession<SessionData>(req, response, sessionOptions)
-  response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
-  response.headers.set('Pragma', 'no-cache')
+  const session  = await getIronSession<SessionData>(req, new NextResponse(), sessionOptions)
 
   if (!session.isLoggedIn) {
     return NextResponse.json(
@@ -28,8 +25,6 @@ export async function GET(req: NextRequest) {
       username:   session.username,
       email:      session.email,
       isAdmin:    session.isAdmin,
-      plexToken:  session.plexToken || null,
-      plexServerUrl: session.plexServerUrl || null,
     },
     { headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate' } },
   )

@@ -12,11 +12,42 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPlaybackState }          from '@/lib/playback'
 import type { PlaybackState }        from '@/lib/playback'
+import { prisma }                    from '@/lib/db'
 
 export const dynamic = 'force-dynamic'
 
 const LIVE_CACHE_TTL_MS = 1_500
+const LIVE_CACHE_MAX_ENTRIES = 64
 const livePlaybackCache = new Map<string, { expiresAt: number; state: PlaybackState }>()
+const livePlaybackInFlight = new Map<string, Promise<PlaybackState>>()
+
+const STATION_CACHE_TTL_MS = 60_000
+let cachedStationIds: { expiresAt: number; ids: Set<string> } | null = null
+
+function pruneLivePlaybackCache(now: number) {
+  for (const [key, entry] of livePlaybackCache.entries()) {
+    if (entry.expiresAt <= now) livePlaybackCache.delete(key)
+  }
+
+  while (livePlaybackCache.size > LIVE_CACHE_MAX_ENTRIES) {
+    const oldestKey = livePlaybackCache.keys().next().value
+    if (!oldestKey) break
+    livePlaybackCache.delete(oldestKey)
+  }
+}
+
+async function getKnownStationIds(): Promise<Set<string>> {
+  const now = Date.now()
+  if (cachedStationIds && cachedStationIds.expiresAt > now) return cachedStationIds.ids
+
+  const rows = await prisma.station.findMany({ select: { id: true } })
+  const ids = new Set(rows.map((row) => row.id))
+  cachedStationIds = {
+    ids,
+    expiresAt: now + STATION_CACHE_TTL_MS,
+  }
+  return ids
+}
 
 export async function GET(
   req: NextRequest,
@@ -35,10 +66,17 @@ export async function GET(
   }
 
   try {
+    const knownStationIds = await getKnownStationIds()
+    if (!knownStationIds.has(stationId)) {
+      return NextResponse.json({ error: 'Unknown stationId' }, { status: 404 })
+    }
+
     const shouldUseCache = !atParam
+    const now = Date.now()
+    pruneLivePlaybackCache(now)
     if (shouldUseCache) {
       const cached = livePlaybackCache.get(stationId)
-      if (cached && cached.expiresAt > Date.now()) {
+      if (cached && cached.expiresAt > now) {
         return NextResponse.json(cached.state, {
           headers: {
             'Cache-Control': 'public, max-age=5, stale-while-revalidate=2',
@@ -47,12 +85,22 @@ export async function GET(
       }
     }
 
-    const state = await getPlaybackState(stationId, atMs)
+    const state = shouldUseCache
+      ? await (livePlaybackInFlight.get(stationId) ?? (() => {
+          const pending = getPlaybackState(stationId, atMs).finally(() => {
+            livePlaybackInFlight.delete(stationId)
+          })
+          livePlaybackInFlight.set(stationId, pending)
+          return pending
+        })())
+      : await getPlaybackState(stationId, atMs)
+
     if (shouldUseCache) {
       livePlaybackCache.set(stationId, {
         state,
-        expiresAt: Date.now() + LIVE_CACHE_TTL_MS,
+        expiresAt: now + LIVE_CACHE_TTL_MS,
       })
+      pruneLivePlaybackCache(now)
     }
 
     // Set a short cache so CDN / browser doesn't hammer the DB

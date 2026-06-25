@@ -10,7 +10,7 @@
 //
 // Data is fetched from /api/epg/[stationId] for each station.
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import type { EPGSlot } from '@/app/api/epg/[stationId]/route'
 
 // ─── Station metadata (mirrors DB-backed station branding defaults) ──────────
@@ -33,12 +33,11 @@ type StationMeta = {
 
 // Scale EPG elements based on device resolution for consistent viewing on 1080p, 1440p, 4K, etc.
 // Base values are calibrated for 1080p (typical TV viewing); scale upward on higher resolutions
-function getEPGScale(): number {
-  if (typeof window === 'undefined') return 1
+function getEPGScale(viewportWidth: number, pixelRatio: number): number {
   // Use device pixel ratio up to 2x, then cap to avoid excessive oversizing
-  const dpr = Math.min(window.devicePixelRatio || 1, 1.5)
+  const dpr = Math.min(pixelRatio || 1, 1.5)
   // Also consider viewport width — bigger screens get bigger text/spacing
-  const widthScale = Math.max(1, window.innerWidth / 1920)
+  const widthScale = Math.max(1, viewportWidth / 1920)
   return Math.min(dpr * 0.9 + widthScale * 0.4, 1.8)
 }
 
@@ -51,23 +50,7 @@ const SLOT_HOUR_PX_BASE  = 160      // Pixels per hour in the grid (base for 108
 const ROW_HEIGHT_PX_BASE = 52       // Fixed row height — scales with resolution
 const STATION_COL_PX_BASE = 90
 const MINIMIZE_BUTTON_PX_BASE = 82
-
-// Memoize scale calculation to avoid recalc on every render
-let lastScale = 1
-let lastWidth = 0
-function computeScale(): number {
-  if (typeof window !== 'undefined' && window.innerWidth !== lastWidth) {
-    lastWidth = window.innerWidth
-    lastScale = getEPGScale()
-  }
-  return lastScale
-}
-
-const scale = computeScale()
-const SLOT_HOUR_PX  = Math.round(SLOT_HOUR_PX_BASE * scale)
-const ROW_HEIGHT_PX = Math.round(ROW_HEIGHT_PX_BASE * scale)
-const STATION_COL_PX = Math.round(STATION_COL_PX_BASE * scale)
-const MINIMIZE_BUTTON_PX = Math.round(MINIMIZE_BUTTON_PX_BASE * scale)
+const EPG_REFRESH_INTERVAL_MS = 15_000
 
 interface Props {
   activeStation:   string
@@ -88,6 +71,7 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
   const [bodyScrollbarPx, setBodyScrollbarPx] = useState(0)
   const [timelineScrollLeft, setTimelineScrollLeft] = useState(0)
   const [viewportWidth, setViewportWidth] = useState(() => (typeof window === 'undefined' ? 0 : window.innerWidth))
+  const [devicePixelRatio, setDevicePixelRatio] = useState(() => (typeof window === 'undefined' ? 1 : (window.devicePixelRatio || 1)))
   const [tz, setTz] = useState<string | undefined>(undefined)
   // Vertical scroller + one representative viewport width for horizontal math
   const bodyScrollRef             = useRef<HTMLDivElement | null>(null)
@@ -106,13 +90,19 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
   // Recalculate scale on window resize
   useEffect(() => {
     const handleResize = () => {
-      lastWidth = window.innerWidth
       setViewportWidth(window.innerWidth)
+      setDevicePixelRatio(window.devicePixelRatio || 1)
     }
     handleResize()
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [])
+
+  const scale = useMemo(() => getEPGScale(viewportWidth || 1920, devicePixelRatio), [viewportWidth, devicePixelRatio])
+  const SLOT_HOUR_PX = Math.round(SLOT_HOUR_PX_BASE * scale)
+  const ROW_HEIGHT_PX = Math.round(ROW_HEIGHT_PX_BASE * scale)
+  const STATION_COL_PX = Math.round(STATION_COL_PX_BASE * scale)
+  const MINIMIZE_BUTTON_PX = Math.round(MINIMIZE_BUTTON_PX_BASE * scale)
 
   const handleBodyPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
@@ -221,12 +211,11 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
     return () => window.removeEventListener('resize', measureScrollbar)
   }, [stations.length])
 
-  // Fetch slots for all stations (48hr window from now)
-  useEffect(() => {
+  const fetchSlotsForWindow = useCallback(async (): Promise<StationSlots> => {
     const from = new Date(startMs)
     from.setMinutes(0, 0, 0)
 
-    Promise.all(
+    const results = await Promise.all(
       stations.map(async (s) => {
         try {
           const res = await fetch(
@@ -239,12 +228,41 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
           return { id: s.id, slots: [] }
         }
       }),
-    ).then((results) => {
-      const map: StationSlots = {}
-      for (const r of results) map[r.id] = r.slots
-      setSlots(map)
-    })
+    )
+
+    const map: StationSlots = {}
+    for (const r of results) map[r.id] = r.slots
+    return map
   }, [startMs, stations])
+
+  // Keep EPG schedule data live so admin schedule edits show up without a full page refresh.
+  useEffect(() => {
+    let active = true
+
+    const refresh = async () => {
+      const map = await fetchSlotsForWindow().catch(() => null)
+      if (!active || !map) return
+      setSlots(map)
+    }
+
+    refresh()
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'hidden') return
+      refresh()
+    }, EPG_REFRESH_INTERVAL_MS)
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return
+      refresh()
+    }
+
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      active = false
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [fetchSlotsForWindow])
 
   // Zone-aware display helpers — all times render in the configured broadcast
   // timezone (falls back to the viewer's local zone until it loads).

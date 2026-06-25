@@ -45,9 +45,7 @@ export default function Home() {
   const [authError, setAuthError] = useState('')
   const [session, setSession]             = useState<{
     isLoggedIn: boolean
-    plexToken: string | null
-    plexServerUrl: string | null
-  }>({ isLoggedIn: false, plexToken: null, plexServerUrl: null })
+  }>({ isLoggedIn: false })
 
   const { state, clockOffsetMs, isLoading } = usePlayback(station, session.isLoggedIn)
   const mobileEpgInitRef = useRef(false)
@@ -165,8 +163,6 @@ export default function Home() {
           if (data?.isLoggedIn) {
             setSession({
               isLoggedIn:    true,
-              plexToken:     data.plexToken ?? null,
-              plexServerUrl: data.plexServerUrl ?? null,
             })
             if (callbackPinId || callbackAuthStatus) {
               pageUrl.searchParams.delete('pinID')
@@ -196,8 +192,6 @@ export default function Home() {
               if (!cancelled && data?.isLoggedIn) {
                 setSession({
                   isLoggedIn: true,
-                  plexToken: data.plexToken ?? null,
-                  plexServerUrl: data.plexServerUrl ?? null,
                 })
               }
             }
@@ -400,8 +394,6 @@ export default function Home() {
           }}>
             <VideoPlayer
               state={state}
-              plexServerUrl={session.plexServerUrl}
-              plexToken={session.plexToken}
               clockOffsetMs={clockOffsetMs}
               isLoading={isLoading}
             />

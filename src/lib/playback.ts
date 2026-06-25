@@ -75,6 +75,36 @@ interface YoutubeSelection {
   startOffsetMs: number
 }
 
+type AdPoolCandidate = {
+  videoId: string | null
+  durationMins: number | null
+  station: string | null
+}
+
+type AdPoolItem = {
+  videoId: string
+  durationMins: number | null
+  station: string | null
+}
+
+type SlotRecord = {
+  startTime: Date
+  durationMins: number
+  fillerDuration: number | null
+  adBreaks: string | null
+  metadata: string | null
+  contentSource: string
+  fillerId: string | null
+  contentId: string | null
+  showTitle: string | null
+  seasonNumber: number | null
+  episodeNumber: number | null
+}
+
+function hasVideoId<T extends { videoId: string | null }>(item: T): item is T & { videoId: string } {
+  return typeof item.videoId === 'string' && item.videoId.length > 0
+}
+
 function preferStationScopedItems<T extends { station: string | null }>(items: T[], stationId: string): T[] {
   const stationItems = items.filter((item) => item.station === stationId)
   if (stationItems.length) return stationItems
@@ -189,15 +219,18 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
     include: {
       slots: {
         orderBy: { startTime: 'asc' },
-        include: {
-          mediaItems: {
-            orderBy: { orderIndex: 'asc' },
-            include: {
-              mediaItem: {
-                select: { ratings: true },
-              },
-            },
-          },
+        select: {
+          startTime: true,
+          durationMins: true,
+          fillerDuration: true,
+          adBreaks: true,
+          metadata: true,
+          contentSource: true,
+          fillerId: true,
+          contentId: true,
+          showTitle: true,
+          seasonNumber: true,
+          episodeNumber: true,
         },
       },
     },
@@ -206,14 +239,14 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
 
   if (!schedules.length) return offline
 
-  const allSlots = schedules
-    .flatMap((schedule: { slots: typeof schedules[0]["slots"] }) => schedule.slots)
-    .sort((a: typeof schedules[0]["slots"][0], b: typeof schedules[0]["slots"][0]) => a.startTime.getTime() - b.startTime.getTime())
+  const allSlots: SlotRecord[] = schedules
+    .flatMap((schedule) => schedule.slots)
+    .sort((a, b) => a.startTime.getTime() - b.startTime.getTime())
 
   if (!allSlots.length) return offline
 
   // ── Find the active slot ────────────────────────────────────────────────
-  const activeSlot = allSlots.reduce<typeof allSlots[number] | null>((latest: typeof allSlots[number] | null, slot: typeof allSlots[number]) => {
+  const activeSlot = allSlots.reduce<SlotRecord | null>((latest, slot) => {
     const slotStart = slot.startTime.getTime()
     // Ad breaks add to the programme's wall-clock runtime.
     const slotAdMins = fromJsonArray<AdBreakDef>(slot.adBreaks).reduce((sum, ab) => sum + (ab.durationMins || 0), 0)
@@ -244,7 +277,7 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
   // Pre-fetch the ad-eligible pool once so each ad break can extend its end to
   // the completion of the last ad video — ads always play to the end before the
   // main programme resumes.
-  const adPoolRaw = adBreakDefs.length
+  const adPoolRaw: AdPoolCandidate[] = adBreakDefs.length
     ? await prisma.youtubeContent.findMany({
         where: {
           category: { in: ['ads', 'filler', 'music'] },
@@ -253,10 +286,7 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
         select: { videoId: true, durationMins: true, station: true },
       })
     : []
-  const adPool = preferStationScopedItems(
-    adPoolRaw.filter((item: any): item is { videoId: string; durationMins: number | null; station: string | null } => Boolean(item.videoId)),
-    stationId,
-  )
+  const adPool: AdPoolItem[] = preferStationScopedItems(adPoolRaw.filter(hasVideoId), stationId)
 
   // For a given ad break, return the absolute time at which the last ad video
   // that covers its nominal window finishes (>= the nominal end time).
@@ -268,7 +298,7 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
     const nominalMs = nominalDurationMins * 60_000
     let coveredMs = 0
     for (const item of ordered) {
-      const durMs = Math.max(1, (item as typeof adPool[0]).durationMins ?? 3) * 60_000
+      const durMs = Math.max(1, item.durationMins ?? 3) * 60_000
       cursorMs += durMs
       coveredMs += durMs
       if (coveredMs >= nominalMs) break
@@ -407,7 +437,13 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
     nextTransitionMs = slotEndMs
   }
 
-  const activeContentRating = activeSlot.mediaItems[0]?.mediaItem?.ratings ?? null
+  const activeContentRating =
+    inFiller || inAdBreak || activeSlot.contentSource !== 'plex' || !activeSlot.contentId
+      ? null
+      : (await prisma.mediaItem.findUnique({
+          where: { plexKey: activeSlot.contentId },
+          select: { ratings: true },
+        }))?.ratings ?? null
 
   return {
     stationId,
@@ -519,10 +555,7 @@ async function selectYoutubeSelection(params: {
     ],
   })
 
-  const scopedCandidates = preferStationScopedItems(
-    candidates.filter((item: any): item is YoutubePoolItem & { videoId: string } => Boolean(item.videoId)),
-    stationId,
-  )
+  const scopedCandidates = preferStationScopedItems(candidates.filter(hasVideoId), stationId)
   const seeded = seededShuffle(scopedCandidates, seed)
 
   // Reserve time at both window edges for opening/closing idents. The playback
@@ -530,7 +563,6 @@ async function selectYoutubeSelection(params: {
   // skips the opener while still allowing the closer at the window end.
   const BUMPER_MINS = 1
   const elapsedMs = Math.max(0, now - segmentStartMs)
-  const segmentDurationMs = segmentDurationMins * 60_000
   const elapsedMins = elapsedMs / 60_000
   const wantOpen = !inAdBreak && Boolean(openBumperId)
   const wantClose = !inAdBreak && Boolean(closeBumperId)
@@ -541,8 +573,8 @@ async function selectYoutubeSelection(params: {
   let totalMins = 0
   if (middleTargetMins >= 1) {
     for (const item of seeded) {
-      middle.push(item as YoutubePoolItem)
-      totalMins += Math.max(1, (item as any).durationMins ?? 3)
+      middle.push(item)
+      totalMins += Math.max(1, item.durationMins ?? 3)
       if (totalMins >= middleTargetMins) break
     }
   }

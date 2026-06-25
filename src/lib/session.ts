@@ -40,10 +40,21 @@ export const defaultSession: SessionData = {
   isAdmin: false,
 }
 
+function resolveSessionPassword(): string {
+  const secret = process.env.SESSION_SECRET?.trim() ?? ''
+  if (secret.length >= 32) return secret
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('SESSION_SECRET must be set and at least 32 characters in production.')
+  }
+
+  return 'zombietv-dev-secret-change-before-production-deploy'
+}
+
 export const sessionOptions: SessionOptions = {
   // SESSION_SECRET must be at least 32 chars. Generate with:
   //   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-  password: process.env.SESSION_SECRET ?? 'zombietv-dev-secret-change-before-production-deploy',
+  password: resolveSessionPassword(),
   cookieName: 'zombietv_session',
   cookieOptions: {
     secure: shouldUseSecureCookies(),
