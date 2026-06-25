@@ -360,7 +360,7 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
     }
   }
 
-  let fillerCategories: string[] = ['ads', 'filler', 'music', 'infomercial']
+  let fillerCategories: string[] = ['ads', 'music', 'infomercial']
   
   // Check for new fillerWindows format
   if (Array.isArray(slotMetadata?.fillerWindows)) {
@@ -394,7 +394,8 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
     currentAdBreak,
     inFiller,
     fallbackId: inAdBreak ? (fillerPools.ads ?? null) : (activeSlot.fillerId ?? fillerPools.music ?? null),
-    fillerCategories,
+    // Between-show padding filler should use ad-like categories only.
+    fillerCategories: inFiller ? ['ads', 'music', 'infomercial'] : fillerCategories,
     windowSegment: hasWindowBumpers ? { startMs: slotStartMs, durationMins: activeSlot.durationMins } : null,
     openBumperId: hasWindowBumpers ? openBumperId : null,
     closeBumperId: hasWindowBumpers ? closeBumperId : null,
@@ -506,7 +507,7 @@ async function selectYoutubeSelection(params: {
   openBumperId?: string | null
   closeBumperId?: string | null
 }): Promise<YoutubeSelection | null> {
-  const { stationId, now, slotStartMs, contentEndMs, fillerDurationMins, inAdBreak, currentAdBreak, inFiller, fallbackId, fillerCategories = ['ads', 'filler', 'music', 'infomercial'], windowSegment = null, openBumperId = null, closeBumperId = null } = params
+  const { stationId, now, slotStartMs, contentEndMs, fillerDurationMins, inAdBreak, currentAdBreak, inFiller, fallbackId, fillerCategories = ['ads', 'music', 'infomercial'], windowSegment = null, openBumperId = null, closeBumperId = null } = params
   if (windowSegment) {
     const windowEndMs = windowSegment.startMs + windowSegment.durationMins * 60_000
     // Bumpers and window queues are strictly scoped to the window itself.
