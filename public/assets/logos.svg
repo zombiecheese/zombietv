@@ -1,0 +1,39 @@
+# Station Logo Placeholders
+// These are simple SVG placeholders for station logos
+// Replace with actual PNG files later
+
+<!-- STN Logo -->
+<svg width="200" height="100" viewBox="0 0 200 100">
+  <rect width="200" height="100" fill="#2c3e50"/>
+  <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#fff" font-family="Arial" font-size="40">STN</text>
+</svg>
+
+<!-- ZBC Logo -->
+<svg width="200" height="100" viewBox="0 0 200 100">
+  <rect width="200" height="100" fill="#8b0000"/>
+  <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#fff" font-family="Arial" font-size="40">ZBC</text>
+</svg>
+
+<!-- NNWK Logo -->
+<svg width="200" height="100" viewBox="0 0 200 100">
+  <rect width="200" height="100" fill="#003366"/>
+  <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#fff" font-family="Arial" font-size="40">NNWK</text>
+</svg>
+
+<!-- Seven Logo -->
+<svg width="200" height="100" viewBox="0 0 200 100">
+  <rect width="200" height="100" fill="#ff6600"/>
+  <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#fff" font-family="Arial" font-size="40">7</text>
+</svg>
+
+<!-- Nine Logo -->
+<svg width="200" height="100" viewBox="0 0 200 100">
+  <rect width="200" height="100" fill="#cc0000"/>
+  <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#fff" font-family="Arial" font-size="40">9</text>
+</svg>
+
+<!-- Ten Logo -->
+<svg width="200" height="100" viewBox="0 0 200 100">
+  <rect width="200" height="100" fill="#0066cc"/>
+  <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#fff" font-family="Arial" font-size="40">10</text>
+</svg>

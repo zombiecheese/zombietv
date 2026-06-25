@@ -1,0 +1,51 @@
+# Version control and CI metadata
+.git/
+.github/
+
+# Dependencies and local build outputs
+node_modules/
+.next/
+out/
+.turbo/
+dist/
+coverage/
+*.tsbuildinfo
+tsconfig.tsbuildinfo
+
+# Local environment and logs
+.env
+.env.local
+.env.*
+.env.*.local
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+server.log
+
+# Local database files
+prisma/dev.db
+prisma/dev.db-journal
+prisma/dev.db-shm
+prisma/dev.db-wal
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Editor and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local planning docs (not needed for image build)
+CODE_STATE.md
+plan.md
+test-checklist.md
+
+# Local git and tooling metadata
+.gitignore
+.dockerignore

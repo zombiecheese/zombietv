@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-zombietv}
+      POSTGRES_USER: ${POSTGRES_USER:-zombietv}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-zombietv_dev_password}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  zombietv:
+    image: ghcr.io/zombiecheese/zombietv:latest
+    pull_policy: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/vhs-settings').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-zombietv}:${POSTGRES_PASSWORD:-zombietv_dev_password}@postgres:5432/${POSTGRES_DB:-zombietv}?schema=public
+      SESSION_SECRET: ${SESSION_SECRET}
+      PLEX_CLIENT_ID: ${PLEX_CLIENT_ID}
+      # Default broadcast timezone used until the admin sets one in the dashboard.
+      TZ: ${TZ:-Australia/Sydney}
