@@ -280,7 +280,9 @@ export default function Home() {
     ? EPG_BAR_HEIGHT_PX
     : (isMobileViewport ? '56vh' : EPG_HEIGHT_PX)
   const nowBarHeight = (!epgMinimized && !isMobileViewport) ? NOWBAR_HEIGHT_PX : 0
-  const epgBottom: number | string = isMobileViewport ? 'env(safe-area-inset-bottom)' : nowBarHeight
+  // Keep the EPG visible above mobile browser UI controls.
+  const mobileBottomOffset = isMobileViewport ? (epgMinimized ? 72 : 10) : 0
+  const epgBottom: number | string = isMobileViewport ? mobileBottomOffset : nowBarHeight
 
   return (
     <div style={{

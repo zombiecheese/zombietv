@@ -1859,7 +1859,6 @@ export async function runScheduler(
                         if (dayUsedMediaKeys.has(episode.ratingKey) || episode.durationMins + adMins > remainWin + MAX_CONTENT_OVERRUN_MINS) break
 
                         const slotEnd    = addMinutes(slotStart, episode.durationMins + adMins)
-                        const { effectiveEnd: alignedEnd, fillerMins } = resolveWindowAlignedEnd(slotEnd, new Date(windowEndMs))
 
                         const mediaItem = await upsertMediaItem(episode)
                         const slot = await prisma.slot.create({
@@ -1873,8 +1872,8 @@ export async function runScheduler(
                             seasonNumber:  episode.seasonNumber,
                             episodeNumber: episode.episodeNumber,
                             adBreaks:      adBreaks.length ? toJson(adBreaks) : null,
-                            fillerId:      fillerMins > 0 ? (fillerPools.ads ?? fillerPools.music ?? null) : null,
-                            fillerDuration: fillerMins > 0 ? fillerMins : null,
+                            fillerId:      null,
+                            fillerDuration: null,
                             metadata:      toJson({
                               blockName: block.name,
                               showTitle: episode.showTitle ?? progress.showTitle,
@@ -1898,8 +1897,8 @@ export async function runScheduler(
                         incrementCount(dayTitleCounts, episode.showTitle ?? episode.title)
                         incrementCount(daySeriesCounts, episode.showTitle)
                         dayUsedMediaKeys.add(episode.ratingKey)
-                        recordAiring(globalAirings, episode.ratingKey, slotStart.getTime(), alignedEnd.getTime())
-                        slotStart = alignedEnd
+                        recordAiring(globalAirings, episode.ratingKey, slotStart.getTime(), slotEnd.getTime())
+                        slotStart = slotEnd
                         placed += 1
                       }
 
@@ -1971,7 +1970,6 @@ export async function runScheduler(
                 )
                 const adMins   = adBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
                 const slotEnd  = addMinutes(slotStart, chosen.durationMins + adMins)
-                const { effectiveEnd: alignedEnd, fillerMins } = resolveWindowAlignedEnd(slotEnd, blockEnd)
 
                 const mediaItem = await upsertMediaItem(chosen)
 
@@ -1983,8 +1981,8 @@ export async function runScheduler(
                     contentSource: 'plex',
                     contentId:     chosen.ratingKey,
                     adBreaks:      adBreaks.length ? toJson(adBreaks) : null,
-                    fillerId:      fillerMins > 0 ? (fillerPools.ads ?? fillerPools.music ?? null) : null,
-                    fillerDuration: fillerMins > 0 ? fillerMins : null,
+                    fillerId:      null,
+                    fillerDuration: null,
                     metadata:      toJson({ blockName: block.name, title: chosen.title, year: chosen.year, ...bumperMetaForWindow(activeStationSlot, windowBumperAssigned) }),
                   },
                 })
@@ -1999,9 +1997,9 @@ export async function runScheduler(
                 incrementCount(dayTitleCounts, chosen.title)
                 dayUsedMediaKeys.add(chosen.ratingKey)
                 recordMovieClaim(date, chosen.ratingKey)
-                recordAiring(globalAirings, chosen.ratingKey, slotStart.getTime(), alignedEnd.getTime())
+                recordAiring(globalAirings, chosen.ratingKey, slotStart.getTime(), slotEnd.getTime())
 
-                slotStart = alignedEnd
+                slotStart = slotEnd
                 failedPlacementsAtCurrentStart = 0
                 continue
               }
@@ -2150,7 +2148,6 @@ export async function runScheduler(
                     const adBreaks   = episodeAdBreaks
                     const adMins     = adBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
                     const slotEnd    = addMinutes(slotStart, episode.durationMins + adMins)
-                    const { effectiveEnd: alignedEnd, fillerMins } = resolveWindowAlignedEnd(slotEnd, blockEnd)
 
                     const mediaItem = await upsertMediaItem(episode)
                     const slot = await prisma.slot.create({
@@ -2164,8 +2161,8 @@ export async function runScheduler(
                         seasonNumber:  episode.seasonNumber,
                         episodeNumber: episode.episodeNumber,
                         adBreaks:      adBreaks.length ? toJson(adBreaks) : null,
-                        fillerId:      fillerMins > 0 ? (fillerPools.ads ?? fillerPools.music ?? null) : null,
-                        fillerDuration: fillerMins > 0 ? fillerMins : null,
+                        fillerId:      null,
+                        fillerDuration: null,
                         metadata:      toJson({
                           blockName: block.name,
                           showTitle: episode.showTitle ?? progress.showTitle,
@@ -2200,9 +2197,9 @@ export async function runScheduler(
                     incrementCount(dayTitleCounts, episode.showTitle ?? episode.title)
                     incrementCount(daySeriesCounts, episode.showTitle)
                     dayUsedMediaKeys.add(episode.ratingKey)
-                    recordAiring(globalAirings, episode.ratingKey, slotStart.getTime(), alignedEnd.getTime())
+                    recordAiring(globalAirings, episode.ratingKey, slotStart.getTime(), slotEnd.getTime())
 
-                    slotStart = alignedEnd
+                    slotStart = slotEnd
                     failedPlacementsAtCurrentStart = 0
                     continue
                   }
@@ -2244,7 +2241,6 @@ export async function runScheduler(
                 )
                 const rescueAdMins   = rescueAdBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
                 const rescueSlotEnd  = addMinutes(slotStart, rescueMovie.durationMins + rescueAdMins)
-                const { effectiveEnd: rescueAligned, fillerMins: rescueFillerMins } = resolveWindowAlignedEnd(rescueSlotEnd, blockEnd)
 
                 const mediaItem = await upsertMediaItem(rescueMovie)
                 const slot = await prisma.slot.create({
@@ -2255,8 +2251,8 @@ export async function runScheduler(
                     contentSource: 'plex',
                     contentId:     rescueMovie.ratingKey,
                     adBreaks:      rescueAdBreaks.length ? toJson(rescueAdBreaks) : null,
-                    fillerId:      rescueFillerMins > 0 ? (fillerPools.ads ?? fillerPools.music ?? null) : null,
-                    fillerDuration: rescueFillerMins > 0 ? rescueFillerMins : null,
+                    fillerId:      null,
+                    fillerDuration: null,
                     metadata:      toJson({ blockName: block.name, title: rescueMovie.title, reason: 'fallback_rescue' }),
                   },
                 })
@@ -2271,8 +2267,8 @@ export async function runScheduler(
                 incrementCount(dayTitleCounts, rescueMovie.title)
                 dayUsedMediaKeys.add(rescueMovie.ratingKey)
                 recordMovieClaim(date, rescueMovie.ratingKey)
-                recordAiring(globalAirings, rescueMovie.ratingKey, slotStart.getTime(), rescueAligned.getTime())
-                slotStart = rescueAligned
+                recordAiring(globalAirings, rescueMovie.ratingKey, slotStart.getTime(), rescueSlotEnd.getTime())
+                slotStart = rescueSlotEnd
                 failedPlacementsAtCurrentStart = 0
                 continue
               }

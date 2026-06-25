@@ -9,6 +9,8 @@
 import { prisma }                         from './db'
 import { fromJsonArray, fromJsonObject }  from './json'
 import { createHash }                    from 'crypto'
+import { getBroadcastTimezone }          from './app-settings'
+import { getZonedParts }                 from './time'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -79,6 +81,7 @@ type AdPoolCandidate = {
   videoId: string | null
   durationMins: number | null
   station: string | null
+  category: string
 }
 
 type AdPoolItem = {
@@ -111,11 +114,18 @@ function preferStationScopedItems<T extends { station: string | null }>(items: T
   return items.filter((item) => item.station == null)
 }
 
+function isOvernightAdBreakWindow(now: Date, timezone: string): boolean {
+  const hour = getZonedParts(now, timezone).hour
+  return hour >= 1 && hour < 5
+}
+
 // ─── Main function ────────────────────────────────────────────────────────────
 
 export async function getPlaybackState(stationId: string, nowMs?: number): Promise<PlaybackState> {
   const now = nowMs ?? Date.now()
   const nowDate = new Date(now)
+  const broadcastTimezone = await getBroadcastTimezone()
+  const preferInfomercialAds = isOvernightAdBreakWindow(nowDate, broadcastTimezone)
 
   const offline: PlaybackState = {
     stationId,
@@ -280,13 +290,23 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
   const adPoolRaw: AdPoolCandidate[] = adBreakDefs.length
     ? await prisma.youtubeContent.findMany({
         where: {
-          category: { in: ['ads', 'filler', 'music'] },
+          category: { in: preferInfomercialAds ? ['infomercial', 'ads', 'music'] : ['ads', 'filler', 'music'] },
           OR: [{ station: null }, { station: stationId }],
         },
-        select: { videoId: true, durationMins: true, station: true },
+        select: { videoId: true, durationMins: true, station: true, category: true },
       })
     : []
-  const adPool: AdPoolItem[] = preferStationScopedItems(adPoolRaw.filter(hasVideoId), stationId)
+  const adPool: AdPoolItem[] = preferStationScopedItems(
+    adPoolRaw
+      .filter(hasVideoId)
+      .sort((left, right) => {
+        if (!preferInfomercialAds) return 0
+        const leftRank = left.category === 'infomercial' ? 0 : 1
+        const rightRank = right.category === 'infomercial' ? 0 : 1
+        return leftRank - rightRank
+      }),
+    stationId,
+  )
 
   // For a given ad break, return the absolute time at which the last ad video
   // that covers its nominal window finishes (>= the nominal end time).
@@ -387,6 +407,7 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
   const youtubeSelection = await selectYoutubeSelection({
     stationId,
     now,
+    preferInfomercialAds,
     slotStartMs,
     contentEndMs,
     fillerDurationMins: activeSlot.fillerDuration ?? 0,
@@ -495,6 +516,7 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
 async function selectYoutubeSelection(params: {
   stationId: string
   now: number
+  preferInfomercialAds: boolean
   slotStartMs: number
   contentEndMs: number
   fillerDurationMins: number
@@ -507,7 +529,7 @@ async function selectYoutubeSelection(params: {
   openBumperId?: string | null
   closeBumperId?: string | null
 }): Promise<YoutubeSelection | null> {
-  const { stationId, now, slotStartMs, contentEndMs, fillerDurationMins, inAdBreak, currentAdBreak, inFiller, fallbackId, fillerCategories = ['ads', 'music', 'infomercial'], windowSegment = null, openBumperId = null, closeBumperId = null } = params
+  const { stationId, now, preferInfomercialAds, slotStartMs, contentEndMs, fillerDurationMins, inAdBreak, currentAdBreak, inFiller, fallbackId, fillerCategories = ['ads', 'music', 'infomercial'], windowSegment = null, openBumperId = null, closeBumperId = null } = params
   if (windowSegment) {
     const windowEndMs = windowSegment.startMs + windowSegment.durationMins * 60_000
     // Bumpers and window queues are strictly scoped to the window itself.
@@ -532,7 +554,7 @@ async function selectYoutubeSelection(params: {
 
   const seed = `${stationId}:${slotStartMs}:${segmentStartMs}:${inAdBreak ? 'ad' : (inFiller || windowSegment) ? 'filler' : 'youtube'}`
   const selectorCategories = inAdBreak
-    ? ['ads']
+    ? (preferInfomercialAds ? ['infomercial', 'ads'] : ['ads'])
     : fillerCategories
 
   const candidates = await prisma.youtubeContent.findMany({
@@ -556,7 +578,15 @@ async function selectYoutubeSelection(params: {
     ],
   })
 
-  const scopedCandidates = preferStationScopedItems(candidates.filter(hasVideoId), stationId)
+  const inBreakCandidates = inAdBreak && preferInfomercialAds
+    ? (() => {
+        const infomercialCandidates = candidates.filter((candidate) => candidate.category === 'infomercial')
+        if (infomercialCandidates.length) return infomercialCandidates
+        return candidates.filter((candidate) => candidate.category === 'ads')
+      })()
+    : candidates
+
+  const scopedCandidates = preferStationScopedItems(inBreakCandidates.filter(hasVideoId), stationId)
   const seeded = seededShuffle(scopedCandidates, seed)
 
   // Reserve time at both window edges for opening/closing idents. The playback
