@@ -1036,6 +1036,15 @@ function alignEndTime(date: Date): Date {
   return addMinutes(date, 60 - mins)
 }
 
+function resolveWindowAlignedEnd(slotEnd: Date, windowEnd: Date): { effectiveEnd: Date; fillerMins: number } {
+  const aligned = alignEndTime(slotEnd)
+  const effectiveEnd = aligned.getTime() > windowEnd.getTime() ? windowEnd : aligned
+  return {
+    effectiveEnd,
+    fillerMins: Math.max(0, differenceInMinutes(effectiveEnd, slotEnd)),
+  }
+}
+
 // ─── Core scheduler ──────────────────────────────────────────────────────────
 
 /**
@@ -1644,8 +1653,7 @@ export async function runScheduler(
                   )
                   const rescueAdMins   = rescueAdBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
                   const rescueSlotEnd  = addMinutes(slotStart, rescueMovie.durationMins + rescueAdMins)
-                  const rescueAligned  = alignEndTime(rescueSlotEnd)
-                  const rescueFillerMins = differenceInMinutes(rescueAligned, rescueSlotEnd)
+                  const { effectiveEnd: rescueAligned, fillerMins: rescueFillerMins } = resolveWindowAlignedEnd(rescueSlotEnd, blockEnd)
 
                   const mediaItem = await upsertMediaItem(rescueMovie)
                   const slot = await prisma.slot.create({
@@ -1851,8 +1859,7 @@ export async function runScheduler(
                         if (dayUsedMediaKeys.has(episode.ratingKey) || episode.durationMins + adMins > remainWin + MAX_CONTENT_OVERRUN_MINS) break
 
                         const slotEnd    = addMinutes(slotStart, episode.durationMins + adMins)
-                        const alignedEnd = alignEndTime(slotEnd)
-                        const fillerMins = differenceInMinutes(alignedEnd, slotEnd)
+                        const { effectiveEnd: alignedEnd, fillerMins } = resolveWindowAlignedEnd(slotEnd, new Date(windowEndMs))
 
                         const mediaItem = await upsertMediaItem(episode)
                         const slot = await prisma.slot.create({
@@ -1964,8 +1971,7 @@ export async function runScheduler(
                 )
                 const adMins   = adBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
                 const slotEnd  = addMinutes(slotStart, chosen.durationMins + adMins)
-                const alignedEnd = alignEndTime(slotEnd)
-                const fillerMins = differenceInMinutes(alignedEnd, slotEnd)
+                const { effectiveEnd: alignedEnd, fillerMins } = resolveWindowAlignedEnd(slotEnd, blockEnd)
 
                 const mediaItem = await upsertMediaItem(chosen)
 
@@ -2144,8 +2150,7 @@ export async function runScheduler(
                     const adBreaks   = episodeAdBreaks
                     const adMins     = adBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
                     const slotEnd    = addMinutes(slotStart, episode.durationMins + adMins)
-                    const alignedEnd = alignEndTime(slotEnd)
-                    const fillerMins = differenceInMinutes(alignedEnd, slotEnd)
+                    const { effectiveEnd: alignedEnd, fillerMins } = resolveWindowAlignedEnd(slotEnd, blockEnd)
 
                     const mediaItem = await upsertMediaItem(episode)
                     const slot = await prisma.slot.create({
@@ -2239,8 +2244,7 @@ export async function runScheduler(
                 )
                 const rescueAdMins   = rescueAdBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
                 const rescueSlotEnd  = addMinutes(slotStart, rescueMovie.durationMins + rescueAdMins)
-                const rescueAligned  = alignEndTime(rescueSlotEnd)
-                const rescueFillerMins = differenceInMinutes(rescueAligned, rescueSlotEnd)
+                const { effectiveEnd: rescueAligned, fillerMins: rescueFillerMins } = resolveWindowAlignedEnd(rescueSlotEnd, blockEnd)
 
                 const mediaItem = await upsertMediaItem(rescueMovie)
                 const slot = await prisma.slot.create({

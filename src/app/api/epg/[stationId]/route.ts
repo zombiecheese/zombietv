@@ -81,7 +81,21 @@ export async function GET(
 
     // Keep any slot that overlaps the requested window.
     if (slotStartMs >= to.getTime() || slotEndMs <= from.getTime()) continue
-    if (!showInEpg) continue
+    if (!showInEpg) {
+      // Hidden auto-filler should visually extend the previous visible item so
+      // the guide does not display empty gaps between scheduled windows.
+      const prev = epgSlots[epgSlots.length - 1]
+      if (prev) {
+        const prevStartMs = new Date(prev.startTime).getTime()
+        const prevEndMs = new Date(prev.endTime).getTime()
+        const touchesPrev = slotStartMs <= prevEndMs + 1_000
+        if (touchesPrev && slotEndMs > prevEndMs) {
+          prev.endTime = new Date(slotEndMs).toISOString()
+          prev.durationMins = Math.max(0, Math.round((slotEndMs - prevStartMs) / 60_000))
+        }
+      }
+      continue
+    }
 
     const isLiveNewsSlot = String(meta.reason ?? '') === 'news_live_window'
     const liveTitle = `LIVE: ${stationId.toUpperCase()} News`
