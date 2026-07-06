@@ -9,12 +9,16 @@ import Link from 'next/link'
 
 import dynamic from 'next/dynamic'
 import { usePlayback }    from '@/hooks/usePlayback'
+import { useVHSSettings } from '@/hooks/useVHSSettings'
+import { playTuneBlip }   from '@/lib/tv-audio'
 
 // Heavy components loaded client-side only
 const VideoPlayer   = dynamic(() => import('@/components/VideoPlayer'),   { ssr: false })
 const EPG           = dynamic(() => import('@/components/EPG'),           { ssr: false })
 const NowBar        = dynamic(() => import('@/components/NowBar'),        { ssr: false })
 const ChannelChange = dynamic(() => import('@/components/ChannelChange'), { ssr: false })
+const TvOsd         = dynamic(() => import('@/components/TvOsd'),         { ssr: false })
+const CrtPower      = dynamic(() => import('@/components/CrtPower'),      { ssr: false })
 
 // ── Layout constants ──────────────────────────────────────────────────────────
 const EPG_HEIGHT_PX    = 440   // height of the EPG panel at the bottom (increased to show 8+ stations)
@@ -36,6 +40,7 @@ export default function Home() {
   const [mounted, setMounted] = useState(false)
   const [station, setStation]             = useState('zbc')
   const [stationOrder, setStationOrder]   = useState<string[]>(['stn', 'zbc', 'nnwk', 'seven', 'nine', 'ten'])
+  const [stationNames, setStationNames]   = useState<Record<string, string>>({})
   const [epgMinimized, setEpgMinimized]   = useState(false)
   const [isMobileViewport, setIsMobileViewport] = useState(false)
   const [pendingStation, setPending]      = useState<string | null>(null)
@@ -47,8 +52,45 @@ export default function Home() {
     isLoggedIn: boolean
   }>({ isLoggedIn: false })
 
+  // ── 1990s TV OSD state ─────────────────────────────────────────────
+  const [osdActive, setOsdActive]         = useState(true)   // channel digits + banner + NowBar
+  const [digitBuffer, setDigitBuffer]     = useState('')     // numeric channel entry
+  const [volume, setVolume]               = useState(100)
+  const [volumeVisible, setVolumeVisible] = useState(false)
+  const osdTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const volumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const digitTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const { settings: vhsSettings } = useVHSSettings()
+
   const { state, clockOffsetMs, isLoading } = usePlayback(station, session.isLoggedIn)
   const mobileEpgInitRef = useRef(false)
+
+  // Show the OSD (channel digits, banner, NowBar) for a few seconds.
+  const pokeOsd = useCallback((durationMs = 4_000) => {
+    setOsdActive(true)
+    if (osdTimerRef.current) clearTimeout(osdTimerRef.current)
+    osdTimerRef.current = setTimeout(() => setOsdActive(false), durationMs)
+  }, [])
+
+  // Restore persisted volume.
+  useEffect(() => {
+    try {
+      const stored = Number(window.localStorage.getItem('zombietv-volume'))
+      if (Number.isFinite(stored) && stored >= 0 && stored <= 100) setVolume(stored)
+    } catch { /* ignore */ }
+  }, [])
+
+  const adjustVolume = useCallback((delta: number) => {
+    setVolume((prev) => {
+      const next = Math.max(0, Math.min(100, prev + delta))
+      try { window.localStorage.setItem('zombietv-volume', String(next)) } catch { /* ignore */ }
+      return next
+    })
+    setVolumeVisible(true)
+    if (volumeTimerRef.current) clearTimeout(volumeTimerRef.current)
+    volumeTimerRef.current = setTimeout(() => setVolumeVisible(false), 2_000)
+  }, [])
 
   const completePlexSignInFromPin = useCallback(async (pinId: string): Promise<boolean> => {
     try {
@@ -109,12 +151,17 @@ export default function Home() {
     let alive = true
     fetch('/api/stations')
       .then((r) => (r.ok ? r.json() : []))
-      .then((rows: Array<{ id: string }>) => {
+      .then((rows: Array<{ id: string; name?: string }>) => {
         if (!alive || !Array.isArray(rows) || rows.length === 0) return
         const ordered = rows
           .map((row) => row.id)
           .filter((id): id is string => typeof id === 'string' && id.length > 0)
         if (ordered.length) setStationOrder(ordered)
+        const names: Record<string, string> = {}
+        for (const row of rows) {
+          if (typeof row.id === 'string') names[row.id] = typeof row.name === 'string' ? row.name : row.id.toUpperCase()
+        }
+        setStationNames(names)
       })
       .catch(() => {})
     return () => { alive = false }
@@ -215,20 +262,22 @@ export default function Home() {
     return () => { cancelled = true }
   }, [completePlexSignInFromPin])
 
-  // ── Channel switching: fire static burst, then switch ────────────────────
+  // ── Channel switching: analog tuning transition, then switch ────────────
   const handleSelectStation = useCallback((id: string) => {
     if (id === station || staticActive) return
+    if (vhsSettings.channelChangeSoundEnabled) playTuneBlip()
     setPending(id)
     setStaticActive(true)
-  }, [station, staticActive])
+  }, [station, staticActive, vhsSettings.channelChangeSoundEnabled])
 
   const handleStaticComplete = useCallback(() => {
     setStaticActive(false)
     if (pendingStation) {
       setStation(pendingStation)
       setPending(null)
+      pokeOsd()
     }
-  }, [pendingStation])
+  }, [pendingStation, pokeOsd])
 
   // ── Plex login ───────────────────────────────────────────────────────────
   const handleLoginClick = useCallback(async () => {
@@ -240,40 +289,91 @@ export default function Home() {
   }, [])
 
   const handleLogoutClick = useCallback(async () => {
-    try {
-      await fetch('/api/auth/logout', {
-        method: 'POST',
-        credentials: 'include',
-      })
-    } finally {
-      window.location.assign('/')
+    // CRT power-off animation, then sign out.
+    const doLogout = async () => {
+      try {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          credentials: 'include',
+        })
+      } finally {
+        window.location.assign('/')
+      }
     }
+
+    let done = false
+    const onDone = () => { if (!done) { done = true; doLogout() } }
+    window.addEventListener('zombietv-power-off-done', onDone, { once: true })
+    window.dispatchEvent(new CustomEvent('zombietv-power-off'))
+    // Safety net if the animation component is not mounted.
+    setTimeout(onDone, 900)
   }, [])
 
-  // ── Keyboard channel switching (ArrowUp / ArrowDown) ─────────────────────
+  // ── Keyboard: channel up/down, numeric entry, volume ───────────────────
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
-
       const target = event.target as HTMLElement | null
       const tag = target?.tagName?.toLowerCase() ?? ''
       if (tag === 'input' || tag === 'textarea' || tag === 'select' || target?.isContentEditable) {
         return
       }
 
-      if (!stationOrder.length) return
-      event.preventDefault()
+      // Channel up/down
+      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+        if (!stationOrder.length) return
+        event.preventDefault()
+        const currentIndex = stationOrder.indexOf(station)
+        const startIndex = currentIndex >= 0 ? currentIndex : 0
+        const delta = event.key === 'ArrowUp' ? -1 : 1
+        const nextIndex = (startIndex + delta + stationOrder.length) % stationOrder.length
+        handleSelectStation(stationOrder[nextIndex])
+        return
+      }
 
-      const currentIndex = stationOrder.indexOf(station)
-      const startIndex = currentIndex >= 0 ? currentIndex : 0
-      const delta = event.key === 'ArrowUp' ? -1 : 1
-      const nextIndex = (startIndex + delta + stationOrder.length) % stationOrder.length
-      handleSelectStation(stationOrder[nextIndex])
+      // Volume
+      if (event.key === '+' || event.key === '=' ) {
+        event.preventDefault()
+        adjustVolume(5)
+        return
+      }
+      if (event.key === '-' || event.key === '_') {
+        event.preventDefault()
+        adjustVolume(-5)
+        return
+      }
+
+      // Numeric channel entry (remote-control style, two digits max)
+      if (/^[0-9]$/.test(event.key)) {
+        event.preventDefault()
+        setDigitBuffer((prev) => {
+          const next = (prev + event.key).slice(0, 2)
+          if (digitTimerRef.current) clearTimeout(digitTimerRef.current)
+
+          const commit = (buffer: string) => {
+            setDigitBuffer('')
+            const channel = Number(buffer)
+            if (channel >= 1 && channel <= stationOrder.length) {
+              handleSelectStation(stationOrder[channel - 1])
+            }
+          }
+
+          const maxDigits = String(stationOrder.length).length
+          if (next.length >= maxDigits || Number(`${next}0`) > stationOrder.length * 10) {
+            // Enough digits to be unambiguous — commit shortly for that
+            // "remote acknowledges" feel.
+            digitTimerRef.current = setTimeout(() => commit(next), 350)
+          } else {
+            digitTimerRef.current = setTimeout(() => commit(next), 1_400)
+          }
+          return next
+        })
+        return
+      }
     }
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [stationOrder, station, handleSelectStation])
+  }, [stationOrder, station, handleSelectStation, adjustVolume])
 
   // ── Render ───────────────────────────────────────────────────────────────
   const epgHeight: number | string = epgMinimized
@@ -393,12 +493,39 @@ export default function Home() {
             overflow: 'hidden',
             position: 'relative',
             minHeight: 0,
+            display:  'flex',
+            alignItems: 'stretch',
+            justifyContent: 'center',
+            backgroundColor: '#000',
           }}>
-            <VideoPlayer
-              state={state}
-              clockOffsetMs={clockOffsetMs}
-              isLoading={isLoading}
-            />
+            {vhsSettings.fourByThreeEnabled && !isMobileViewport ? (
+              /* 4:3 tube mode: pillarboxed picture inside a CRT bezel */
+              <div style={{
+                position: 'relative',
+                height: '100%',
+                aspectRatio: '4 / 3',
+                maxWidth: '100%',
+                borderRadius: '2.2% / 3%',
+                overflow: 'hidden',
+                boxShadow: 'inset 0 0 60px rgba(0,0,0,0.55), 0 0 0 2px #181818, 0 0 0 14px #0c0c0c, 0 0 40px rgba(0,0,0,0.9)',
+              }}>
+                <VideoPlayer
+                  state={state}
+                  clockOffsetMs={clockOffsetMs}
+                  isLoading={isLoading}
+                  volume={volume}
+                />
+              </div>
+            ) : (
+              <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+                <VideoPlayer
+                  state={state}
+                  clockOffsetMs={clockOffsetMs}
+                  isLoading={isLoading}
+                  volume={volume}
+                />
+              </div>
+            )}
           </div>
 
           {/* ── EPG panel overlay (on top of video) ── */}
@@ -421,23 +548,40 @@ export default function Home() {
             />
           </div>
 
-          {/* ── Now Bar (only when EPG is expanded, buttons are in compact EPG bar when minimized) ── */}
-          {!epgMinimized && !isMobileViewport && (
+          {/* ── Now Bar — OSD-style auto-hide (always visible while EPG is expanded) ── */}
+          {!isMobileViewport && (
             <NowBar
               state={state}
               clockOffsetMs={clockOffsetMs}
               isLoggedIn={session.isLoggedIn}
               onLoginClick={handleLoginClick}
               onLogoutClick={handleLogoutClick}
+              visible={!epgMinimized || osdActive}
             />
           )}
+
+          {/* ── 1990s TV on-screen display ── */}
+          <TvOsd
+            state={state}
+            channelNumber={Math.max(1, stationOrder.indexOf(station) + 1)}
+            stationLabel={stationNames[station] ?? station.toUpperCase()}
+            digitBuffer={digitBuffer}
+            osdVisible={osdActive && epgMinimized}
+            volume={volume}
+            volumeVisible={volumeVisible}
+            clockOffsetMs={clockOffsetMs}
+          />
+
+          {/* ── CRT power-on/off ── */}
+          <CrtPower />
         </>
       )}
 
-      {/* ── Channel change static burst ── */}
+      {/* ── Channel change tuning transition ── */}
       <ChannelChange
         active={staticActive}
         onComplete={handleStaticComplete}
+        mode="roll"
       />
 
     </div>

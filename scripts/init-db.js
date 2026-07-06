@@ -117,6 +117,32 @@ async function main() {
       },
       holidayOverrides: { halloween: { replace_schedule: true, ad_free: false } },
       fillerPools: { ads: null, music: null, bumpers: null }
+    },
+    {
+      id: 'wthr',
+      name: 'Weather Centre',
+      branding: { logo: '/assets/wthr-logo.png', ident_pack: 'wthr-idents', colour_theme: '#1b2168' },
+      rules: {
+        // Continuous 90s-style weather channel (Open-Meteo, no API key).
+        // Location is configurable in Station Rules → Channel Type.
+        channel_type: 'weather',
+        weather: { latitude: -33.87, longitude: 151.21, locationName: 'Sydney' }
+      },
+      holidayOverrides: {},
+      fillerPools: { ads: null, music: null, bumpers: null }
+    },
+    {
+      id: 'guide',
+      name: 'Programme Guide',
+      branding: { logo: '/assets/guide-logo.png', ident_pack: 'guide-idents', colour_theme: '#f2a33c' },
+      rules: {
+        // Prevue-style scrolling listings channel. Optional promo/music video
+        // IDs are configurable in Station Rules → Channel Type.
+        channel_type: 'guide',
+        guide: {}
+      },
+      holidayOverrides: {},
+      fillerPools: { ads: null, music: null, bumpers: null }
     }
   ]
 

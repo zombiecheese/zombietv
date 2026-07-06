@@ -28,6 +28,8 @@ export default function VHSOverlay({ settings }: Props) {
     horizontalJitter,
     syncWobbleJumpsEnabled,
     overscanSoftnessEnabled,
+    compositeArtifactsEnabled,
+    phosphorBloomEnabled,
   } = settings
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -150,6 +152,16 @@ export default function VHSOverlay({ settings }: Props) {
           0% { transform: translateY(-130%); }
           100% { transform: translateY(130%); }
         }
+
+        @keyframes vhs-dot-crawl {
+          0% { background-position: 0 0, 1px 0; }
+          100% { background-position: 0 -8px, 1px -8px; }
+        }
+
+        @keyframes vhs-chroma-stripe {
+          0% { background-position: 0 0; }
+          100% { background-position: 4px 0; }
+        }
       `}</style>
 
       {scanlines > 0 && (
@@ -193,6 +205,57 @@ export default function VHSOverlay({ settings }: Props) {
             background: `radial-gradient(ellipse at center, transparent ${Math.round((1 - vignette) * 60)}%, rgba(0,0,0,${(vignette * 0.85).toFixed(2)}) 100%)`,
           }}
         />
+      )}
+
+      {/* Composite video artifacts: NTSC/PAL dot crawl + chroma stripe shimmer */}
+      {compositeArtifactsEnabled && (
+        <>
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              backgroundImage: [
+                'repeating-conic-gradient(rgba(255,255,255,0.5) 0% 25%, rgba(0,0,0,0.5) 25% 50%)',
+              ].join(','),
+              backgroundSize: '2px 2px',
+              opacity: 0.028,
+              mixBlendMode: 'overlay',
+              animation: 'vhs-dot-crawl 0.9s steps(4) infinite',
+            }}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              backgroundImage: 'repeating-linear-gradient(to right, rgba(255,60,60,0.5) 0 1px, transparent 1px 3px, rgba(60,220,255,0.35) 3px 4px, transparent 4px 6px)',
+              opacity: 0.025,
+              mixBlendMode: 'screen',
+              animation: 'vhs-chroma-stripe 0.6s steps(3) infinite',
+            }}
+          />
+        </>
+      )}
+
+      {/* Phosphor / glass sheen: faint bloom that reads as a lit CRT face */}
+      {phosphorBloomEnabled && (
+        <>
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              background: 'radial-gradient(ellipse 90% 70% at 50% 38%, rgba(210,225,255,0.05) 0%, transparent 65%)',
+              mixBlendMode: 'screen',
+            }}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              background: 'linear-gradient(115deg, transparent 42%, rgba(255,255,255,0.028) 47%, rgba(255,255,255,0.045) 50%, rgba(255,255,255,0.028) 53%, transparent 58%)',
+              mixBlendMode: 'screen',
+            }}
+          />
+        </>
       )}
 
       {overscanSoftnessEnabled && (

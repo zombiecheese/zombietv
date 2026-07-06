@@ -9,6 +9,8 @@
     "dev": "next dev",
     "build": "next build --webpack",
     "start": "next start",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "db:init": "node scripts/init-db.js",
     "db:migrate": "prisma migrate dev",
     "admin": "next dev -p 3001"
@@ -28,6 +30,7 @@
     "@types/node": "^20.19.43",
     "@types/react": "^18.2.0",
     "prisma": "^5.7.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "vitest": "^4.1.10"
   }
 }

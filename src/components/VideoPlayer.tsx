@@ -16,19 +16,30 @@
 // user's Plex credentials server-side to fetch metadata and media bytes.
 
 import { useEffect, useRef, useState, useCallback } from 'react'
+import dynamic from 'next/dynamic'
 import type { PlaybackState } from '@/lib/playback'
 import type { PlexTrack, TracksResponse } from '@/app/api/plex-stream/tracks/route'
 import Hls from 'hls.js'
 import RatingBug from './RatingBug'
-import { DEFAULT_VHS_SETTINGS } from '@/lib/vhs-defaults'
+import UpNextCard from './UpNextCard'
+import YouTubeLayer from './YouTubeLayer'
+import { TestCardScreen, BlueScreen, StaticScreen } from './OffAirScreens'
+import { attachTvSpeaker, setTvSpeakerEnabled } from '@/lib/tv-audio'
+import { OSD_FONT_FAMILY } from '@/lib/osd-style'
+import { DEFAULT_VHS_SETTINGS, type OffAirStyle } from '@/lib/vhs-defaults'
+
+// Non-standard channel-type surfaces are loaded on demand.
+const WeatherChannel = dynamic(() => import('./WeatherChannel'), { ssr: false })
+const GuideChannel   = dynamic(() => import('./GuideChannel'),   { ssr: false })
 
 interface Props {
   state:          PlaybackState | null
   clockOffsetMs:  number
   isLoading:      boolean
+  volume?:        number    // 0–100 (TV volume; applied to plex/stream/youtube)
 }
 
-type ActiveLayer = 'plex' | 'youtube' | 'offline'
+type ActiveLayer = 'plex' | 'youtube' | 'offline' | 'weather' | 'guide' | 'web' | 'stream'
 
 function formatDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return '0:00'
@@ -80,7 +91,9 @@ function getReadableTrackLabel(track: PlexTrack, kind: 'audio' | 'subtitle'): st
 
 // Build a YouTube embed URL.
 // We prefer a plain video queue when playback selected multiple items for a slot.
-function youtubeEmbedUrl(videoIds: string[], offsetSecs = 0, withSound = false): string {
+// Always muted — audio is upgraded in place by YouTubeLayer via the IFrame API
+// once the viewer has interacted, so the stream never reloads to gain sound.
+function youtubeEmbedUrl(videoIds: string[], offsetSecs = 0): string {
   const [primaryId] = videoIds
   const isPlaylist = videoIds.length === 1 && (
     primaryId.startsWith('PL')
@@ -90,8 +103,7 @@ function youtubeEmbedUrl(videoIds: string[], offsetSecs = 0, withSound = false):
 
   const params = new URLSearchParams({
     autoplay:     '1',
-    // Start muted for browser autoplay compliance unless we already have user interaction.
-    mute:         withSound ? '0' : '1',
+    mute:         '1',
     playsinline:  '1',
     controls:     '0',
     modestbranding: '1',
@@ -124,12 +136,14 @@ export default function VideoPlayer({
   state,
   clockOffsetMs,
   isLoading,
+  volume = 100,
 }: Props) {
   const [layer, setLayer]               = useState<ActiveLayer>('offline')
   const [offlineGraphic, setOfflineGraphic] = useState('')
   const [plexHlsUrl, setPlexHlsUrl]     = useState('')
   const [plexOffsetMs, setPlexOffsetMs] = useState(0)
   const [youtubeSrc, setYoutubeSrc]     = useState('')
+  const [streamUrl, setStreamUrl]       = useState('')
   const [hasUserInteraction, setHasUserInteraction] = useState(false)
   const [showRating, setShowRating]     = useState(false)
   const [currentRating, setRating]      = useState('PG')
@@ -137,6 +151,10 @@ export default function VideoPlayer({
   const [debugAllowed, setDebugAllowed] = useState(DEFAULT_VHS_SETTINGS.debugOverlayEnabled)
   const [debugVisible, setDebugVisible] = useState(false)
   const [debugNowMs, setDebugNowMs]     = useState(Date.now())
+  const [offAirStyle, setOffAirStyle]   = useState<OffAirStyle>(DEFAULT_VHS_SETTINGS.offAirStyle)
+  const [tvSpeakerOn, setTvSpeakerOn]   = useState(DEFAULT_VHS_SETTINGS.tvSpeakerAudioEnabled)
+  const [stationMeta, setStationMeta]   = useState<Record<string, { name: string; logo: string }>>({})
+  const [dogLogoFailed, setDogLogoFailed] = useState(false)
   // Track selection
   const [audioTracks, setAudioTracks]       = useState<PlexTrack[]>([])
   const [subtitleTracks, setSubtitleTracks] = useState<PlexTrack[]>([])
@@ -156,6 +174,8 @@ export default function VideoPlayer({
   const timelineAuthFailedRef            = useRef(false)
   const videoRef                        = useRef<HTMLVideoElement | null>(null)
   const hlsRef                          = useRef<Hls | null>(null)
+  const streamVideoRef                  = useRef<HTMLVideoElement | null>(null)
+  const streamHlsRef                    = useRef<Hls | null>(null)
   const clientSessionIdRef              = useRef(`zombietv-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`)
   const isPageVisibleRef                = useRef(true)
   // Refs so applyState never needs to depend on derived state, avoiding reload loops
@@ -264,6 +284,27 @@ export default function VideoPlayer({
       return
     }
 
+    // Non-standard channel types render dedicated surfaces.
+    if (s.contentSource === 'weather' || s.contentSource === 'guide' || s.contentSource === 'web') {
+      setShowRating(false)
+      setYoutubeSrc('')
+      youtubeSrcRef.current = ''
+      setPlexHlsUrl('')
+      setStreamUrl('')
+      setLayer(s.contentSource)
+      return
+    }
+
+    if (s.contentSource === 'stream' && s.contentId) {
+      setShowRating(false)
+      setYoutubeSrc('')
+      youtubeSrcRef.current = ''
+      setPlexHlsUrl('')
+      if (playbackSegmentChanged || !streamUrl) setStreamUrl(s.contentId)
+      setLayer('stream')
+      return
+    }
+
     if (!isPageVisibleRef.current) {
       if (s.contentSource !== 'plex') {
         setYoutubeSrc('')
@@ -311,16 +352,9 @@ export default function VideoPlayer({
 
     if (ytQueue.length) {
       const desiredStartSecs = Math.floor(offsetMs / 1000)
-      // Read current mute state from ref — never causes a dep-loop
-      const currentMute = (() => {
-        if (!youtubeSrcRef.current) return '1'
-        try { return new URL(youtubeSrcRef.current).searchParams.get('mute') ?? '1' }
-        catch { return '1' }
-      })()
-      const shouldUpgradeAudio = hasUserInteractionRef.current && currentMute === '1'
 
-      if (playbackSegmentChanged || queueChanged || shouldUpgradeAudio) {
-        const newSrc = youtubeEmbedUrl(ytQueue, desiredStartSecs, hasUserInteractionRef.current)
+      if (playbackSegmentChanged || queueChanged) {
+        const newSrc = youtubeEmbedUrl(ytQueue, desiredStartSecs)
         youtubeSrcRef.current = newSrc
         setYoutubeSrc(newSrc)
       }
@@ -329,7 +363,7 @@ export default function VideoPlayer({
     }
 
     setLayer('offline')
-  }, [clockOffsetMs, buildPlexStreamUrl])
+  }, [clockOffsetMs, buildPlexStreamUrl, streamUrl])
 
   // Keep ref in sync with state so applyState can read it without being in deps
   useEffect(() => { hasUserInteractionRef.current = hasUserInteraction }, [hasUserInteraction])
@@ -350,6 +384,11 @@ export default function VideoPlayer({
         const enabled = Boolean(data?.debugOverlayEnabled)
         setDebugAllowed(enabled)
         if (!enabled) setDebugVisible(false)
+        // Era-authenticity flags ride along on the same poll.
+        if (data?.offAirStyle === 'testcard' || data?.offAirStyle === 'bluescreen' || data?.offAirStyle === 'static') {
+          setOffAirStyle(data.offAirStyle)
+        }
+        setTvSpeakerOn(Boolean(data?.tvSpeakerAudioEnabled))
       } catch {
         // Keep last known state on network failure.
       }
@@ -359,6 +398,39 @@ export default function VideoPlayer({
     const timer = setInterval(syncDebugFlag, 30_000)
     return () => clearInterval(timer)
   }, [])
+
+  // Station identity for the on-screen watermark (DOG).
+  useEffect(() => {
+    let alive = true
+    fetch('/api/stations')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: Array<{ id: string; name: string; branding?: { logo?: string } }>) => {
+        if (!alive || !Array.isArray(rows)) return
+        const mapped: Record<string, { name: string; logo: string }> = {}
+        for (const row of rows) {
+          mapped[row.id] = { name: row.name, logo: typeof row.branding?.logo === 'string' ? row.branding.logo : '' }
+        }
+        setStationMeta(mapped)
+      })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [])
+
+  // Apply TV volume to native video elements (YouTube gets it via the layer).
+  useEffect(() => {
+    const v = Math.max(0, Math.min(1, volume / 100))
+    if (videoRef.current) videoRef.current.volume = v
+    if (streamVideoRef.current) streamVideoRef.current.volume = v
+  }, [volume, layer, plexHlsUrl, streamUrl])
+
+  // TV speaker emulation: route native video audio through the mono
+  // band-passed chain when enabled (needs a user gesture for AudioContext).
+  useEffect(() => {
+    setTvSpeakerEnabled(tvSpeakerOn)
+    if (!tvSpeakerOn || !hasUserInteraction) return
+    const video = layer === 'plex' ? videoRef.current : layer === 'stream' ? streamVideoRef.current : null
+    if (video) attachTvSpeaker(video)
+  }, [tvSpeakerOn, hasUserInteraction, layer, plexHlsUrl, streamUrl])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -447,7 +519,6 @@ export default function VideoPlayer({
 
     const video = videoRef.current
     if (!video) return
-
     const isHlsManifest = plexHlsUrl.includes('format=hls')
 
     if (hlsRef.current) {
@@ -497,6 +568,42 @@ export default function VideoPlayer({
       }
     }
   }, [layer, plexHlsUrl])
+
+  // Direct stream channels (HLS/IPTV) play through their own video element.
+  useEffect(() => {
+    if (layer !== 'stream' || !streamUrl) return
+    const video = streamVideoRef.current
+    if (!video) return
+
+    if (streamHlsRef.current) {
+      streamHlsRef.current.destroy()
+      streamHlsRef.current = null
+    }
+
+    const looksLikeHls = /\.m3u8($|\?)/i.test(streamUrl)
+    if (looksLikeHls && Hls.isSupported()) {
+      const hls = new Hls({ enableWorker: true })
+      hls.loadSource(streamUrl)
+      hls.attachMedia(video)
+      hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => {}) })
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (!data?.fatal) return
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad()
+        else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError()
+      })
+      streamHlsRef.current = hls
+    } else {
+      video.src = streamUrl
+      video.play().catch(() => {})
+    }
+
+    return () => {
+      if (streamHlsRef.current) {
+        streamHlsRef.current.destroy()
+        streamHlsRef.current = null
+      }
+    }
+  }, [layer, streamUrl])
 
   useEffect(() => {
     if (!state || layer !== 'plex' || state.contentSource !== 'plex' || !state.contentId) return
@@ -603,11 +710,18 @@ export default function VideoPlayer({
   // ── Render ────────────────────────────────────────────────────────────────
 
   if (isLoading) {
-    return <OfflineScreen message="TUNING..." />
+    return <OfflineScreen message="TUNING..." style="bluescreen" ident="" />
   }
 
   if (layer === 'offline') {
-    return <OfflineScreen message="OFF AIR" graphicUrl={offlineGraphic} />
+    return (
+      <OfflineScreen
+        message="OFF AIR"
+        graphicUrl={offlineGraphic}
+        style={offAirStyle}
+        ident={state?.stationId ? state.stationId.toUpperCase() : 'ZOMBIE TV'}
+      />
+    )
   }
 
   const correctedNowMs = debugNowMs + clockOffsetMs
@@ -640,6 +754,48 @@ export default function VideoPlayer({
       }}
       role="none"
     >
+
+      {/* Non-standard channel-type surfaces */}
+      {layer === 'weather' && (
+        <WeatherChannel config={(state?.channelConfig as any) ?? null} />
+      )}
+      {layer === 'guide' && (
+        <GuideChannel config={(state?.channelConfig as any) ?? null} />
+      )}
+      {layer === 'web' && typeof state?.channelConfig?.url === 'string' && (
+        <iframe
+          key={String(state.channelConfig.url)}
+          src={String(state.channelConfig.url)}
+          title="web-channel"
+          sandbox="allow-scripts allow-same-origin"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            width: '100%',
+            height: '100%',
+            border: 'none',
+            background: '#000',
+            pointerEvents: 'none',
+          }}
+        />
+      )}
+      {layer === 'stream' && (
+        <video
+          ref={streamVideoRef}
+          autoPlay
+          muted={!hasUserInteraction}
+          playsInline
+          onContextMenu={(e) => e.preventDefault()}
+          style={{
+            position:   'absolute',
+            inset:      0,
+            width:      '100%',
+            height:     '100%',
+            objectFit:  'contain',
+            backgroundColor: '#000',
+          }}
+        />
+      )}
 
       {/* Plex video player — HTML5 video tag with HLS stream */}
       {plexHlsUrl && layer === 'plex' && (
@@ -709,20 +865,7 @@ export default function VideoPlayer({
 
       {/* YouTube layer (ads, filler, music) — only mounted when active to stop background audio */}
       {layer === 'youtube' && youtubeSrc && (
-        <iframe
-          key={youtubeSrc}
-          src={youtubeSrc}
-          allow="autoplay; fullscreen; encrypted-media"
-          allowFullScreen
-          style={{
-            position:   'absolute',
-            inset:      0,
-            width:      '100%',
-            height:     '100%',
-            border:     'none',
-            pointerEvents: 'none',
-          }}
-        />
+        <YouTubeLayer src={youtubeSrc} soundOn={hasUserInteraction} volume={volume} />
       )}
 
       {/* Click shield: never let user clicks reach YouTube iframe controls/overlay. */}
@@ -750,6 +893,45 @@ export default function VideoPlayer({
         visible={showRating}
         position="top-right"
       />
+
+      {/* Station watermark (DOG) — translucent ident during programmes only */}
+      {layer === 'plex' && state && !state.inAdBreak && !state.inFiller && (
+        <div style={{
+          position: 'absolute',
+          bottom: '8%',
+          right: '6%',
+          zIndex: 8,
+          pointerEvents: 'none',
+          opacity: 0.3,
+          userSelect: 'none',
+        }}>
+          {stationMeta[state.stationId]?.logo && !dogLogoFailed ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={stationMeta[state.stationId].logo}
+              alt=""
+              onError={() => setDogLogoFailed(true)}
+              style={{ height: 'clamp(28px, 5vmin, 52px)', filter: 'grayscale(0.3) brightness(1.4)' }}
+            />
+          ) : (
+            <span style={{
+              fontFamily: OSD_FONT_FAMILY,
+              fontWeight: 700,
+              fontSize: 'clamp(1rem, 2.8vmin, 1.8rem)',
+              letterSpacing: '0.15em',
+              color: '#fff',
+              textShadow: '0 0 2px rgba(0,0,0,0.8)',
+            }}>
+              {state.stationId.toUpperCase()}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Dynamic "Up Next" card during station breaks and ad pods */}
+      {state?.upNext && (state.inFiller || state.inAdBreak) && (
+        <UpNextCard upNext={state.upNext} clockOffsetMs={clockOffsetMs} />
+      )}
 
       {/* Ad break banner */}
       {state?.inAdBreak && (
@@ -960,7 +1142,12 @@ export default function VideoPlayer({
 
 // ── Offline / test-card screen ────────────────────────────────────────────────
 
-function OfflineScreen({ message, graphicUrl }: { message: string; graphicUrl?: string }) {
+function OfflineScreen({ message, graphicUrl, style = 'testcard', ident = '' }: {
+  message: string
+  graphicUrl?: string
+  style?: OffAirStyle
+  ident?: string
+}) {
   if (graphicUrl) {
     return (
       <div style={{
@@ -976,40 +1163,16 @@ function OfflineScreen({ message, graphicUrl }: { message: string; graphicUrl?: 
       </div>
     )
   }
+
   return (
-    <div style={{
-      width:           '100%',
-      height:          '100%',
-      backgroundColor: '#000',
-      display:         'flex',
-      flexDirection:   'column',
-      alignItems:      'center',
-      justifyContent:  'center',
-      gap:             '20px',
-    }}>
-      {/* Test card colour bars */}
-      <div style={{ display: 'flex', width: '60%', height: '8px' }}>
-        {['#b8b8b8', '#ff0', '#0ff', '#0f0', '#f0f', '#f00', '#00f'].map((c) => (
-          <div key={c} style={{ flex: 1, backgroundColor: c }} />
-        ))}
-      </div>
-
-      <div style={{
-        color:       '#d2d2d2',
-        fontFamily:  'monospace',
-        fontSize:    '1.2rem',
-        letterSpacing: '0.3em',
-        opacity:     0.6,
-      }}>
-        {message}
-      </div>
-
-      {/* Test card colour bars (bottom) */}
-      <div style={{ display: 'flex', width: '60%', height: '8px' }}>
-        {['#00f', '#f00', '#f0f', '#0f0', '#0ff', '#ff0', '#b8b8b8'].map((c) => (
-          <div key={c} style={{ flex: 1, backgroundColor: c }} />
-        ))}
-      </div>
+    <div style={{ position: 'relative', width: '100%', height: '100%', backgroundColor: '#000', overflow: 'hidden' }}>
+      {style === 'static' ? (
+        <StaticScreen />
+      ) : style === 'bluescreen' ? (
+        <BlueScreen message={message} />
+      ) : (
+        <TestCardScreen ident={ident || message} />
+      )}
     </div>
   )
 }

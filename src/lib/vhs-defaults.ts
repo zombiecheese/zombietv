@@ -1,6 +1,8 @@
 // Shared VHS settings defaults — no 'use client' directive.
 // Imported by both the server layout and the client useVHSSettings hook.
 
+export type OffAirStyle = 'testcard' | 'bluescreen' | 'static'
+
 export interface VHSSettings {
   scanlines:           number
   noise:               number
@@ -14,6 +16,13 @@ export interface VHSSettings {
   syncWobbleJumpsEnabled: boolean
   overscanSoftnessEnabled: boolean
   debugOverlayEnabled: boolean
+  // Era-authenticity extras
+  fourByThreeEnabled:       boolean   // pillarbox the picture into a 4:3 tube
+  compositeArtifactsEnabled: boolean  // dot crawl + chroma bleed
+  phosphorBloomEnabled:     boolean   // bright-area glow
+  tvSpeakerAudioEnabled:    boolean   // mono band-passed "3-inch speaker" audio
+  channelChangeSoundEnabled: boolean  // click + static blip when tuning
+  offAirStyle:              OffAirStyle // dead-channel look
 }
 
 export const DEFAULT_VHS_SETTINGS: VHSSettings = {
@@ -29,4 +38,10 @@ export const DEFAULT_VHS_SETTINGS: VHSSettings = {
   syncWobbleJumpsEnabled: true,
   overscanSoftnessEnabled: true,
   debugOverlayEnabled: false,
+  fourByThreeEnabled:       false,
+  compositeArtifactsEnabled: true,
+  phosphorBloomEnabled:     true,
+  tvSpeakerAudioEnabled:    false,
+  channelChangeSoundEnabled: true,
+  offAirStyle:              'testcard',
 }

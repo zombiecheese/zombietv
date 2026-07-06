@@ -17,6 +17,13 @@ import { syncPlexCatalog, shouldSyncCatalog, getCatalogAutoSyncMaxAgeHours, getC
 import { getBroadcastTimezone, getSchedulerYearRange } from './app-settings'
 import { toJson, fromJsonObject }        from './json'
 import { parseClockToMinutes, getZonedParts, zonedTimeToUtc } from './time'
+import { dateHintMatches, seasonalAffinityMultiplier, anniversaryYears } from './date-hints'
+import { buildAdBreaks, buildContentAdBreaks, effectiveRuntimeMins, type BreakStrategy } from './scheduler/ad-breaks'
+import { resolveWindowAlignedEnd, applySequenceRange } from './scheduler/alignment'
+import { ratingAllowed, stricterRating, classificationCeiling } from './scheduler/ratings'
+import { seedToUInt32, mulberry32, seededRandom01, weightedRandomWith } from './seeded-random'
+import { itemMatchTokens } from './plex-catalog'
+import { decryptSecret } from './secret-box'
 import { differenceInMinutes, addMinutes } from 'date-fns'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -71,6 +78,13 @@ interface EffectiveStationBlock {
   closeVideoId?: string
   newsLiveVideoId?: string
   strip?: boolean
+  // Where commercial breaks are placed for content in this window.
+  breakStrategy?: BreakStrategy
+  // Opt-in slot padding: content end is padded with filler to the next
+  // increment boundary (0 = continuous back-to-back, no padding).
+  scheduleIncrement?: number
+  // Probabilistic marathon takeover of this window (FieldStation42-style).
+  marathon?: { chance: number; count: number; hint?: string }
 }
 
 interface FillerWindow {
@@ -85,6 +99,10 @@ interface FillerWindow {
   plexShowTitle?: string
   fillMode?: 'fill' | 'single'   // fill the window with back-to-back episodes, or one episode then filler
   strip?: boolean                 // weeknight strip (daily Mon–Fri) vs weekly cadence
+  // Sequence range: restrict this window to a fraction of the series
+  // (0.0–1.0). The progression loops within the range when it runs out.
+  sequenceStart?: number
+  sequenceEnd?: number
 }
 
 interface ClosedownContent {
@@ -105,6 +123,35 @@ interface SlotConfigSpec {
   closeVideo?: { enabled?: boolean; videoId?: string }
   newsVideo?: { enabled?: boolean; videoId?: string }
   strip?: boolean
+  breakStrategy?: string          // 'standard' | 'center' | 'end'
+  scheduleIncrement?: number      // 0 = continuous, else 5/10/15/20/30/60
+  marathon?: { chance?: number; count?: number; hint?: string }
+  preset?: string                 // named bundle in rules.slot_presets (preset values win)
+}
+
+function normalizeBreakStrategy(value: unknown): BreakStrategy | undefined {
+  const s = String(value ?? '').trim().toLowerCase()
+  if (s === 'standard' || s === 'center' || s === 'end') return s
+  return undefined
+}
+
+function normalizeIncrement(value: unknown): number | undefined {
+  if (value == null || value === '') return undefined
+  const n = Number(value)
+  if (!Number.isFinite(n)) return undefined
+  if (n <= 0) return 0
+  const rounded = Math.round(n)
+  return [5, 10, 15, 20, 30, 60].includes(rounded) ? rounded : 30
+}
+
+function normalizeMarathon(value: unknown): { chance: number; count: number; hint?: string } | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const m = value as Record<string, unknown>
+  const chance = Number(m.chance)
+  const count = Number(m.count)
+  if (!Number.isFinite(chance) || chance <= 0 || !Number.isFinite(count) || count < 1) return undefined
+  const hint = String(m.hint ?? '').trim()
+  return { chance: Math.min(1, chance), count: Math.min(12, Math.round(count)), hint: hint || undefined }
 }
 
 
@@ -123,6 +170,8 @@ interface EpisodeSnapshotItem {
   episodeNumber: number
   showPlexKey?: string
   chapters?: Array<{ title: string; startOffsetMs: number }>
+  markers?: Array<{ type: string; startMs: number; endMs: number }>
+  airDate?: string   // YYYY-MM-DD original air date (enables broadcast-order + seasonal matching)
 }
 
 interface ResolvedHolidayConfig {
@@ -205,13 +254,35 @@ function parseEpisodeSnapshot(value: unknown): EpisodeSnapshotItem[] {
       const contentRating = String(entry.contentRating ?? 'PG').trim() || 'PG'
       const year = Number(entry.year ?? 0)
       const showTitle = entry.showTitle == null ? undefined : String(entry.showTitle)
+      const chapters = Array.isArray(entry.chapters)
+        ? (entry.chapters as Array<{ title: string; startOffsetMs: number }>)
+        : undefined
+      const markers = Array.isArray(entry.markers)
+        ? (entry.markers as Array<{ type: string; startMs: number; endMs: number }>)
+        : undefined
+      const airDate = typeof entry.airDate === 'string' && /^\d{4}-\d{2}-\d{2}/.test(entry.airDate)
+        ? entry.airDate.slice(0, 10)
+        : undefined
       if (!Number.isFinite(season) || !Number.isFinite(episode) || !ratingKey || !title || !Number.isFinite(durationMins) || !Number.isFinite(year)) continue
-      out.push({ season, episode, ratingKey, title, durationMins, contentRating, year, showTitle, type: 'episode', genres: [], seasonNumber: season, episodeNumber: episode })
+      out.push({ season, episode, ratingKey, title, durationMins, contentRating, year, showTitle, type: 'episode', genres: [], seasonNumber: season, episodeNumber: episode, chapters, markers, airDate })
     }
-    return out.sort((a, b) => a.season - b.season || a.episode - b.episode)
+    return sortEpisodeSnapshots(out)
   } catch {
     return []
   }
+}
+
+// Broadcast-order sort: when every episode carries an original air date, order
+// by air date (fixes production-order vs air-order shows); otherwise fall back
+// to season/episode numbering.
+function sortEpisodeSnapshots(list: EpisodeSnapshotItem[]): EpisodeSnapshotItem[] {
+  const allDated = list.length > 0 && list.every((e) => e.airDate)
+  if (allDated) {
+    return [...list].sort((a, b) =>
+      a.airDate!.localeCompare(b.airDate!) || a.season - b.season || a.episode - b.episode,
+    )
+  }
+  return [...list].sort((a, b) => a.season - b.season || a.episode - b.episode)
 }
 
 function snapshotEpisode(episode: PlexMediaItem): EpisodeSnapshotItem {
@@ -230,6 +301,8 @@ function snapshotEpisode(episode: PlexMediaItem): EpisodeSnapshotItem {
     episodeNumber: episode.episodeNumber ?? 0,
     showPlexKey: episode.showPlexKey,
     chapters: episode.chapters,
+    markers: episode.markers,
+    airDate: episode.originallyAvailableAt,
   }
 }
 
@@ -248,7 +321,7 @@ async function buildEpisodeSnapshotList(
     if (episode) snapshots.push(snapshotEpisode(episode))
   }
 
-  return snapshots.sort((a, b) => a.season - b.season || a.episode - b.episode)
+  return sortEpisodeSnapshots(snapshots)
 }
 
 function normalizeDayName(day: string): string {
@@ -319,32 +392,47 @@ function resolveStationTimeBlocks(
 ): EffectiveStationBlock[] {
   // Preferred: DB-backed weekday/weekend slot_config from the Station Rules editor.
   const slotConfig = (rawRules.slot_config ?? null) as { weekday?: SlotConfigSpec[]; weekend?: SlotConfigSpec[] } | null
+  const slotPresets = (rawRules.slot_presets && typeof rawRules.slot_presets === 'object')
+    ? (rawRules.slot_presets as Record<string, Partial<SlotConfigSpec>>)
+    : {}
   if (slotConfig && (Array.isArray(slotConfig.weekday) || Array.isArray(slotConfig.weekend))) {
     const isWeekend = [0, 6].includes(getBroadcastDayOfWeek(stationDate, timezone))
-    const list = isWeekend ? slotConfig.weekend : slotConfig.weekday
-    const slots = Array.isArray(list) ? list : []
-    const out: EffectiveStationBlock[] = []
-    for (const slot of slots) {
-      if (slot?.enabled === false) continue
-      const startMins = slot.start === 'first' ? 0 : (parseClockToMinutes(slot.start) ?? 0)
-      const endMins = slot.end === 'until_finished' ? 24 * 60 : (parseClockToMinutes(slot.end) ?? 24 * 60)
-      out.push({
-        name: slot.name,
-        day: '*',
-        startMins,
-        endMins,
-        contentType: slotContentType(slot),
-        allowGenres: Array.isArray(slot.allowGenres) && slot.allowGenres.length ? slot.allowGenres : undefined,
-        disabledLibraries: Array.isArray(slot.disabledLibraries) && slot.disabledLibraries.length
-          ? slot.disabledLibraries.map((key) => String(key).trim()).filter(Boolean)
-          : undefined,
-        fillerWindows: Array.isArray(slot.fillerWindows) ? slot.fillerWindows : undefined,
-        libraryWeights: slot.libraryWeights as Record<string, number> | undefined,
-        openVideoId: slot.openVideo?.enabled && slot.openVideo.videoId ? String(slot.openVideo.videoId).trim() : undefined,
-        closeVideoId: slot.closeVideo?.enabled && slot.closeVideo.videoId ? String(slot.closeVideo.videoId).trim() : undefined,
-        newsLiveVideoId: slot.newsVideo?.enabled && slot.newsVideo.videoId ? String(slot.newsVideo.videoId).trim() : undefined,
-        strip: Boolean(slot.strip),
-      })
+
+    // Date-specific overrides (FieldStation42 date_overrides): a matching
+    // calendar entry may swap the day template, replace specific windows, and
+    // re-point every programming window's genre filter for that date.
+    const parts = getZonedParts(stationDate, timezone)
+    const weekdayNum = getBroadcastDayOfWeek(stationDate, timezone)
+    const overrides = Array.isArray(rawRules.date_overrides)
+      ? (rawRules.date_overrides as Array<Record<string, unknown>>)
+      : []
+    const matched = overrides.find((entry) => {
+      const dates = String(entry?.dates ?? '').trim()
+      if (!dates) return false
+      return dateHintMatches(dates, { month: parts.month, day: parts.day, weekday: weekdayNum })
+    }) ?? null
+
+    let list = isWeekend ? slotConfig.weekend : slotConfig.weekday
+    const dayTypeOverride = String(matched?.dayType ?? '').trim().toLowerCase()
+    if (dayTypeOverride === 'weekday') list = slotConfig.weekday
+    else if (dayTypeOverride === 'weekend') list = slotConfig.weekend
+
+    let out = blocksFromSlotList(Array.isArray(list) ? list : [], slotPresets)
+
+    if (matched) {
+      const overrideSlots = Array.isArray(matched.slots) ? (matched.slots as SlotConfigSpec[]) : []
+      if (overrideSlots.length) {
+        const overrideBlocks = blocksFromSlotList(overrideSlots, slotPresets)
+        if (overrideBlocks.length) {
+          // Partial override: replacement windows win over any base window they
+          // overlap; untouched hours keep the normal day template.
+          out = [...overrideBlocks, ...out.filter((b) => !overrideBlocks.some((o) => stationWindowsOverlap(o, b)))]
+        }
+      }
+      const overrideGenres = asStringArray(matched.allowGenres)
+      if (overrideGenres.length) {
+        out = out.map((b) => ({ ...b, allowGenres: overrideGenres }))
+      }
     }
     if (out.length) return out
   }
@@ -377,6 +465,77 @@ function resolveStationTimeBlocks(
   }
 
   return out
+}
+
+// Applies a named slot preset (reusable configuration bundle) to a slot.
+// Preset values take precedence over the slot's own settings, except the
+// identity/time fields which always come from the slot itself.
+function applySlotPreset(
+  slot: SlotConfigSpec,
+  presets: Record<string, Partial<SlotConfigSpec>>,
+): SlotConfigSpec {
+  const presetName = String(slot?.preset ?? '').trim()
+  if (!presetName) return slot
+  const preset = presets[presetName]
+  if (!preset || typeof preset !== 'object') return slot
+  const { key: _key, name: _name, start: _start, end: _end, preset: _preset, enabled: _enabled, ...presetProps } = preset as Record<string, unknown>
+  return { ...slot, ...presetProps } as SlotConfigSpec
+}
+
+// Maps a slot_config list to effective station blocks (shared between the
+// normal day template and date-override slot lists).
+function blocksFromSlotList(
+  slots: SlotConfigSpec[],
+  slotPresets: Record<string, Partial<SlotConfigSpec>>,
+): EffectiveStationBlock[] {
+  const out: EffectiveStationBlock[] = []
+  for (const rawSlot of slots) {
+    if (!rawSlot) continue
+    const slot = applySlotPreset(rawSlot, slotPresets)
+    if (slot?.enabled === false) continue
+    const startMins = slot.start === 'first' ? 0 : (parseClockToMinutes(slot.start) ?? 0)
+    const endMins = slot.end === 'until_finished' ? 24 * 60 : (parseClockToMinutes(slot.end) ?? 24 * 60)
+    out.push({
+      name: slot.name,
+      day: '*',
+      startMins,
+      endMins,
+      contentType: slotContentType(slot),
+      allowGenres: Array.isArray(slot.allowGenres) && slot.allowGenres.length ? slot.allowGenres : undefined,
+      disabledLibraries: Array.isArray(slot.disabledLibraries) && slot.disabledLibraries.length
+        ? slot.disabledLibraries.map((key) => String(key).trim()).filter(Boolean)
+        : undefined,
+      fillerWindows: Array.isArray(slot.fillerWindows) ? slot.fillerWindows : undefined,
+      libraryWeights: slot.libraryWeights as Record<string, number> | undefined,
+      openVideoId: slot.openVideo?.enabled && slot.openVideo.videoId ? String(slot.openVideo.videoId).trim() : undefined,
+      closeVideoId: slot.closeVideo?.enabled && slot.closeVideo.videoId ? String(slot.closeVideo.videoId).trim() : undefined,
+      newsLiveVideoId: slot.newsVideo?.enabled && slot.newsVideo.videoId ? String(slot.newsVideo.videoId).trim() : undefined,
+      strip: Boolean(slot.strip),
+      breakStrategy: normalizeBreakStrategy(slot.breakStrategy),
+      scheduleIncrement: normalizeIncrement(slot.scheduleIncrement),
+      marathon: normalizeMarathon(slot.marathon),
+    })
+  }
+  return out
+}
+
+// True when two station windows overlap in wall-clock time (handles windows
+// that wrap past midnight by splitting them into linear spans).
+function stationWindowsOverlap(
+  a: { startMins: number; endMins: number },
+  b: { startMins: number; endMins: number },
+): boolean {
+  const spans = (blk: { startMins: number; endMins: number }): Array<[number, number]> => {
+    if (blk.startMins === blk.endMins) return [[0, 24 * 60]]
+    if (blk.startMins < blk.endMins) return [[blk.startMins, blk.endMins]]
+    return [[blk.startMins, 24 * 60], [0, blk.endMins]]
+  }
+  for (const [as, ae] of spans(a)) {
+    for (const [bs, be] of spans(b)) {
+      if (as < be && bs < ae) return true
+    }
+  }
+  return false
 }
 
 function slotContentType(slot: SlotConfigSpec): TimeBlock['contentType'] {
@@ -478,6 +637,7 @@ function resolveItemLibraryClass(
 // Apply a slot's per-slot allow-genres and library-weight exclusions to a candidate pool.
 // Empty lists mean "any" (no filter). Falls back to the original pool when the
 // filter would leave nothing, so a strict slot never starves the whole day.
+// Allow tokens match genres, Plex collections, labels, countries and studio.
 function filterCandidatesBySlot(
   items: PlexMediaItem[],
   block: EffectiveStationBlock | null,
@@ -507,8 +667,10 @@ function filterCandidatesBySlot(
   if (!allowGenres.length && !excludeZeroWeight) return afterLibraryExclusions
 
   const filtered = afterLibraryExclusions.filter((item) => {
-    const genres = (item.genres ?? []).map((g) => String(g).toLowerCase())
-    if (allowGenres.length && !allowGenres.some((g) => genres.includes(g))) return false
+    if (allowGenres.length) {
+      const tokens = itemMatchTokens(item)
+      if (!allowGenres.some((g) => tokens.has(g))) return false
+    }
     if (excludeZeroWeight) {
       const cls = resolveItemLibraryClass(item, classByKey, classBySectionKey)
       if (cls && Number((weights as Record<string, number>)[cls] ?? 1) <= 0) return false
@@ -532,6 +694,50 @@ function slotLibraryMultiplier(
   const w = Number(weights[cls] ?? 1)
   if (!Number.isFinite(w)) return 1
   return Math.max(0, w)
+}
+
+// ─── Plex-metadata quality multipliers ──────────────────────────────────
+// (seasonal/anniversary date math lives in ./date-hints)
+
+const DAY_MS = 24 * 60 * 60 * 1000
+const PREMIERE_WINDOW_DAYS = 30
+const RECENTLY_WATCHED_DAYS = 14
+
+// Never-scheduled items recently added to the Plex library are premieres.
+function isPremiereItem(item: PlexMediaItem): boolean {
+  if ((item.scheduledCount ?? 0) > 0) return false
+  if (!item.addedAtMs) return false
+  return Date.now() - item.addedAtMs <= PREMIERE_WINDOW_DAYS * DAY_MS
+}
+
+// Combined metadata multiplier applied on top of library weights:
+//  • seasonal/anniversary air-date affinity
+//  • audience rating vs day part (prime time favours well-rated content,
+//    late night tolerates the schlock)
+//  • premiere boost for fresh, never-aired library additions
+//  • penalty for content the household watched on Plex recently
+function contentQualityMultiplier(
+  item: PlexMediaItem,
+  ctx: { month: number; day: number; minutesOfDay: number },
+): number {
+  let w = seasonalAffinityMultiplier(item.originallyAvailableAt, ctx.month, ctx.day)
+
+  const score = item.audienceRating ?? item.criticRating
+  if (score != null && Number.isFinite(score)) {
+    const clamped = Math.max(0, Math.min(10, score))
+    const inPrime = ctx.minutesOfDay >= 17 * 60 && ctx.minutesOfDay < 23 * 60
+    const lateNight = ctx.minutesOfDay >= 23 * 60 || ctx.minutesOfDay < 5 * 60
+    if (inPrime) w *= 0.55 + (clamped / 10) * 0.9         // 0.55 … 1.45
+    else if (lateNight) w *= 1.15 - (clamped / 10) * 0.3  // 1.15 … 0.85
+  }
+
+  if (isPremiereItem(item)) w *= 1.8
+
+  if (item.lastViewedAtMs && Date.now() - item.lastViewedAtMs <= RECENTLY_WATCHED_DAYS * DAY_MS) {
+    w *= 0.3
+  }
+
+  return w
 }
 
 // Returns once-per-window bumper metadata (opening/closing short idents).
@@ -757,31 +963,6 @@ const SUNDAY_BLOCKS: TimeBlock[] = [
   { name: 'Late Night',          startHour: 23, startMin: 0,  endHour: 24, endMin: 0,  contentType: 'mixed',   ratingCeiling: 'MA15+' },
 ]
 
-const RATINGS_ORDER = ['G', 'PG', 'M', 'MA15+']
-
-// Australian free-to-air classification zones (the legal max rating by time of
-// day). Applied on top of each block's daypart ceiling so content never airs
-// out of zone regardless of how a station configures its slots.
-//   G      — any time
-//   PG     — any time
-//   M      — 20:30–05:00, plus 12:00–15:00 on school days (weekdays)
-//   MA15+  — 21:00–05:00
-function classificationCeiling(date: Date, minutesOfDay: number, timezone: string): 'G' | 'PG' | 'M' | 'MA15+' {
-  const isWeekday = ![0, 6].includes(getBroadcastDayOfWeek(date, timezone))
-  if (minutesOfDay >= 21 * 60 || minutesOfDay < 5 * 60) return 'MA15+'
-  if (minutesOfDay >= 20 * 60 + 30) return 'M'
-  if (isWeekday && minutesOfDay >= 12 * 60 && minutesOfDay < 15 * 60) return 'M'
-  return 'PG'
-}
-
-// Returns the stricter (lower) of two classification ratings.
-function stricterRating(a: string, b: string): 'G' | 'PG' | 'M' | 'MA15+' {
-  const ia = RATINGS_ORDER.indexOf(a)
-  const ib = RATINGS_ORDER.indexOf(b)
-  const idx = Math.min(ia === -1 ? RATINGS_ORDER.length - 1 : ia, ib === -1 ? RATINGS_ORDER.length - 1 : ib)
-  return RATINGS_ORDER[idx] as 'G' | 'PG' | 'M' | 'MA15+'
-}
-
 const SCHEDULER_RUN_STATUS_KEY = 'scheduler_run_status'
 const CATALOG_STATE_STATION_ID = '__global__'
 
@@ -872,16 +1053,8 @@ export function isSchedulerRunning(): boolean {
   return schedulerIsRunning
 }
 
-// ─── Rating ceiling filter ────────────────────────────────────────────────────
-
-function ratingAllowed(itemRating: string, ceiling: string): boolean {
-  const itemIdx    = RATINGS_ORDER.indexOf(itemRating)
-  const ceilingIdx = RATINGS_ORDER.indexOf(ceiling)
-  if (itemIdx === -1 || ceilingIdx === -1) return true // unknown rating — allow
-  return itemIdx <= ceilingIdx
-}
-
 // ─── Random selection utilities ──────────────────────────────────────────────
+// (ratingAllowed / classification zones live in ./scheduler/ratings)
 
 // Fisher-Yates shuffle: in-place randomization of array order.
 function shuffle<T>(arr: T[]): T[] {
@@ -892,17 +1065,8 @@ function shuffle<T>(arr: T[]): T[] {
   return arr
 }
 
-// ─── Weighted random selection ────────────────────────────────────────────────
-
 function weightedRandom<T>(items: Array<{ item: T; weight: number }>): T | null {
-  if (!items.length) return null
-  const total = items.reduce((s, i) => s + i.weight, 0)
-  let r = Math.random() * total
-  for (const { item, weight } of items) {
-    r -= weight
-    if (r <= 0) return item
-  }
-  return items[items.length - 1].item
+  return weightedRandomWith(items)
 }
 
 function incrementCount(map: Map<string, number>, key: string | null | undefined): void {
@@ -1045,38 +1209,9 @@ function showIsOwnedByStation(
   return !owner || owner === stationId
 }
 
-// ─── Ad break calculator ──────────────────────────────────────────────────────
-
-function buildAdBreaks(
-  contentDurationMins: number,
-  intervalMins: number,
-  enabled: boolean,
-): Array<{ offsetMins: number; durationMins: number }> {
-  if (!enabled || intervalMins <= 0) return []
-  const breaks: Array<{ offsetMins: number; durationMins: number }> = []
-  for (let offset = intervalMins; offset < contentDurationMins; offset += intervalMins) {
-    breaks.push({ offsetMins: offset, durationMins: 3 }) // 3-min ad pod
-  }
-  return breaks
-}
-
-// ─── Slot alignment: round UP to next hour or half-hour ──────────────────────
-
-function alignEndTime(date: Date): Date {
-  const mins = date.getMinutes()
-  if (mins === 0)  return date
-  if (mins <= 30)  return addMinutes(date, 30 - mins)
-  return addMinutes(date, 60 - mins)
-}
-
-function resolveWindowAlignedEnd(slotEnd: Date, windowEnd: Date): { effectiveEnd: Date; fillerMins: number } {
-  const aligned = alignEndTime(slotEnd)
-  const effectiveEnd = aligned.getTime() > windowEnd.getTime() ? windowEnd : aligned
-  return {
-    effectiveEnd,
-    fillerMins: Math.max(0, differenceInMinutes(effectiveEnd, slotEnd)),
-  }
-}
+// Ad break construction, slot alignment and sequence ranges are pure functions
+// extracted to ./scheduler/ad-breaks and ./scheduler/alignment so they can be
+// unit-tested in isolation.
 
 // ─── Core scheduler ──────────────────────────────────────────────────────────
 
@@ -1163,7 +1298,7 @@ export async function runScheduler(
     for (const adminUser of adminUsers) {
       const prefs = fromJsonObject<Record<string, string>>(adminUser.preferences)
       if (prefs?.plexToken && prefs?.plexServerUrl) {
-        plexToken = prefs.plexToken
+        plexToken = decryptSecret(prefs.plexToken)
         plexServerUrl = prefs.plexServerUrl
         break
       }
@@ -1357,7 +1492,27 @@ export async function runScheduler(
     for (const station of stations) {
       const blockedKeys = new Set(await getBlockedPlexKeys())
       const rawRules = fromJsonObject<Record<string, unknown>>(station.rules)
+
+      // Non-standard channel types (weather / guide / loop / stream / web)
+      // derive their playback state directly from rules — no schedule rows.
+      const channelType = String(rawRules.channel_type ?? 'standard').trim().toLowerCase()
+      if (channelType && channelType !== 'standard') {
+        console.log(`[Scheduler] Skipping ${station.id} — '${channelType}' channels do not use schedules.`)
+        await persistStatus({
+          stationsProcessed: runStatus.stationsProcessed + 1,
+          daysProcessed: runStatus.daysProcessed + horizonDays,
+          note: `Skipped ${station.id} (${channelType} channel)`,
+        })
+        continue
+      }
+
       const rules = normalizeStationRules(rawRules)
+      // Station-wide showtime offset: shifts alignment boundaries so shows can
+      // start at e.g. :05/:35 instead of :00/:30 (FieldStation42 schedule_offset).
+      const scheduleOffsetMins = (() => {
+        const n = Number(rawRules.schedule_offset ?? 0)
+        return Number.isFinite(n) ? Math.max(0, Math.min(29, Math.round(n))) : 0
+      })()
       const overnightClosedown = Boolean(rawRules.overnight_closedown)
       const fillerPools      = fromJsonObject<Record<string, string | null>>(station.fillerPools)
       const holidayOverrides = fromJsonObject<Record<string, any>>(station.holidayOverrides)
@@ -1484,6 +1639,9 @@ export async function runScheduler(
             : []
           const dayTitleCounts = new Map<string, number>()
           const daySeriesCounts = new Map<string, number>()
+          // Broadcast-zone month/day for this generation day — drives seasonal
+          // affinity, anniversary detection and premiere stamping.
+          const dayCalendarParts = getZonedParts(date, broadcastTimezone)
           // Every exact catalog item (movie or episode) placed today on this
           // station. Guarantees no exact repeat within a single day.
           const dayUsedMediaKeys = new Set<string>()
@@ -1492,6 +1650,37 @@ export async function runScheduler(
           // repeats are additionally covered by dayUsedMediaKeys.
           const weekBlockedMovies = moviesBlockedForDay(date)
           const windowBumperAssigned = new Set<string>()
+
+          // Deferred usage counters — flushed once per station-day in grouped
+          // updateMany calls instead of one row-level update per placement.
+          const dayMediaItemUses = new Map<string, number>()
+          const dayParentShowUses = new Map<string, number>()
+          const recordMediaUse = (mediaItemId: string) => dayMediaItemUses.set(mediaItemId, (dayMediaItemUses.get(mediaItemId) ?? 0) + 1)
+          const recordParentShowUse = (plexShowKey: string) => dayParentShowUses.set(plexShowKey, (dayParentShowUses.get(plexShowKey) ?? 0) + 1)
+          const flushUsageCounts = async () => {
+            const flushedAt = new Date()
+            const groupByCount = (entries: Map<string, number>) => {
+              const groups = new Map<number, string[]>()
+              for (const [key, count] of entries) {
+                const list = groups.get(count) ?? []
+                list.push(key)
+                groups.set(count, list)
+              }
+              return groups
+            }
+            for (const [count, ids] of groupByCount(dayMediaItemUses)) {
+              await prisma.mediaItem.updateMany({
+                where: { id: { in: ids } },
+                data: { scheduledCount: { increment: count }, lastScheduled: flushedAt },
+              }).catch(() => null)
+            }
+            for (const [count, keys] of groupByCount(dayParentShowUses)) {
+              await prisma.mediaItem.updateMany({
+                where: { plexKey: { in: keys } },
+                data: { scheduledCount: { increment: count }, lastScheduled: flushedAt },
+              }).catch(() => null)
+            }
+          }
 
           const reservedIntervals: Array<{ start: number; end: number }> = []
           const dayStartMs = getBroadcastDayStart(date, broadcastTimezone).getTime()
@@ -1577,6 +1766,139 @@ export async function runScheduler(
             }
           }
 
+          // ── Probabilistic marathons (FieldStation42-style) ──────────────────
+          // A station slot may declare marathon { chance, count, hint }. When the
+          // roll passes (and the optional date hint matches), the slot start is
+          // taken over by `count` hours of back-to-back episodes of one series.
+          for (const sb of stationBlocks) {
+            const marathonCfg = sb.marathon
+            if (!marathonCfg) continue
+
+            const dateParts = getZonedParts(date, broadcastTimezone)
+            if (!dateHintMatches(marathonCfg.hint, { month: dateParts.month, day: dateParts.day, weekday: broadcastWeekday })) continue
+
+            // Deterministic roll: the same station/date/slot always rolls the
+            // same result, so schedule regeneration cannot silently add or
+            // remove a marathon that viewers may already have seen in the EPG.
+            // Seed uses the broadcast-zone date so previews match generation.
+            const broadcastDateStr = `${dateParts.year}-${String(dateParts.month).padStart(2, '0')}-${String(dateParts.day).padStart(2, '0')}`
+            const marathonSeed = `${station.id}:${broadcastDateStr}:${sb.name}:${sb.startMins}:marathon`
+            if (seededRandom01(marathonSeed) >= marathonCfg.chance) continue
+
+            const mStart = atBroadcastTime(date, Math.floor(sb.startMins / 60), sb.startMins % 60, broadcastTimezone)
+            const mEndMs = Math.min(mStart.getTime() + marathonCfg.count * 60 * 60_000, dayEndMs)
+            if (mEndMs - mStart.getTime() < 30 * 60_000) continue
+            if (reservedIntervals.some((r) => mStart.getTime() < r.end && mEndMs > r.start)) continue
+
+            // Eligible series: slot filters + classification zone + ownership.
+            const mMinsOfDay = getBroadcastMinutesOfDay(mStart, broadcastTimezone)
+            const mCeil = classificationCeiling(date, mMinsOfDay, broadcastTimezone)
+            const marathonPool = filterCandidatesBySlot(availableShows, sb, activeClassByPlexKey, activeClassBySectionKey)
+              .filter((s) => ratingAllowed(s.contentRating, mCeil))
+              .filter((s) => showIsOwnedByStation(showOwnership, s.ratingKey, station.id))
+            if (!marathonPool.length) continue
+
+            const marathonShow = weightedRandomWith(
+              marathonPool.map((show) => ({ item: show, weight: Math.max(0.05, weightForItem(show, blocks[0])) })),
+              mulberry32(seedToUInt32(`${marathonSeed}:show`)),
+            )
+            if (!marathonShow) continue
+
+            const marathonEpisodes = await buildEpisodeSnapshotList(
+              marathonShow.ratingKey,
+              rules.allow_languages,
+              rules.deny_languages,
+              schedulerYearRange.minYear,
+              schedulerYearRange.maxYear,
+            ).catch(() => [] as EpisodeSnapshotItem[])
+            if (marathonEpisodes.length < 2) continue
+
+            // Start from the station's progression pointer when it exists so the
+            // marathon binge picks up where the series airs, else from S01E01.
+            const existingProgress = await prisma.showProgress.findUnique({
+              where: { stationId_plexShowKey: { stationId: station.id, plexShowKey: marathonShow.ratingKey } },
+              select: { nextSeason: true, nextEpisode: true },
+            }).catch(() => null)
+            let epIndex = existingProgress
+              ? Math.max(0, marathonEpisodes.findIndex((e) => e.season === existingProgress.nextSeason && e.episode === existingProgress.nextEpisode))
+              : Math.max(0, marathonEpisodes.indexOf(firstRegularEpisode(marathonEpisodes) ?? marathonEpisodes[0]))
+
+            const marathonStrategy = sb.breakStrategy
+            let cursor = new Date(mStart)
+            let placedEpisodes = 0
+
+            while (cursor.getTime() < mEndMs) {
+              const episode = marathonEpisodes[epIndex % marathonEpisodes.length]
+              epIndex += 1
+              if (!episode) break
+              if (dayUsedMediaKeys.has(episode.ratingKey)) continue
+
+              const marathonEpRunMins = effectiveRuntimeMins(episode)
+              const epAdBreaks = deconflictAdBreaksForSlot(
+                cursor,
+                marathonEpRunMins,
+                buildContentAdBreaks({ durationMins: marathonEpRunMins, chapters: episode.chapters, markers: episode.markers }, adIntervalTv, adEnabled, marathonStrategy),
+              )
+              const epAdMins = epAdBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
+              const remainMins = Math.floor((mEndMs - cursor.getTime()) / 60_000)
+              if (marathonEpRunMins + epAdMins > remainMins + MAX_CONTENT_OVERRUN_MINS) break
+
+              const epEnd = addMinutes(cursor, marathonEpRunMins + epAdMins)
+              const mediaItem = await upsertMediaItem(episode)
+              await prisma.slot.create({
+                data: {
+                  scheduleId:    schedule.id,
+                  startTime:     cursor,
+                  durationMins:  marathonEpRunMins,
+                  contentSource: 'plex',
+                  contentId:     episode.ratingKey,
+                  showTitle:     episode.showTitle ?? marathonShow.title,
+                  seasonNumber:  episode.seasonNumber,
+                  episodeNumber: episode.episodeNumber,
+                  adBreaks:      epAdBreaks.length ? toJson(epAdBreaks) : null,
+                  isOverride:    true,
+                  overrideReason: 'marathon',
+                  metadata:      toJson({
+                    blockName: sb.name,
+                    title: `${marathonShow.title} Marathon`,
+                    showTitle: episode.showTitle ?? marathonShow.title,
+                    season: episode.seasonNumber,
+                    episode: episode.episodeNumber,
+                    reason: 'marathon',
+                  }),
+                  mediaItems:    { create: { mediaItemId: mediaItem.id, orderIndex: 0 } },
+                },
+              })
+
+              incrementCount(dayTitleCounts, episode.showTitle ?? episode.title)
+              incrementCount(daySeriesCounts, episode.showTitle)
+              dayUsedMediaKeys.add(episode.ratingKey)
+              recordAiring(globalAirings, episode.ratingKey, cursor.getTime(), epEnd.getTime())
+              cursor = epEnd
+              placedEpisodes += 1
+            }
+
+            if (!placedEpisodes) continue
+
+            // Round the tail of the marathon to its window end with filler.
+            const tailMins = Math.floor((mEndMs - cursor.getTime()) / 60_000)
+            if (tailMins >= 1) {
+              await prisma.slot.create({
+                data: {
+                  scheduleId:    schedule.id,
+                  startTime:     cursor,
+                  durationMins:  tailMins,
+                  contentSource: 'youtube',
+                  fillerId:      fillerPools.ads ?? fillerPools.music ?? null,
+                  metadata:      toJson({ blockName: sb.name, title: 'Filler', reason: 'marathon_tail', showInEpg: false }),
+                },
+              })
+            }
+
+            reservedIntervals.push({ start: mStart.getTime(), end: mEndMs })
+            console.log(`[Scheduler] Marathon: ${marathonShow.title} × ${placedEpisodes} eps on ${station.id} from ${mStart.toISOString()}`)
+          }
+
           for (const block of blocks) {
             const blockStart = atBroadcastTime(date, block.startHour, block.startMin, broadcastTimezone)
 
@@ -1652,7 +1974,13 @@ export async function runScheduler(
               const slotShowsFallback  = ceil(applySlotFilter ? filterCandidatesBySlot(generalShows, activeStationSlot, activeClassByPlexKey, activeClassBySectionKey) : generalShows)
               const slotRescueMovies = ceil(applySlotFilter ? filterCandidatesBySlot(rescueMovies, activeStationSlot, activeClassByPlexKey, activeClassBySectionKey) : rescueMovies)
               const slotLibWeights = applySlotFilter ? activeStationSlot?.libraryWeights : undefined
-              const libMultiplier = (item: PlexMediaItem) => slotLibraryMultiplier(item, slotLibWeights, activeClassByPlexKey, activeClassBySectionKey)
+              const qualityCtx = { month: dayCalendarParts.month, day: dayCalendarParts.day, minutesOfDay: slotMinsOfDay }
+              const libMultiplier = (item: PlexMediaItem) =>
+                slotLibraryMultiplier(item, slotLibWeights, activeClassByPlexKey, activeClassBySectionKey)
+                * contentQualityMultiplier(item, qualityCtx)
+              // Per-slot break placement + opt-in alignment increment.
+              const slotBreakStrategy = activeStationSlot?.breakStrategy
+              const slotIncrement = activeStationSlot?.scheduleIncrement
 
               // Keys to avoid for this slot: anything already used today on this
               // station, anything on air right now on another station, plus every
@@ -1684,11 +2012,11 @@ export async function runScheduler(
                   const rescueAdBreaks = deconflictAdBreaksForSlot(
                     slotStart,
                     rescueMovie.durationMins,
-                    buildAdBreaks(rescueMovie.durationMins, adIntervalMovie, adEnabled),
+                    buildContentAdBreaks(rescueMovie, adIntervalMovie, adEnabled, slotBreakStrategy),
                   )
                   const rescueAdMins   = rescueAdBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
                   const rescueSlotEnd  = addMinutes(slotStart, rescueMovie.durationMins + rescueAdMins)
-                  const { effectiveEnd: rescueAligned, fillerMins: rescueFillerMins } = resolveWindowAlignedEnd(rescueSlotEnd, blockEnd)
+                  const { effectiveEnd: rescueAligned, fillerMins: rescueFillerMins } = resolveWindowAlignedEnd(rescueSlotEnd, blockEnd, slotIncrement ?? 30, scheduleOffsetMins)
 
                   const mediaItem = await upsertMediaItem(rescueMovie)
                   const slot = await prisma.slot.create({
@@ -1702,15 +2030,11 @@ export async function runScheduler(
                       fillerId:      rescueFillerMins > 0 ? (fillerPools.ads ?? fillerPools.music ?? null) : null,
                       fillerDuration: rescueFillerMins > 0 ? rescueFillerMins : null,
                       metadata:      toJson({ blockName: block.name, title: rescueMovie.title, reason: 'placement_safety_rescue' }),
+                      mediaItems:    { create: { mediaItemId: mediaItem.id, orderIndex: 0 } },
                     },
                   })
-                  await prisma.slotMediaItem.create({
-                    data: { slotId: slot.id, mediaItemId: mediaItem.id, orderIndex: 0 },
-                  })
-                  await prisma.mediaItem.update({
-                    where: { id: mediaItem.id },
-                    data: { scheduledCount: { increment: 1 }, lastScheduled: new Date() },
-                  })
+                  void slot
+                  recordMediaUse(mediaItem.id)
 
                   incrementCount(dayTitleCounts, rescueMovie.title)
                   dayUsedMediaKeys.add(rescueMovie.ratingKey)
@@ -1856,7 +2180,7 @@ export async function runScheduler(
 
                       while (slotStart.getTime() < windowEndMs && (fillMode === 'fill' || placed < 1)) {
                         const timeStr = formatBroadcastTime(slotStart, broadcastTimezone)
-                        const progress = await prisma.showProgress.upsert({
+                        let progress = await prisma.showProgress.upsert({
                           where: { stationId_plexShowKey: { stationId: station.id, plexShowKey: w.plexShowKey } },
                           update: {},
                           create: {
@@ -1881,26 +2205,43 @@ export async function runScheduler(
                           schedulerYearRange.minYear,
                           schedulerYearRange.maxYear,
                         )
-                        const episode = episodeOrder.find((e) => e.season === progress.nextSeason && e.episode === progress.nextEpisode) ?? null
+                        // Sequence range: this window may be pinned to a fraction of
+                        // the series (e.g. early seasons only). When the pointer
+                        // falls outside the range, loop back to the range start.
+                        const hasSequenceRange = w.sequenceStart != null || w.sequenceEnd != null
+                        const rangedOrder = hasSequenceRange
+                          ? applySequenceRange(episodeOrder, w.sequenceStart, w.sequenceEnd)
+                          : episodeOrder
+                        const pointerSeason = progress.nextSeason
+                        const pointerEpisode = progress.nextEpisode
+                        let episode = rangedOrder.find((e) => e.season === pointerSeason && e.episode === pointerEpisode) ?? null
+                        if (!episode && hasSequenceRange && rangedOrder.length) {
+                          episode = rangedOrder[0]
+                          progress = await prisma.showProgress.update({
+                            where: { id: progress.id },
+                            data: { nextSeason: episode.season, nextEpisode: episode.episode, isCompleted: false },
+                          }).catch(() => progress) ?? progress
+                        }
                         if (!episode) break
 
+                        const episodeRunMins = effectiveRuntimeMins(episode)
                         const adBreaks   = deconflictAdBreaksForSlot(
                           slotStart,
-                          episode.durationMins,
-                          buildAdBreaks(episode.durationMins, adIntervalTv, adEnabled),
+                          episodeRunMins,
+                          buildContentAdBreaks({ durationMins: episodeRunMins, chapters: episode.chapters, markers: episode.markers }, adIntervalTv, adEnabled, activeStationSlot?.breakStrategy),
                         )
                         const adMins     = adBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
                         const remainWin = Math.max(0, Math.round((windowEndMs - slotStart.getTime()) / 60_000))
-                        if (dayUsedMediaKeys.has(episode.ratingKey) || episode.durationMins + adMins > remainWin + MAX_CONTENT_OVERRUN_MINS) break
+                        if (dayUsedMediaKeys.has(episode.ratingKey) || episodeRunMins + adMins > remainWin + MAX_CONTENT_OVERRUN_MINS) break
 
-                        const slotEnd    = addMinutes(slotStart, episode.durationMins + adMins)
+                        const slotEnd    = addMinutes(slotStart, episodeRunMins + adMins)
 
                         const mediaItem = await upsertMediaItem(episode)
                         const slot = await prisma.slot.create({
                           data: {
                             scheduleId:    schedule.id,
                             startTime:     slotStart,
-                            durationMins:  episode.durationMins,
+                            durationMins:  episodeRunMins,
                             contentSource: 'plex',
                             contentId:     episode.ratingKey,
                             showTitle:     episode.showTitle ?? progress.showTitle,
@@ -1916,10 +2257,11 @@ export async function runScheduler(
                               episode:   episode.episodeNumber,
                               reason:    'pinned_filler_show',
                             }),
+                            mediaItems:    { create: { mediaItemId: mediaItem.id, orderIndex: 0 } },
                           },
                         })
-                        await prisma.slotMediaItem.create({ data: { slotId: slot.id, mediaItemId: mediaItem.id, orderIndex: 0 } })
-                        await prisma.mediaItem.update({ where: { id: mediaItem.id }, data: { scheduledCount: { increment: 1 }, lastScheduled: new Date() } })
+                        void slot
+                        recordMediaUse(mediaItem.id)
                         await advanceShowProgress(
                           progress,
                           cadenceDays,
@@ -1998,13 +2340,21 @@ export async function runScheduler(
                   failedPlacementsAtCurrentStart += 1
                   continue
                 }
+                // Credits-aware effective runtime: don't broadcast long credit
+                // rolls into the next boundary.
+                const chosenRunMins = effectiveRuntimeMins(chosen)
                 const adBreaks = deconflictAdBreaksForSlot(
                   slotStart,
-                  chosen.durationMins,
-                  buildAdBreaks(chosen.durationMins, adIntervalMovie, adEnabled),
+                  chosenRunMins,
+                  buildContentAdBreaks({ durationMins: chosenRunMins, chapters: chosen.chapters, markers: chosen.markers }, adIntervalMovie, adEnabled, slotBreakStrategy),
                 )
                 const adMins   = adBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
-                const slotEnd  = addMinutes(slotStart, chosen.durationMins + adMins)
+                const slotEnd  = addMinutes(slotStart, chosenRunMins + adMins)
+
+                // Opt-in increment padding: buffer to the next boundary with filler.
+                const { effectiveEnd: movieEffEnd, fillerMins: movieFillerMins } = slotIncrement != null
+                  ? resolveWindowAlignedEnd(slotEnd, blockEnd, slotIncrement, scheduleOffsetMins)
+                  : { effectiveEnd: slotEnd, fillerMins: 0 }
 
                 const mediaItem = await upsertMediaItem(chosen)
 
@@ -2012,29 +2362,34 @@ export async function runScheduler(
                   data: {
                     scheduleId:    schedule.id,
                     startTime:     slotStart,
-                    durationMins:  chosen.durationMins,
+                    durationMins:  chosenRunMins,
                     contentSource: 'plex',
                     contentId:     chosen.ratingKey,
                     adBreaks:      adBreaks.length ? toJson(adBreaks) : null,
-                    fillerId:      null,
-                    fillerDuration: null,
-                    metadata:      toJson({ blockName: block.name, title: chosen.title, year: chosen.year, ...bumperMetaForWindow(activeStationSlot, windowBumperAssigned) }),
+                    fillerId:      movieFillerMins > 0 ? (fillerPools.ads ?? fillerPools.music ?? null) : null,
+                    fillerDuration: movieFillerMins > 0 ? movieFillerMins : null,
+                    metadata:      toJson({
+                      blockName: block.name,
+                      title: chosen.title,
+                      year: chosen.year,
+                      ...(isPremiereItem(chosen) ? { premiere: true } : {}),
+                      ...(anniversaryYears(chosen.originallyAvailableAt, dayCalendarParts.month, dayCalendarParts.day, dayCalendarParts.year) != null
+                        ? { anniversaryYears: anniversaryYears(chosen.originallyAvailableAt, dayCalendarParts.month, dayCalendarParts.day, dayCalendarParts.year) }
+                        : {}),
+                      ...bumperMetaForWindow(activeStationSlot, windowBumperAssigned),
+                    }),
+                    mediaItems:    { create: { mediaItemId: mediaItem.id, orderIndex: 0 } },
                   },
                 })
-                await prisma.slotMediaItem.create({
-                  data: { slotId: slot.id, mediaItemId: mediaItem.id, orderIndex: 0 },
-                })
-                await prisma.mediaItem.update({
-                  where: { id: mediaItem.id },
-                  data: { scheduledCount: { increment: 1 }, lastScheduled: new Date() },
-                })
+                void slot
+                recordMediaUse(mediaItem.id)
 
                 incrementCount(dayTitleCounts, chosen.title)
                 dayUsedMediaKeys.add(chosen.ratingKey)
                 recordMovieClaim(date, chosen.ratingKey)
                 recordAiring(globalAirings, chosen.ratingKey, slotStart.getTime(), slotEnd.getTime())
 
-                slotStart = slotEnd
+                slotStart = movieEffEnd
                 failedPlacementsAtCurrentStart = 0
                 continue
               }
@@ -2168,13 +2523,14 @@ export async function runScheduler(
                     // used today on this station, already on air on another
                     // station, or too long for the time remaining. Preserving the
                     // progression pointer keeps the series alive for later slots.
+                    const episodeRunMins = effectiveRuntimeMins(episode)
                     const episodeAdBreaks = deconflictAdBreaksForSlot(
                       slotStart,
-                      episode.durationMins,
-                      buildAdBreaks(episode.durationMins, adIntervalTv, adEnabled),
+                      episodeRunMins,
+                      buildContentAdBreaks({ durationMins: episodeRunMins, chapters: episode.chapters, markers: episode.markers }, adIntervalTv, adEnabled, slotBreakStrategy),
                     )
                     const episodeAdMins = episodeAdBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
-                    const episodeTooLong = episode.durationMins + episodeAdMins > remainingMins + MAX_CONTENT_OVERRUN_MINS
+                    const episodeTooLong = episodeRunMins + episodeAdMins > remainingMins + MAX_CONTENT_OVERRUN_MINS
                     if (excludeKeys.has(episode.ratingKey) || episodeTooLong) {
                       failedPlacementsAtCurrentStart += 1
                       continue
@@ -2182,43 +2538,43 @@ export async function runScheduler(
 
                     const adBreaks   = episodeAdBreaks
                     const adMins     = adBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
-                    const slotEnd    = addMinutes(slotStart, episode.durationMins + adMins)
+                    const slotEnd    = addMinutes(slotStart, episodeRunMins + adMins)
+
+                    // Opt-in increment padding for episodic content.
+                    const { effectiveEnd: epEffEnd, fillerMins: epFillerMins } = slotIncrement != null
+                      ? resolveWindowAlignedEnd(slotEnd, blockEnd, slotIncrement, scheduleOffsetMins)
+                      : { effectiveEnd: slotEnd, fillerMins: 0 }
 
                     const mediaItem = await upsertMediaItem(episode)
                     const slot = await prisma.slot.create({
                       data: {
                         scheduleId:    schedule.id,
                         startTime:     slotStart,
-                        durationMins:  episode.durationMins,
+                        durationMins:  episodeRunMins,
                         contentSource: 'plex',
                         contentId:     episode.ratingKey,
                         showTitle:     episode.showTitle ?? progress.showTitle,
                         seasonNumber:  episode.seasonNumber,
                         episodeNumber: episode.episodeNumber,
                         adBreaks:      adBreaks.length ? toJson(adBreaks) : null,
-                        fillerId:      null,
-                        fillerDuration: null,
+                        fillerId:      epFillerMins > 0 ? (fillerPools.ads ?? fillerPools.music ?? null) : null,
+                        fillerDuration: epFillerMins > 0 ? epFillerMins : null,
                         metadata:      toJson({
                           blockName: block.name,
                           showTitle: episode.showTitle ?? progress.showTitle,
                           season:    episode.seasonNumber,
                           episode:   episode.episodeNumber,
+                          ...(anniversaryYears(episode.airDate, dayCalendarParts.month, dayCalendarParts.day, dayCalendarParts.year) != null
+                            ? { anniversaryYears: anniversaryYears(episode.airDate, dayCalendarParts.month, dayCalendarParts.day, dayCalendarParts.year) }
+                            : {}),
                           ...bumperMetaForWindow(activeStationSlot, windowBumperAssigned),
                         }),
+                        mediaItems:    { create: { mediaItemId: mediaItem.id, orderIndex: 0 } },
                       },
                     })
-                    await prisma.slotMediaItem.create({
-                      data: { slotId: slot.id, mediaItemId: mediaItem.id, orderIndex: 0 },
-                    })
-
-                    await prisma.mediaItem.update({
-                      where: { id: mediaItem.id },
-                      data: { scheduledCount: { increment: 1 }, lastScheduled: new Date() },
-                    })
-                    await prisma.mediaItem.updateMany({
-                      where: { plexKey: progress.plexShowKey },
-                      data: { scheduledCount: { increment: 1 }, lastScheduled: new Date() },
-                    })
+                    void slot
+                    recordMediaUse(mediaItem.id)
+                    recordParentShowUse(progress.plexShowKey)
 
                     await advanceShowProgress(
                       progress,
@@ -2234,7 +2590,7 @@ export async function runScheduler(
                     dayUsedMediaKeys.add(episode.ratingKey)
                     recordAiring(globalAirings, episode.ratingKey, slotStart.getTime(), slotEnd.getTime())
 
-                    slotStart = slotEnd
+                    slotStart = epEffEnd
                     failedPlacementsAtCurrentStart = 0
                     continue
                   }
@@ -2272,7 +2628,7 @@ export async function runScheduler(
                 const rescueAdBreaks = deconflictAdBreaksForSlot(
                   slotStart,
                   rescueMovie.durationMins,
-                  buildAdBreaks(rescueMovie.durationMins, adIntervalMovie, adEnabled),
+                  buildContentAdBreaks(rescueMovie, adIntervalMovie, adEnabled, slotBreakStrategy),
                 )
                 const rescueAdMins   = rescueAdBreaks.reduce((sum, ab) => sum + ab.durationMins, 0)
                 const rescueSlotEnd  = addMinutes(slotStart, rescueMovie.durationMins + rescueAdMins)
@@ -2289,15 +2645,11 @@ export async function runScheduler(
                     fillerId:      null,
                     fillerDuration: null,
                     metadata:      toJson({ blockName: block.name, title: rescueMovie.title, reason: 'fallback_rescue' }),
+                    mediaItems:    { create: { mediaItemId: mediaItem.id, orderIndex: 0 } },
                   },
                 })
-                await prisma.slotMediaItem.create({
-                  data: { slotId: slot.id, mediaItemId: mediaItem.id, orderIndex: 0 },
-                })
-                await prisma.mediaItem.update({
-                  where: { id: mediaItem.id },
-                  data: { scheduledCount: { increment: 1 }, lastScheduled: new Date() },
-                })
+                void slot
+                recordMediaUse(mediaItem.id)
 
                 incrementCount(dayTitleCounts, rescueMovie.title)
                 dayUsedMediaKeys.add(rescueMovie.ratingKey)
@@ -2324,6 +2676,9 @@ export async function runScheduler(
               failedPlacementsAtCurrentStart = 0
             }
           }
+
+          // Flush deferred usage counters in grouped updates.
+          await flushUsageCounts()
 
           await persistStatus({
             daysProcessed: runStatus.daysProcessed + 1,
@@ -2555,4 +2910,107 @@ export function restartScheduler(): void {
   if (!schedulerStarted) return
   if (schedulerTimer) { clearTimeout(schedulerTimer); schedulerTimer = null }
   scheduleNextRun()
+}
+
+// ─── Day preview (dry run) ───────────────────────────────────────────────────
+// Resolves what a station's lineup WOULD look like on a given date without
+// writing anything: effective windows (incl. date overrides + presets),
+// holiday detection, and marathon outcomes. Marathon rolls use the same
+// deterministic seed as real generation, so the preview is faithful.
+
+export interface StationDayPreview {
+  stationId: string
+  date: string            // YYYY-MM-DD
+  dayName: string
+  isWeekend: boolean
+  holiday: string | null
+  channelType: string
+  dateOverrideApplied: boolean
+  scheduleOffsetMins: number
+  blocks: Array<{
+    name: string
+    start: string          // HH:MM
+    end: string            // HH:MM
+    contentType: string
+    allowGenres: string[]
+    breakStrategy: string | null
+    scheduleIncrement: number | null
+    strip: boolean
+    fillerWindows: number
+    marathon: { chance: number; count: number; hint?: string; wouldTrigger: boolean } | null
+  }>
+}
+
+export async function previewStationDay(stationId: string, dateStr: string): Promise<StationDayPreview | null> {
+  const station = await prisma.station.findUnique({ where: { id: stationId } })
+  if (!station) return null
+
+  const broadcastTimezone = await getBroadcastTimezone()
+  const m = String(dateStr).trim().match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) return null
+  const date = zonedTimeToUtc(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, broadcastTimezone)
+
+  const rawRules = fromJsonObject<Record<string, unknown>>(station.rules)
+  const channelType = String(rawRules.channel_type ?? 'standard').trim().toLowerCase() || 'standard'
+  const weekdayNum = getBroadcastDayOfWeek(date, broadcastTimezone)
+  const isWeekend = [0, 6].includes(weekdayNum)
+  const parts = getZonedParts(date, broadcastTimezone)
+
+  const holidaySettings = await loadHolidaySettings()
+  const holiday = getHolidayForDate(date, holidaySettings)
+
+  // Detect whether any date override matches this calendar date.
+  const overrides = Array.isArray(rawRules.date_overrides)
+    ? (rawRules.date_overrides as Array<Record<string, unknown>>)
+    : []
+  const dateOverrideApplied = overrides.some((entry) => {
+    const dates = String(entry?.dates ?? '').trim()
+    return Boolean(dates) && dateHintMatches(dates, { month: parts.month, day: parts.day, weekday: weekdayNum })
+  })
+
+  const stationBlocks = channelType === 'standard'
+    ? resolveStationTimeBlocks(date, rawRules, broadcastTimezone)
+    : []
+
+  const fmt = (mins: number) => `${String(Math.floor((mins % 1440) / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`
+  const scheduleOffsetMins = (() => {
+    const n = Number(rawRules.schedule_offset ?? 0)
+    return Number.isFinite(n) ? Math.max(0, Math.min(29, Math.round(n))) : 0
+  })()
+
+  return {
+    stationId,
+    date: dateStr,
+    dayName: dayNameForDate(date, broadcastTimezone),
+    isWeekend,
+    holiday,
+    channelType,
+    dateOverrideApplied,
+    scheduleOffsetMins,
+    blocks: stationBlocks.map((sb) => {
+      let marathon: StationDayPreview['blocks'][number]['marathon'] = null
+      if (sb.marathon) {
+        const hintMatches = dateHintMatches(sb.marathon.hint, { month: parts.month, day: parts.day, weekday: weekdayNum })
+        const marathonSeed = `${stationId}:${dateStr}:${sb.name}:${sb.startMins}:marathon`
+        marathon = {
+          chance: sb.marathon.chance,
+          count: sb.marathon.count,
+          hint: sb.marathon.hint,
+          wouldTrigger: hintMatches && seededRandom01(marathonSeed) < sb.marathon.chance,
+        }
+      }
+      return {
+        name: sb.name,
+        start: fmt(sb.startMins),
+        end: sb.endMins >= 24 * 60 ? '24:00' : fmt(sb.endMins),
+        contentType: sb.contentType,
+        allowGenres: sb.allowGenres ?? [],
+        breakStrategy: sb.breakStrategy ?? null,
+        scheduleIncrement: sb.scheduleIncrement ?? null,
+        strip: Boolean(sb.strip),
+        fillerWindows: sb.fillerWindows?.length ?? 0,
+        marathon,
+      }
+    }),
+  }
 }

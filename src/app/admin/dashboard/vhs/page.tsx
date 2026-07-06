@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import AdminShell from '@/components/admin/AdminShell'
 import { DEFAULT_VHS_SETTINGS, type VHSSettings } from '@/lib/vhs-defaults'
 
-type NumericVHSKey = Exclude<keyof VHSSettings, 'debugOverlayEnabled' | 'syncWobbleJumpsEnabled' | 'overscanSoftnessEnabled'>
+type NumericVHSKey = Exclude<keyof VHSSettings, 'debugOverlayEnabled' | 'syncWobbleJumpsEnabled' | 'overscanSoftnessEnabled' | 'fourByThreeEnabled' | 'compositeArtifactsEnabled' | 'phosphorBloomEnabled' | 'tvSpeakerAudioEnabled' | 'channelChangeSoundEnabled' | 'offAirStyle'>
 
 const KNOBS: Array<{ key: NumericVHSKey; label: string; desc: string }> = [
   { key: 'scanlines',           label: 'Scanlines',            desc: 'Horizontal scan-line density and opacity.' },
@@ -266,6 +266,57 @@ export default function VHSPage() {
             />
             Enable overscan and edge softness
           </label>
+
+          {/* ── Era authenticity ── */}
+          <div style={{ borderTop: '1px solid #1e3a5f', paddingTop: 18, marginBottom: 4, color: '#ff6600', fontSize: '0.72rem', letterSpacing: '0.12em', fontWeight: 700 }}>
+            ERA AUTHENTICITY
+          </div>
+          {([
+            { key: 'fourByThreeEnabled' as const, label: '4:3 Tube Mode', desc: 'Pillarboxes the picture into a centred 4:3 CRT bezel — films letterbox inside 4:3, exactly like broadcast.' },
+            { key: 'compositeArtifactsEnabled' as const, label: 'Composite Video Artifacts', desc: 'NTSC/PAL dot crawl shimmer and chroma stripe bleed on the picture.' },
+            { key: 'phosphorBloomEnabled' as const, label: 'Phosphor / Glass Sheen', desc: 'Faint bloom and a diagonal glass reflection that reads as a lit CRT face.' },
+            { key: 'tvSpeakerAudioEnabled' as const, label: 'TV Speaker Audio', desc: 'Routes programme audio through a mono, band-passed "3-inch speaker" chain.' },
+            { key: 'channelChangeSoundEnabled' as const, label: 'Tuning Sound Effects', desc: 'Click and static blip when changing channels.' },
+          ]).map(({ key, label, desc }) => (
+            <div key={key} style={{ marginBottom: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                <label style={{ color: '#e8f0fe', fontSize: '0.82rem', fontWeight: 700 }} htmlFor={`${key}-toggle`}>{label}</label>
+                <span style={{ color: settings[key] ? '#4CAF50' : '#4a7fb5', fontFamily: 'monospace', fontSize: '0.78rem' }}>
+                  {settings[key] ? 'ENABLED' : 'DISABLED'}
+                </span>
+              </div>
+              <div style={{ color: '#4a7fb5', fontSize: '0.68rem', marginBottom: 8 }}>{desc}</div>
+              <label style={{ display: 'inline-flex', gap: 10, alignItems: 'center', color: '#dbe8f7', fontSize: '0.78rem', cursor: 'pointer' }}>
+                <input
+                  id={`${key}-toggle`}
+                  type="checkbox"
+                  checked={settings[key]}
+                  onChange={(e) => setSettings({ ...settings, [key]: e.target.checked })}
+                  style={{ accentColor: '#ff6600', cursor: 'pointer' }}
+                />
+                Enable {label.toLowerCase()}
+              </label>
+            </div>
+          ))}
+
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+              <label style={{ color: '#e8f0fe', fontSize: '0.82rem', fontWeight: 700 }} htmlFor="off-air-style">Off-Air / Dead Channel Look</label>
+            </div>
+            <div style={{ color: '#4a7fb5', fontSize: '0.68rem', marginBottom: 8 }}>
+              What viewers see when a channel is off air: the PM5544-style test card with ident and clock, the saturated VCR blue screen, or full analog static.
+            </div>
+            <select
+              id="off-air-style"
+              value={settings.offAirStyle}
+              onChange={(e) => setSettings({ ...settings, offAirStyle: e.target.value as VHSSettings['offAirStyle'] })}
+              style={{ backgroundColor: '#060f1e', border: '1px solid #1e3a5f', color: '#fff', padding: '7px 10px', fontSize: '0.78rem', width: 280 }}
+            >
+              <option value="testcard">Test card (PM5544 style)</option>
+              <option value="bluescreen">VCR blue screen</option>
+              <option value="static">Analog static</option>
+            </select>
+          </div>
 
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
             <label style={{ color: '#e8f0fe', fontSize: '0.82rem', fontWeight: 700 }} htmlFor="debug-overlay-toggle">

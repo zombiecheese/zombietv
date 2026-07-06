@@ -12,6 +12,7 @@ Complacency is earned.
 - Simulates multi-station linear TV where all viewers share one server-authoritative timeline.
 - Schedules content in rolling windows with station-specific rules.
 - Streams Plex content through a local proxy and injects ad/filler segments from YouTube.
+- Supports non-broadcast channel types: a custom 90s-style weather channel, a Prevue-style programme guide channel, and loop/stream/web channels.
 - Provides an admin portal for schedule, station rules, events, catalog, security, and visual effects.
 
 ## Tech Stack
@@ -67,7 +68,7 @@ node scripts/init-db.js
 
 Seed defaults include:
 
-- Base stations
+- Base stations (plus demo `wthr` weather and `guide` listing channels)
 - Holiday overrides
 - Default admin user (`admin@zombietv.com` / `admin123`)
 
@@ -81,6 +82,12 @@ npm run dev
 
 - Viewer: http://localhost:3000
 - Admin: http://localhost:3000/admin
+
+Run the unit test suite (pure scheduler core: date hints, ad breaks, alignment, ratings, seeded randomness) with:
+
+```bash
+npm test
+```
 
 ### Docker
 
@@ -107,8 +114,11 @@ Docker compose starts both PostgreSQL and the app. Container startup runs `prism
   - Regen all or single station scheduling
   - Show pacing visibility (next episode and last aired date for tracked shows)
   - Slot edits, swaps, and audit trail
-- Station Rules editor with weekday/weekend slot configuration and bumper ID assignment
-- Filler Content manager (renamed from YouTube Pool)
+- Station Rules editor with weekday/weekend slot configuration and bumper ID assignment, plus:
+  - Channel type selection (standard / weather / guide / loop / stream / web)
+  - Per-slot break strategy, schedule increment, random marathon config, and slot presets
+  - Station-wide showtime offset and date-specific schedule overrides
+- Filler Content manager (renamed from YouTube Pool) with per-item availability hints (day parts, date ranges, exclusive takeover)
 - Holiday settings and holiday override management
 - Special Events with duration mode (`preset` or `until finished`)
 - VHS/CRT tuning with live preview
@@ -119,15 +129,61 @@ Docker compose starts both PostgreSQL and the app. Container startup runs `prism
 
 - Default 7-day rolling schedule generation with periodic extension.
 - Scheduler horizon and auto-run interval are configurable from the Overview page.
-- Hour/half-hour alignment remains enforced.
+- Hour/half-hour alignment remains enforced by default; per-slot schedule increments (continuous/5/15/30/60 min) and a station-wide showtime offset (e.g. :05/:35 starts) relax it opt-in.
 - Per-slot station rules include:
     - filler-only windows
     - open/close bumper IDs
     - per-library weighting (`tv_shows`, `movies`, `animation`, `fitness`)
     - allow-lists for genres and languages
+    - break strategy (`standard` chapter-aware, `center` intermission, `end` no mid-rolls)
+    - probabilistic marathons (`chance` × `count` hours, optional seasonal hint)
+    - reusable named slot presets
+- Date-specific overrides can retarget a day's lineup and genres on exact dates, ranges (year-wrap supported), months, quarters, or weekdays.
+- Filler windows pinned to a show support sequence ranges (loop within a fraction of the series).
 - Holiday and event precedence supported (`SpecialEvent` over holiday override over normal schedule).
 - Ad windows are runtime-aware: ad playback completes before returning to program content.
+- Mid-roll ad breaks snap to Plex chapter markers when available, landing cuts on natural scene breaks.
+- Ad/filler pools honour per-item availability hints: day parts (morning/daytime/prime/late/overnight), calendar date ranges, and an exclusive-takeover flag for themed windows.
+- A dynamic "Up Next" card renders during station breaks and ad pods from live schedule data.
 - YouTube duration metadata is used to fit ad/filler queues more accurately.
+- Marathon rolls are deterministic per station/date/slot, so schedule regeneration never silently adds or removes a marathon.
+- Catalog sync pulls extended Plex metadata: original air dates, intro/credits markers, collections/labels, audience ratings, studio, countries, added-at, watch state, and artwork paths.
+- Episodes air in original broadcast order (air-date sorting) when air dates are available; content near its original air date gets a seasonal boost (Christmas episodes surface in December) and exact anniversaries are flagged.
+- Mid-roll breaks snap to Plex chapters **and** intro/credits markers; long credit rolls are trimmed from effective runtime so joins are tighter.
+- Slot allow-lists match Plex collections, labels, studios and countries in addition to genres — curate pools in Plex, schedule with them here.
+- Audience ratings weight prime time toward well-rated content (late night tolerates the schlock); fresh never-aired library additions get a PREMIERE boost and badge; recently-watched-on-Plex content is penalised.
+- The "Up Next" card shows real Plex poster art via an authenticated proxy (`/api/plex-art`).
+- Live playback state is pushed to viewers over Server-Sent Events (with automatic polling fallback); transitions land within ~300 ms.
+- Weather data and guide listings are served through cached server-side proxies (`/api/weather`, `/api/guide`).
+- YouTube filler renders through a chrome-hiding embed layer: native YouTube UI is cropped out of frame and audio is unmuted in place after first interaction (no stream restarts).
+- Plex tokens are encrypted at rest (AES-256-GCM derived from `SESSION_SECRET`).
+- Station Rules → Advanced includes a **Day Preview** dry run (resolved lineup, holiday/date-override detection, marathon outcomes) and Filler Content includes a **Check Availability** scan that flags deleted or embed-disabled videos.
+
+## Channel Types
+
+Set per station in Station Rules → Channel Type (`rules.channel_type`):
+
+| Type | Behaviour |
+|---|---|
+| `standard` | Normal scheduled broadcast station (default) |
+| `weather` | Continuous 90s-style weather channel rendered from Open-Meteo data (no API key); configure latitude/longitude/location name and optional background music |
+| `guide` | Prevue-style scrolling programme listings with optional promo video panel |
+| `loop` | Continuously loops a YouTube video or playlist |
+| `stream` | Plays an external HLS (`.m3u8`) or direct media URL |
+| `web` | Embeds a web page as the channel |
+
+Non-standard channels skip schedule generation entirely and appear in the EPG with synthesized continuous listings.
+
+## The 1990s Viewer Experience
+
+- **TV OSD** — chrome auto-hides while watching; channel changes flash big blocky channel digits (top-right) and a one-line programme banner (station · time · title) that fades after a few seconds, all in a hard-outlined VCR-OSD style.
+- **Remote-control input** — channel up/down (arrow keys), direct numeric channel entry with on-screen digit echo, and volume keys (`+`/`-`) with the classic green segment volume bar.
+- **Analog tuning** — switching between live channels cuts to black with a brief vertical sync tear/picture roll (plus an optional click + static blip); dead channels show the configured off-air look.
+- **Off-air looks** — PM5544-style test card with station ident and clock (default), saturated VCR blue screen, or full analog static.
+- **Station watermark (DOG)** — translucent station ident during programmes, dropped for ad breaks; a corner clock bug appears during live news windows.
+- **CRT behaviours** — power-on line-bloom when the set turns on, collapse-to-dot on sign-out, optional 4:3 tube mode with bezel, composite dot-crawl/chroma artifacts, and phosphor/glass sheen — all tunable from the admin VHS page.
+- **TV speaker audio** (optional) — programme audio routed through a mono band-passed "3-inch speaker" chain.
+- **Guide** — the overlay EPG carries a teletext flavour (black surface, monospace, `P501 GUIDE` page header, cyan/yellow accents); the Up Next break card renders as a broadcast lower-third with poster art.
 
 ## VHS/CRT Controls
 
@@ -143,6 +199,7 @@ Settings persisted in `AdminPreference` and polled by clients include:
 - `trackingNoise`
 - `horizontalJitter`
 - `showDebug`
+- `fourByThreeEnabled`, `compositeArtifactsEnabled`, `phosphorBloomEnabled`, `tvSpeakerAudioEnabled`, `channelChangeSoundEnabled`, `offAirStyle` (`testcard` / `bluescreen` / `static`)
 
 ## Important Notes
 

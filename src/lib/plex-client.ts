@@ -8,6 +8,12 @@ export interface PlexSection {
   type: 'movie' | 'show'
 }
 
+export interface PlexMarker {
+  type: string        // 'intro' | 'credits' | 'commercial'
+  startMs: number
+  endMs: number
+}
+
 export interface PlexMediaItem {
   ratingKey: string
   title: string
@@ -25,8 +31,22 @@ export interface PlexMediaItem {
   showTitle?: string
   seasonNumber?: number
   episodeNumber?: number
-  // Chapters
+  // Chapters + Plex Pass intro/credits markers
   chapters?: Array<{ title: string; startOffsetMs: number }>
+  markers?: PlexMarker[]
+  // Extended metadata (scheduler intelligence)
+  originallyAvailableAt?: string  // YYYY-MM-DD original air/release date
+  audienceRating?: number         // 0–10
+  criticRating?: number           // 0–10
+  studio?: string
+  countries?: string[]            // lower-cased
+  collections?: string[]          // lower-cased Plex collection tags
+  labels?: string[]               // lower-cased Plex labels
+  addedAtMs?: number              // epoch ms when added to the library
+  viewCount?: number              // Plex watch count (token account)
+  lastViewedAtMs?: number         // epoch ms last watched on Plex
+  thumbPath?: string              // Plex poster path
+  artPath?: string                // Plex background art path
   // Source library section metadata
   sourceSectionKey?: string
   sourceSectionTitle?: string
@@ -92,7 +112,7 @@ export class PlexClient {
     const results: PlexMediaItem[] = []
 
     for (const section of movieSections) {
-      const params: Record<string, string> = { type: '1' }
+      const params: Record<string, string> = { type: '1', includeCollections: '1' }
       if (opts.yearFrom) params['year>>'] = String(opts.yearFrom)
       if (opts.yearTo)   params['year<<'] = String(opts.yearTo)
 
@@ -153,7 +173,7 @@ export class PlexClient {
 
     for (const section of showSections) {
       const res = await fetch(
-        this.url(`/library/sections/${section.key}/all`, { type: '2' }),
+        this.url(`/library/sections/${section.key}/all`, { type: '2', includeCollections: '1' }),
         { headers: this.headers, cache: 'no-store' },
       )
       if (!res.ok) continue
@@ -221,7 +241,7 @@ export class PlexClient {
 
   async getItemByKey(ratingKey: string): Promise<PlexMediaItem | null> {
     const res = await fetch(
-      this.url(`/library/metadata/${ratingKey}`, { includeChapters: '1' }),
+      this.url(`/library/metadata/${ratingKey}`, { includeChapters: '1', includeMarkers: '1' }),
       { headers: this.headers, cache: 'no-store' },
     )
     if (!res.ok) return null
@@ -243,6 +263,16 @@ export class PlexClient {
       startOffsetMs: c.startTimeOffset as number,
     }))
     mapped.chapters = chapters.length ? chapters : undefined
+
+    // Attach Plex Pass intro/credits markers if present
+    const markers: PlexMarker[] = (item.Marker ?? [])
+      .map((m: any) => ({
+        type: String(m.type ?? '').toLowerCase(),
+        startMs: Number(m.startTimeOffset ?? NaN),
+        endMs: Number(m.endTimeOffset ?? NaN),
+      }))
+      .filter((m: PlexMarker) => m.type && Number.isFinite(m.startMs) && Number.isFinite(m.endMs))
+    mapped.markers = markers.length ? markers : undefined
 
     return mapped
   }
@@ -275,6 +305,15 @@ export class PlexClient {
     sourceSectionTitle?: string,
   ): PlexMediaItem {
     const durationMs = (item.duration as number) ?? 0
+    const tagList = (list: any[] | undefined): string[] =>
+      (list ?? []).map((t: any) => String(t.tag ?? '').trim().toLowerCase()).filter(Boolean)
+
+    const audienceRating = Number(item.audienceRating)
+    const criticRating = Number(item.rating)
+    const addedAt = Number(item.addedAt)
+    const lastViewedAt = Number(item.lastViewedAt)
+    const viewCount = Number(item.viewCount)
+
     return {
       ratingKey:     item.ratingKey as string,
       title:         item.title as string,
@@ -289,6 +328,18 @@ export class PlexClient {
       showTitle:     item.grandparentTitle as string | undefined,
       seasonNumber:  item.parentIndex as number | undefined,
       episodeNumber: item.index as number | undefined,
+      originallyAvailableAt: typeof item.originallyAvailableAt === 'string' ? item.originallyAvailableAt : undefined,
+      audienceRating: Number.isFinite(audienceRating) ? audienceRating : undefined,
+      criticRating:   Number.isFinite(criticRating) ? criticRating : undefined,
+      studio:        typeof item.studio === 'string' && item.studio.trim() ? item.studio.trim() : undefined,
+      countries:     tagList(item.Country),
+      collections:   tagList(item.Collection),
+      labels:        tagList(item.Label),
+      addedAtMs:     Number.isFinite(addedAt) && addedAt > 0 ? addedAt * 1000 : undefined,
+      viewCount:     Number.isFinite(viewCount) ? viewCount : undefined,
+      lastViewedAtMs: Number.isFinite(lastViewedAt) && lastViewedAt > 0 ? lastViewedAt * 1000 : undefined,
+      thumbPath:     typeof item.thumb === 'string' ? item.thumb : undefined,
+      artPath:       typeof item.art === 'string' ? item.art : undefined,
       sourceSectionKey,
       sourceSectionTitle,
     }

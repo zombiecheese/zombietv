@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getIronSession } from 'iron-session'
 import { prisma } from '@/lib/db'
 import { toJson } from '@/lib/json'
+import { encryptSecret } from '@/lib/secret-box'
 import { sessionOptions, SessionData } from '@/lib/session'
 import { checkPlexPin, getPlexUser, getPlexServerUrlWithOptions } from '@/lib/plex-auth'
 
@@ -36,7 +37,7 @@ export async function POST(req: NextRequest) {
         email: plexUser.email,
         username: plexUser.username,
         preferences: toJson({
-          plexToken: authToken,
+          plexToken: encryptSecret(authToken),
           plexServerUrl,
         }),
       },
@@ -46,7 +47,7 @@ export async function POST(req: NextRequest) {
         username: plexUser.username,
         isAdmin: false,
         preferences: toJson({
-          plexToken: authToken,
+          plexToken: encryptSecret(authToken),
           plexServerUrl,
         }),
       },

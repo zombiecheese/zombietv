@@ -1,0 +1,142 @@
+// Shared EPG listing builder — used by /api/epg/[stationId] (viewer guide grid)
+// and /api/guide (guide-channel aggregate). Non-standard channel types get
+// synthesized continuous listings since they have no schedule rows.
+
+import { prisma } from './db'
+import { fromJsonObject, fromJsonArray } from './json'
+import { addDays } from 'date-fns'
+
+export interface EPGSlot {
+  id:            string
+  startTime:     string   // ISO
+  endTime:       string   // ISO
+  durationMins:  number
+  title:         string
+  showTitle:     string | null
+  seasonNumber:  number | null
+  episodeNumber: number | null
+  contentSource: string
+  isOverride:    boolean
+  overrideReason: string | null
+  inAdBreak:     boolean  // true if this slot has ad breaks
+  isLive:        boolean
+}
+
+export async function buildEpgSlots(stationId: string, from: Date, to: Date): Promise<EPGSlot[]> {
+  // Non-standard channel types (weather / guide / loop / stream / web) have no
+  // schedule rows — synthesize continuous listings so the guide isn't blank.
+  const station = await prisma.station.findUnique({
+    where: { id: stationId },
+    select: { rules: true },
+  })
+  const stationRules = fromJsonObject<Record<string, any>>(station?.rules)
+  const channelType = String(stationRules?.channel_type ?? 'standard').trim().toLowerCase()
+  if (channelType && channelType !== 'standard') {
+    const typeTitles: Record<string, string> = {
+      weather: 'Weather Centre',
+      guide: 'Programme Guide',
+      loop: String(stationRules?.loop?.title ?? 'Continuous Programming'),
+      stream: String(stationRules?.stream?.title ?? 'Live Stream'),
+      web: String(stationRules?.web?.title ?? 'Web Channel'),
+    }
+    const title = typeTitles[channelType] ?? 'Continuous Programming'
+    const synthesized: EPGSlot[] = []
+    const blockMins = 120
+    let cursor = new Date(Math.floor(from.getTime() / (blockMins * 60_000)) * blockMins * 60_000)
+    while (cursor < to) {
+      const end = new Date(Math.min(cursor.getTime() + blockMins * 60_000, to.getTime()))
+      synthesized.push({
+        id: `${stationId}-${channelType}-${cursor.getTime()}`,
+        startTime: cursor.toISOString(),
+        endTime: end.toISOString(),
+        durationMins: Math.round((end.getTime() - cursor.getTime()) / 60_000),
+        title,
+        showTitle: null,
+        seasonNumber: null,
+        episodeNumber: null,
+        contentSource: channelType,
+        isOverride: false,
+        overrideReason: null,
+        inAdBreak: false,
+        isLive: channelType === 'stream',
+      })
+      cursor = end
+    }
+    return synthesized
+  }
+
+  // Pull slots by absolute time range instead of schedule.day boundaries.
+  // This keeps EPG aligned with playback even when local/UTC day edges differ.
+  const allSlots = await prisma.slot.findMany({
+    where: {
+      startTime: {
+        gte: addDays(from, -1),
+        lt: addDays(to, 1),
+      },
+      schedule: {
+        stationId,
+        isActive: true,
+      },
+    },
+    orderBy: { startTime: 'asc' },
+  })
+
+  const epgSlots: EPGSlot[] = []
+
+  for (let index = 0; index < allSlots.length; index++) {
+    const slot = allSlots[index]
+    const nextSlot = allSlots[index + 1]
+    const meta = fromJsonObject<Record<string, any>>(slot.metadata)
+    const adBreaks = fromJsonArray<{ durationMins?: number }>(slot.adBreaks)
+    const adBreakMins = adBreaks.reduce((sum, ab) => sum + Number(ab?.durationMins ?? 0), 0)
+    const explicitShowInEpg = typeof meta.showInEpg === 'boolean' ? meta.showInEpg : null
+    const isAutoYoutubeFill = slot.contentSource === 'youtube' && !slot.isOverride
+    const showInEpg = explicitShowInEpg ?? !isAutoYoutubeFill
+
+    const slotStartMs = slot.startTime.getTime()
+    const slotEndRawMs = slotStartMs + (slot.durationMins + adBreakMins + (slot.fillerDuration ?? 0)) * 60_000
+    const nextStartMs = nextSlot ? nextSlot.startTime.getTime() : null
+    const slotEndMs = nextStartMs == null ? slotEndRawMs : Math.min(slotEndRawMs, nextStartMs)
+    const effectiveDurationMins = Math.max(0, Math.round((slotEndMs - slotStartMs) / 60_000))
+
+    // Keep any slot that overlaps the requested window.
+    if (slotStartMs >= to.getTime() || slotEndMs <= from.getTime()) continue
+    if (!showInEpg) {
+      // Hidden auto-filler should visually extend the previous visible item so
+      // the guide does not display empty gaps between scheduled windows.
+      const prev = epgSlots[epgSlots.length - 1]
+      if (prev) {
+        const prevStartMs = new Date(prev.startTime).getTime()
+        const prevEndMs = new Date(prev.endTime).getTime()
+        const touchesPrev = slotStartMs <= prevEndMs + 1_000
+        if (touchesPrev && slotEndMs > prevEndMs) {
+          prev.endTime = new Date(slotEndMs).toISOString()
+          prev.durationMins = Math.max(0, Math.round((slotEndMs - prevStartMs) / 60_000))
+        }
+      }
+      continue
+    }
+
+    const isLiveNewsSlot = String(meta.reason ?? '') === 'news_live_window'
+    const liveTitle = `LIVE: ${stationId.toUpperCase()} News`
+
+    // Main scheduled content segment.
+    epgSlots.push({
+      id:            slot.id,
+      startTime:     slot.startTime.toISOString(),
+      endTime:       new Date(slotEndMs).toISOString(),
+      durationMins:  effectiveDurationMins,
+      title:         isLiveNewsSlot ? liveTitle : (meta.title ?? slot.showTitle ?? slot.contentSource ?? 'Programme'),
+      showTitle:     isLiveNewsSlot ? liveTitle : slot.showTitle,
+      seasonNumber:  slot.seasonNumber,
+      episodeNumber: slot.episodeNumber,
+      contentSource: slot.contentSource,
+      isOverride:    slot.isOverride,
+      overrideReason: slot.overrideReason,
+      inAdBreak:     adBreaks.length > 0,
+      isLive:        isLiveNewsSlot,
+    })
+  }
+
+  return epgSlots
+}

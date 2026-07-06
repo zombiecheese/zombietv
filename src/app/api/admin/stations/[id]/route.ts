@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAdmin } from '@/lib/admin-guard'
 import { prisma }       from '@/lib/db'
 import { toJson, fromJsonObject } from '@/lib/json'
+import { validateStationRules } from '@/lib/station-rules-validation'
 
 export const dynamic = 'force-dynamic'
 
@@ -23,6 +24,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     rules:            fromJsonObject(station.rules),
     holidayOverrides: fromJsonObject(station.holidayOverrides),
     fillerPools:      fromJsonObject(station.fillerPools),
+    updatedAt:        station.updatedAt.toISOString(),
   })
 }
 
@@ -32,6 +34,32 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   if (!guard.ok) return guard.response
 
   const body = await req.json().catch(() => ({}))
+
+  // Structural validation — reject malformed rules instead of letting the
+  // scheduler silently degrade on them.
+  if (body.rules) {
+    const problems = validateStationRules(body.rules)
+    if (problems.length) {
+      return NextResponse.json(
+        { error: `Invalid station rules: ${problems.slice(0, 5).join('; ')}${problems.length > 5 ? ` (+${problems.length - 5} more)` : ''}`, problems },
+        { status: 400 },
+      )
+    }
+  }
+
+  // Optimistic lock: when the client sends the updatedAt it loaded, refuse to
+  // clobber a save made by someone else in the meantime.
+  const expectedUpdatedAt = typeof body.expectedUpdatedAt === 'string' ? body.expectedUpdatedAt : null
+  if (expectedUpdatedAt) {
+    const current = await prisma.station.findUnique({ where: { id }, select: { updatedAt: true } })
+    if (!current) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    if (current.updatedAt.toISOString() !== expectedUpdatedAt) {
+      return NextResponse.json(
+        { error: 'This station was modified by someone else since you loaded it. Reload before saving.', conflict: true },
+        { status: 409 },
+      )
+    }
+  }
 
   const updates: Record<string, string> = {}
   if (body.rules)            updates.rules            = toJson(body.rules)
@@ -44,7 +72,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     data:  updates,
   })
 
-  return NextResponse.json({ ok: true, id: station.id })
+  return NextResponse.json({ ok: true, id: station.id, updatedAt: station.updatedAt.toISOString() })
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {

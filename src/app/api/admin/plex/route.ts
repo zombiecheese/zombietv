@@ -6,6 +6,7 @@ import { createHmac } from 'crypto'
 import { requireAdmin } from '@/lib/admin-guard'
 import { ensureDatabaseReady, prisma } from '@/lib/db'
 import { fromJsonObject } from '@/lib/json'
+import { decryptSecret } from '@/lib/secret-box'
 import {
   getCatalogAutoSyncMaxAgeHours,
   getCatalogLibraryClassifications,
@@ -40,7 +41,7 @@ export async function GET(req: NextRequest) {
   })
 
   const prefs = fromJsonObject<Record<string, unknown>>(admin?.preferences)
-  const plexToken = String(prefs.plexToken ?? '')
+  const plexToken = decryptSecret(String(prefs.plexToken ?? ''))
   const plexServerUrl = String(prefs.plexServerUrl ?? '')
   const catalogStatus = await getCatalogStatus()
   const autoSyncMaxAgeHours = await getCatalogAutoSyncMaxAgeHours()

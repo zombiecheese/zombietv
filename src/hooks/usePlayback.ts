@@ -110,9 +110,60 @@ export function usePlayback(stationId: string, enabled = true): UsePlaybackResul
     }
 
     let active = true
+    let eventSource: EventSource | null = null
+    let sseFailed = false
 
+    // ── Preferred transport: Server-Sent Events ──────────────────────────
+    // The server pushes a state immediately, again right after transitions,
+    // and on a heartbeat. Falls back to adaptive polling on any failure.
+    const startSse = (): boolean => {
+      if (sseFailed || debugAtRef.current || typeof EventSource === 'undefined') return false
+      try {
+        eventSource = new EventSource(`/api/now/${stationId}/stream`)
+      } catch {
+        sseFailed = true
+        return false
+      }
+
+      eventSource.onmessage = (event) => {
+        if (!active) return
+        try {
+          const data: PlaybackState = JSON.parse(event.data)
+          // No round-trip measurement on SSE pushes; server time is close
+          // enough since pushes are generated at send time.
+          setOffset(data.serverTimeMs - Date.now())
+          setState(data)
+          setError(null)
+          setLoading(false)
+        } catch {
+          // Ignore malformed frames.
+        }
+      }
+
+      eventSource.onerror = () => {
+        // EventSource auto-reconnects; only bail out entirely when the
+        // connection never established (e.g. proxy strips streaming).
+        if (!active) return
+        if (eventSource && eventSource.readyState === EventSource.CLOSED) {
+          eventSource.close()
+          eventSource = null
+          sseFailed = true
+          setLoading(true)
+          fetchState().finally(scheduleNext)
+        }
+      }
+
+      return true
+    }
+
+    const stopSse = () => {
+      eventSource?.close()
+      eventSource = null
+    }
+
+    // ── Fallback transport: adaptive polling ─────────────────────────────
     const scheduleNext = () => {
-      if (!active) return
+      if (!active || (eventSource && !sseFailed)) return
       const delay = getNextPollDelay()
       timerRef.current = setTimeout(async () => {
         await fetchState()
@@ -121,21 +172,34 @@ export function usePlayback(stationId: string, enabled = true): UsePlaybackResul
     }
 
     const onVisibilityChange = () => {
-      if (!active || document.visibilityState === 'hidden') return
+      if (!active) return
+      if (document.visibilityState === 'hidden') {
+        // Streaming to a hidden tab wastes a server loop — drop to nothing;
+        // we resync on the next visibility change.
+        stopSse()
+        return
+      }
+      if (!sseFailed && !eventSource) {
+        setLoading(true)
+        if (startSse()) return
+      }
       fetchState().catch(() => {})
     }
 
     setLoading(true)
-    fetchState().finally(scheduleNext)
+    if (!startSse()) {
+      fetchState().finally(scheduleNext)
+    }
     document.addEventListener('visibilitychange', onVisibilityChange)
 
     return () => {
       active = false
+      stopSse()
       timerRef.current && clearTimeout(timerRef.current)
       document.removeEventListener('visibilitychange', onVisibilityChange)
       abortRef.current?.abort()
     }
-  }, [fetchState, getNextPollDelay, enabled])
+  }, [fetchState, getNextPollDelay, enabled, stationId])
 
   return {
     state,
