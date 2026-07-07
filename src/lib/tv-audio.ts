@@ -20,6 +20,14 @@ function getCtx(): AudioContext | null {
   }
 }
 
+// Resume the shared AudioContext (call from a user-gesture handler). If a
+// video element was routed through the speaker chain while the context was
+// suspended, its audio is silent until the context resumes.
+export function resumeTvAudio(): void {
+  if (!audioCtx) return
+  if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {})
+}
+
 // Click + 120ms band-passed static burst.
 export function playTuneBlip(): void {
   const ctx = getCtx()

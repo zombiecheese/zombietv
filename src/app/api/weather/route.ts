@@ -32,8 +32,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Valid latitude and longitude are required' }, { status: 400 })
   }
 
-  // Coarse cache key: ~1km resolution is plenty for broadcast weather.
-  const key = `${latitude.toFixed(2)},${longitude.toFixed(2)}`
+  // Cache at finer precision so nearby configured locations do not collapse
+  // into the same response (~11m resolution at the equator).
+  const key = `${latitude.toFixed(4)},${longitude.toFixed(4)}`
   const now = Date.now()
   pruneCache(now)
 
@@ -47,21 +48,50 @@ export async function GET(req: NextRequest) {
   const params = new URLSearchParams({
     latitude: String(latitude),
     longitude: String(longitude),
-    current: 'temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,pressure_msl',
-    hourly: 'temperature_2m,weather_code,precipitation_probability',
-    daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max',
+    current: 'temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,pressure_msl,is_day',
+    hourly: 'temperature_2m,weather_code,precipitation_probability,precipitation,cloud_cover,visibility',
+    daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,daylight_duration,uv_index_max,moon_phase,moonrise,moonset',
     timezone: 'auto',
     forecast_days: '7',
   })
 
+  const marineParams = new URLSearchParams({
+    latitude: String(latitude),
+    longitude: String(longitude),
+    hourly: 'wave_height,wind_wave_height,swell_wave_height,sea_surface_temperature',
+    timezone: 'auto',
+    forecast_days: '2',
+  })
+
   try {
-    const res = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`, {
-      signal: AbortSignal.timeout(10_000),
-    })
-    if (!res.ok) {
-      return NextResponse.json({ error: `Weather upstream HTTP ${res.status}` }, { status: 502 })
+    const [forecastRes, marineRes] = await Promise.allSettled([
+      fetch(`https://api.open-meteo.com/v1/forecast?${params}`, {
+        signal: AbortSignal.timeout(10_000),
+      }),
+      fetch(`https://marine-api.open-meteo.com/v1/marine?${marineParams}`, {
+        signal: AbortSignal.timeout(10_000),
+      }),
+    ])
+
+    if (forecastRes.status !== 'fulfilled' || !forecastRes.value.ok) {
+      const status = forecastRes.status === 'fulfilled' ? forecastRes.value.status : 502
+      return NextResponse.json({ error: `Weather upstream HTTP ${status}` }, { status: 502 })
     }
-    const body = await res.json()
+
+    const forecastBody = await forecastRes.value.json()
+    let marineBody: unknown = null
+    if (marineRes.status === 'fulfilled' && marineRes.value.ok) {
+      marineBody = await marineRes.value.json()
+    }
+
+    const body = {
+      forecast: forecastBody,
+      marine: marineBody,
+      source: {
+        provider: 'open-meteo',
+      },
+    }
+
     cache.set(key, { body, expiresAt: now + CACHE_TTL_MS })
     return NextResponse.json(body, {
       headers: { 'Cache-Control': 'public, max-age=300' },

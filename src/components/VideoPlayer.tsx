@@ -24,7 +24,7 @@ import RatingBug from './RatingBug'
 import UpNextCard from './UpNextCard'
 import YouTubeLayer from './YouTubeLayer'
 import { TestCardScreen, BlueScreen, StaticScreen } from './OffAirScreens'
-import { attachTvSpeaker, setTvSpeakerEnabled } from '@/lib/tv-audio'
+import { attachTvSpeaker, setTvSpeakerEnabled, resumeTvAudio } from '@/lib/tv-audio'
 import { OSD_FONT_FAMILY } from '@/lib/osd-style'
 import { DEFAULT_VHS_SETTINGS, type OffAirStyle } from '@/lib/vhs-defaults'
 
@@ -416,12 +416,18 @@ export default function VideoPlayer({
     return () => { alive = false }
   }, [])
 
-  // Apply TV volume to native video elements (YouTube gets it via the layer).
+  // Apply TV volume and mute state to native video elements (YouTube gets it
+  // via the layer). React only applies the `muted` prop at mount, so the
+  // unmute after first interaction must be done imperatively here.
   useEffect(() => {
     const v = Math.max(0, Math.min(1, volume / 100))
-    if (videoRef.current) videoRef.current.volume = v
-    if (streamVideoRef.current) streamVideoRef.current.volume = v
-  }, [volume, layer, plexHlsUrl, streamUrl])
+    for (const video of [videoRef.current, streamVideoRef.current]) {
+      if (!video) continue
+      video.volume = v
+      video.muted = !hasUserInteraction
+      if (hasUserInteraction && video.paused) video.play().catch(() => {})
+    }
+  }, [volume, layer, plexHlsUrl, streamUrl, hasUserInteraction])
 
   // TV speaker emulation: route native video audio through the mono
   // band-passed chain when enabled (needs a user gesture for AudioContext).
@@ -447,11 +453,17 @@ export default function VideoPlayer({
     return () => clearInterval(timer)
   }, [])
 
-  // Browser autoplay policy: once the viewer interacts, upgrade future YouTube playback to sound-on autoplay.
+  // Browser autoplay policy: once the viewer interacts, upgrade playback to
+  // sound-on. Also resume the WebAudio context inside the gesture — a video
+  // routed through the TV-speaker chain is silent while the context is
+  // suspended.
   useEffect(() => {
     if (hasUserInteraction) return
 
-    const markInteracted = () => setHasUserInteraction(true)
+    const markInteracted = () => {
+      resumeTvAudio()
+      setHasUserInteraction(true)
+    }
     window.addEventListener('pointerdown', markInteracted, { once: true })
     window.addEventListener('keydown', markInteracted, { once: true })
 
