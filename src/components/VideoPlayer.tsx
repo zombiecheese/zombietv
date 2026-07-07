@@ -872,7 +872,6 @@ export default function VideoPlayer({
       {layer === 'youtube' && (
         <div
           onPointerDown={(e) => {
-            e.preventDefault()
             e.stopPropagation()
             if (!hasUserInteraction) setHasUserInteraction(true)
           }}
@@ -884,6 +883,36 @@ export default function VideoPlayer({
             cursor: 'default',
           }}
         />
+      )}
+
+      {/* Audio unlock hint for autoplay-restricted browsers. */}
+      {layer === 'youtube' && !hasUserInteraction && (
+        <div
+          style={{
+            position: 'absolute',
+            left: '50%',
+            bottom: '12%',
+            transform: 'translateX(-50%)',
+            zIndex: 5,
+            pointerEvents: 'none',
+            background: 'rgba(0, 0, 0, 0.72)',
+            color: '#fff1a8',
+            border: '2px solid rgba(255, 241, 168, 0.8)',
+            borderRadius: 6,
+            padding: '8px 12px',
+            fontFamily: OSD_FONT_FAMILY,
+            fontWeight: 700,
+            letterSpacing: '0.06em',
+            textTransform: 'uppercase',
+            textShadow: '0 1px 0 rgba(0,0,0,0.8)',
+            boxShadow: '0 0 0 2px rgba(0, 0, 0, 0.35) inset',
+            fontSize: 'clamp(0.7rem, 1.6vmin, 0.95rem)',
+            whiteSpace: 'nowrap',
+          }}
+          aria-hidden
+        >
+          Press any key or click to enable audio
+        </div>
       )}
 
       {/* Australian rating bug — shown on program start, fades after 5s */}

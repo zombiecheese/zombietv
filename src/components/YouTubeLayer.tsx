@@ -63,6 +63,14 @@ export default function YouTubeLayer({ src, soundOn, volume = 100 }: Props) {
     }
   }, [post])
 
+  const unlockFromGesture = useCallback(() => {
+    // Some browsers require iframe audio changes to be issued from a live
+    // user activation callback, not only from a later React effect.
+    post('playVideo')
+    post('unMute')
+    post('setVolume', [Math.max(0, Math.min(100, volumeRef.current))])
+  }, [post])
+
   // Handshake + nudges: the player can take a moment to accept commands, so
   // re-assert play/sound a few times after each load.
   useEffect(() => {
@@ -83,6 +91,23 @@ export default function YouTubeLayer({ src, soundOn, volume = 100 }: Props) {
     soundOnRef.current = soundOn
     applySound(soundOn)
   }, [soundOn, applySound])
+
+  useEffect(() => {
+    const onGesture = () => {
+      soundOnRef.current = true
+      unlockFromGesture()
+    }
+
+    window.addEventListener('pointerdown', onGesture, true)
+    window.addEventListener('keydown', onGesture, true)
+    window.addEventListener('touchstart', onGesture, true)
+
+    return () => {
+      window.removeEventListener('pointerdown', onGesture, true)
+      window.removeEventListener('keydown', onGesture, true)
+      window.removeEventListener('touchstart', onGesture, true)
+    }
+  }, [unlockFromGesture])
 
   // Live TV volume changes.
   useEffect(() => {
