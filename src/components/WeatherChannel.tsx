@@ -480,59 +480,187 @@ function Stat({ label, value }: { label: string; value: string }) {
   )
 }
 
+// ── Real radar map ──────────────────────────────────────────────────────────
+// Slippy-map math: fractional tile coordinates for a lat/lon at a zoom level.
+const TILE_SIZE = 256
+const RADAR_ZOOM = 8 // ~150km per tile at mid-latitudes: city + surrounds
+
+function tileCoords(lat: number, lon: number, zoom: number): { fx: number; fy: number } {
+  const n = 2 ** zoom
+  const latRad = (Math.max(-85.05, Math.min(85.05, lat)) * Math.PI) / 180
+  return {
+    fx: ((lon + 180) / 360) * n,
+    fy: ((1 - Math.asinh(Math.tan(latRad)) / Math.PI) / 2) * n,
+  }
+}
+
+// Tile layer centered on (lat, lon): a grid of tiles absolutely positioned so
+// the target point sits exactly at the container's center.
+function TileLayer({ lat, lon, zoom, cols, rows, radarTs, opacity }: {
+  lat: number; lon: number; zoom: number; cols: number; rows: number
+  radarTs?: number; opacity?: number
+}) {
+  const { fx, fy } = tileCoords(lat, lon, zoom)
+  const centerX = Math.floor(fx)
+  const centerY = Math.floor(fy)
+  const offsetX = (fx - centerX) * TILE_SIZE
+  const offsetY = (fy - centerY) * TILE_SIZE
+  const max = 2 ** zoom
+  const halfC = Math.floor(cols / 2)
+  const halfR = Math.floor(rows / 2)
+
+  const tiles: React.ReactNode[] = []
+  for (let dy = -halfR; dy <= halfR; dy++) {
+    for (let dx = -halfC; dx <= halfC; dx++) {
+      const tx = ((centerX + dx) % max + max) % max // wrap around the antimeridian
+      const ty = centerY + dy
+      if (ty < 0 || ty >= max) continue
+      const src = radarTs
+        ? `/api/weather/tile?kind=radar&z=${zoom}&x=${tx}&y=${ty}&ts=${radarTs}`
+        : `/api/weather/tile?kind=base&z=${zoom}&x=${tx}&y=${ty}`
+      tiles.push(
+        <img
+          key={`${dx}:${dy}`}
+          src={src}
+          alt=""
+          draggable={false}
+          style={{
+            position: 'absolute',
+            left: `calc(50% + ${dx * TILE_SIZE - offsetX}px)`,
+            top: `calc(50% + ${dy * TILE_SIZE - offsetY}px)`,
+            width: TILE_SIZE,
+            height: TILE_SIZE,
+            imageRendering: 'auto',
+          }}
+        />,
+      )
+    }
+  }
+
+  return (
+    <div style={{ position: 'absolute', inset: 0, opacity: opacity ?? 1, transition: radarTs ? 'opacity 180ms linear' : undefined }}>
+      {tiles}
+    </div>
+  )
+}
+
+function useRadarFrames(): number[] {
+  const [frames, setFrames] = useState<number[]>([])
+  useEffect(() => {
+    let alive = true
+    const load = () => {
+      fetch('/api/weather/radar')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (!alive || !Array.isArray(data?.frames)) return
+          setFrames(data.frames.filter((t: unknown) => Number.isInteger(t)))
+        })
+        .catch(() => {})
+    }
+    load()
+    const timer = setInterval(load, 5 * 60_000)
+    return () => { alive = false; clearInterval(timer) }
+  }, [])
+  return frames
+}
+
 function RadarStylePage({ weather, config }: { weather: WeatherData; config: WeatherChannelConfig | null }) {
   const entries = weather.hourly.slice(0, 8)
   const lat = config?.latitude ?? 0
   const lon = config?.longitude ?? 0
-  const markerLeft = 50 + Math.max(-35, Math.min(35, lon / 180 * 35))
-  const markerTop = 50 - Math.max(-35, Math.min(35, lat / 90 * 35))
+  const frames = useRadarFrames()
+  const [frameIndex, setFrameIndex] = useState(0)
+
+  // Classic radar loop: step through past frames, hold on the latest.
+  useEffect(() => {
+    if (frames.length < 2) return
+    let index = 0
+    let timer: ReturnType<typeof setTimeout>
+    const step = () => {
+      index = (index + 1) % frames.length
+      setFrameIndex(index)
+      timer = setTimeout(step, index === frames.length - 1 ? 2_400 : 650)
+    }
+    timer = setTimeout(step, 650)
+    return () => clearTimeout(timer)
+  }, [frames])
+
+  const activeFrame = frames.length ? frames[Math.min(frameIndex, frames.length - 1)] : null
 
   return (
     <div>
       <div style={pageTitleStyle}>LOCAL RADAR</div>
       <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: 16 }}>
-        <div style={{ ...panelStyle, position: 'relative', height: 290, overflow: 'hidden' }}>
-          <div style={{
-            position: 'absolute',
-            inset: 0,
-            background: 'radial-gradient(circle at center, rgba(143,216,255,0.16) 0%, rgba(143,216,255,0.06) 30%, rgba(16,22,68,0.8) 100%)',
-          }} />
-          {[20, 40, 60, 80].map((p) => (
+        <div style={{ ...panelStyle, position: 'relative', height: 290, overflow: 'hidden', padding: 0 }}>
+          {/* Basemap centered on the configured coordinates */}
+          <TileLayer lat={lat} lon={lon} zoom={RADAR_ZOOM} cols={5} rows={3} />
+
+          {/* All radar frames stay mounted (preloaded); only the active one shows */}
+          {frames.map((ts, i) => (
+            <TileLayer
+              key={ts}
+              lat={lat}
+              lon={lon}
+              zoom={RADAR_ZOOM}
+              cols={5}
+              rows={3}
+              radarTs={ts}
+              opacity={i === frameIndex ? 0.78 : 0}
+            />
+          ))}
+
+          {/* Retro chrome: range rings + crosshair + station marker */}
+          {[90, 180, 270].map((px) => (
             <div
-              key={p}
+              key={px}
               style={{
                 position: 'absolute',
-                left: `${50 - p / 2}%`,
-                top: `${50 - p / 2}%`,
-                width: `${p}%`,
-                height: `${p}%`,
-                border: '1px solid rgba(143,216,255,0.35)',
+                left: '50%',
+                top: '50%',
+                width: px,
+                height: px,
+                transform: 'translate(-50%, -50%)',
+                border: '1px solid rgba(143,216,255,0.28)',
                 borderRadius: '50%',
+                pointerEvents: 'none',
               }}
             />
           ))}
-          <div style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, background: 'rgba(143,216,255,0.22)' }} />
-          <div style={{ position: 'absolute', top: '50%', left: 0, right: 0, height: 1, background: 'rgba(143,216,255,0.22)' }} />
-
+          <div style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, background: 'rgba(143,216,255,0.2)' }} />
+          <div style={{ position: 'absolute', top: '50%', left: 0, right: 0, height: 1, background: 'rgba(143,216,255,0.2)' }} />
           <div
             style={{
               position: 'absolute',
-              left: `${markerLeft}%`,
-              top: `${markerTop}%`,
+              left: '50%',
+              top: '50%',
               transform: 'translate(-50%, -50%)',
               width: 12,
               height: 12,
               borderRadius: '50%',
               background: '#ffe27a',
-              boxShadow: '0 0 0 5px rgba(255, 226, 122, 0.25)',
+              border: '2px solid #1a1030',
+              boxShadow: '0 0 0 5px rgba(255, 226, 122, 0.3)',
             }}
           />
 
-          <div style={{ position: 'absolute', left: 10, top: 8, color: '#8fd8ff', fontSize: '0.7rem', letterSpacing: '0.14em', fontWeight: 800 }}>
-            PRECIP INTENSITY
+          {/* Overlays: header strip + frame time + attribution */}
+          <div style={{ position: 'absolute', left: 0, right: 0, top: 0, padding: '6px 10px', display: 'flex', justifyContent: 'space-between', background: 'linear-gradient(180deg, rgba(10,13,56,0.85) 0%, rgba(10,13,56,0) 100%)' }}>
+            <div style={{ color: '#8fd8ff', fontSize: '0.7rem', letterSpacing: '0.14em', fontWeight: 800 }}>
+              PRECIP RADAR{frames.length > 1 ? ' LOOP' : ''}
+            </div>
+            <div style={{ color: '#ffe27a', fontSize: '0.7rem', fontFamily: 'monospace', fontWeight: 700 }}>
+              {activeFrame
+                ? `${formatTimeOfDay(activeFrame * 1000, weather.timezoneId)}${frameIndex === frames.length - 1 ? ' • LATEST' : ''}`
+                : 'NO RADAR DATA'}
+            </div>
           </div>
-          <div style={{ position: 'absolute', right: 10, top: 8, color: '#b9c2f0', fontSize: '0.7rem', fontFamily: 'monospace' }}>
-            LAT {lat.toFixed(2)}  LON {lon.toFixed(2)}
+          <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: '4px 10px', display: 'flex', justifyContent: 'space-between', background: 'linear-gradient(0deg, rgba(10,13,56,0.85) 0%, rgba(10,13,56,0) 100%)' }}>
+            <div style={{ color: '#b9c2f0', fontSize: '0.62rem', fontFamily: 'monospace' }}>
+              LAT {lat.toFixed(2)}  LON {lon.toFixed(2)}
+            </div>
+            <div style={{ color: '#6a74b8', fontSize: '0.55rem' }}>
+              © OSM © CARTO • RADAR: RAINVIEWER
+            </div>
           </div>
         </div>
 
