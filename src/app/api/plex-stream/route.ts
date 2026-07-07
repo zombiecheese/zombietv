@@ -132,7 +132,6 @@ function buildHlsStartUrl(
     // file: browsers need the HLS pipeline, and audio may need transcoding.
     directPlay: '0',
     directStream: '1',
-    directStreamAudio: '0',
     location,
     fastSeek: '1',
     session: clientSessionId,
@@ -142,16 +141,13 @@ function buildHlsStartUrl(
     'X-Plex-Device-Name': 'ZombieTV Web',
     'X-Plex-Device': 'Web Browser',
     'X-Plex-Model': 'ZombieTV',
+    // Declaring the Chrome platform makes Plex apply its built-in browser
+    // client profile: h264 video direct-streams, while AC3/EAC3/DTS audio is
+    // transcoded to AAC/MP3 (browsers cannot decode those codecs).
     'X-Plex-Platform': 'Chrome',
     'X-Plex-Client-Identifier': clientSessionId,
     'X-Plex-Session-Identifier': clientSessionId,
     'X-Plex-Token': plexToken,
-    // Browsers cannot decode AC3/EAC3/DTS audio. Declare a transcode target
-    // that direct-streams h264 video but forces audio into AAC/MP3, so Plex
-    // transcodes incompatible audio tracks instead of remuxing them through.
-    'X-Plex-Client-Profile-Extra':
-      'add-transcode-target(type=videoProfile&context=streaming&protocol=hls&container=mpegts&videoCodec=h264&audioCodec=aac,mp3&replace=true)'
-      + '+add-limitation(scope=videoAudioCodec&scopeName=*&type=match&name=audio.codec&list=aac|mp3)',
   })
   if (audioStreamId)    params.set('audioStreamID', audioStreamId)
   if (subtitleStreamId) params.set('subtitleStreamID', subtitleStreamId)
