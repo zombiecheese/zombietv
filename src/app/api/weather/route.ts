@@ -50,7 +50,7 @@ export async function GET(req: NextRequest) {
     longitude: String(longitude),
     current: 'temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,pressure_msl,is_day',
     hourly: 'temperature_2m,weather_code,precipitation_probability,precipitation,cloud_cover,visibility',
-    daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,daylight_duration,uv_index_max,moon_phase,moonrise,moonset',
+    daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,daylight_duration,uv_index_max',
     timezone: 'auto',
     forecast_days: '7',
   })

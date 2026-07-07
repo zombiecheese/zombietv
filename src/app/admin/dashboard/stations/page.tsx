@@ -704,6 +704,8 @@ export default function StationsPage() {
 
               <SlotTimeline slots={slots} />
 
+              <FillerRiskPanel warnings={fillerGapWarnings(slots, form.rules)} />
+
               <p style={{ color: '#4a7fb5', fontSize: '0.66rem', margin: '0 0 10px' }}>
                 Click a slot to expand and edit it. Each slot is either <strong style={{ color: '#a8c4e0' }}>Programming</strong> (catalog content by library mix) or <strong style={{ color: '#a8c4e0' }}>Filler</strong> (curated YouTube windows).
               </p>
@@ -1325,6 +1327,90 @@ function isNewsSlot(slot: SlotConfig): boolean {
   const key = String(slot.key ?? '').toLowerCase()
   const name = String(slot.name ?? '').toLowerCase()
   return key.includes('news') || name.includes('news')
+}
+
+// Advisory heuristics: flag slot configurations that tend to produce long
+// stretches of filler at generation time — zero/excluded library weights,
+// movie-heavy long slots (drained by the 7-day cross-channel movie
+// exclusivity), narrow genre pools, and uncovered day coverage.
+function fillerGapWarnings(slots: SlotConfig[], rules: StationRules): string[] {
+  const warnings: string[] = []
+  const DAY = 24 * 60
+  const fmtH = (mins: number) => `${(mins / 60).toFixed(1)}h`
+
+  // Uncovered coverage → generic filler
+  const segs = slots
+    .filter((s) => s.enabled)
+    .map((s) => slotBounds(s))
+    .filter((s) => s.endMins > s.startMins)
+    .sort((a, b) => a.startMins - b.startMins)
+  let prevEnd = 0
+  let gapMins = 0
+  for (const seg of segs) {
+    gapMins += Math.max(0, seg.startMins - prevEnd)
+    prevEnd = Math.max(prevEnd, seg.endMins)
+  }
+  gapMins += Math.max(0, DAY - prevEnd)
+  if (gapMins >= 60) {
+    warnings.push(`${fmtH(gapMins)} of the day has no enabled slot — that time falls back to generic filler.`)
+  }
+
+  for (const slot of slots) {
+    const { startMins, endMins } = slotBounds(slot)
+    const lenMins = Math.max(0, endMins - startMins)
+
+    if (!slot.enabled) {
+      if (lenMins >= 120) {
+        warnings.push(`${slot.name}: disabled — this ${fmtH(lenMins)} window plays filler. Enable the slot or accept the gap.`)
+      }
+      continue
+    }
+    if (slotMode(slot) === 'filler') continue
+
+    const usable = weightBreakdown(slot).filter((b) => b.weight > 0 && !slot.disabledLibraries.includes(b.lib))
+    const usableTotal = usable.reduce((sum, b) => sum + b.weight, 0)
+    if (usableTotal <= 0) {
+      warnings.push(`${slot.name}: no usable library weight (all zero or excluded) — the whole ${fmtH(lenMins)} slot becomes filler. Add library weight or switch it to curated filler windows.`)
+      continue
+    }
+
+    const movieShare = (usable.find((b) => b.lib === 'movies')?.weight ?? 0) / usableTotal
+    if (lenMins >= 180 && movieShare >= 0.8) {
+      warnings.push(`${slot.name}: ${fmtH(lenMins)} at ${Math.round(movieShare * 100)}% movies — the 7-day cross-channel movie exclusivity can drain the pool and drop to filler. Mix in tv_shows/animation weight or shorten the slot.`)
+    }
+
+    if (lenMins >= 180 && slot.allowGenres.length > 0 && slot.allowGenres.length <= 2) {
+      warnings.push(`${slot.name}: ${fmtH(lenMins)} restricted to ${slot.allowGenres.join(', ')} — a narrow genre pool can run dry mid-slot and fall back to filler.`)
+    }
+  }
+
+  // Overnight movie programming without closedown is the most common source
+  // of large late-night filler stretches in practice.
+  const overnight = slots.find((s) => s.key === 'overnight')
+  if (overnight?.enabled && slotMode(overnight) === 'programming' && !rules.overnight_closedown) {
+    const usable = weightBreakdown(overnight).filter((b) => b.weight > 0 && !overnight.disabledLibraries.includes(b.lib))
+    const total = usable.reduce((sum, b) => sum + b.weight, 0)
+    const movieShare = total > 0 ? (usable.find((b) => b.lib === 'movies')?.weight ?? 0) / total : 0
+    if (movieShare >= 0.5) {
+      warnings.push('Overnight: movie-heavy overnight programming without Overnight Close-down often ends in long filler runs — consider enabling close-down (Policies) or weighting episodic content overnight.')
+    }
+  }
+
+  return warnings
+}
+
+function FillerRiskPanel({ warnings }: { warnings: string[] }) {
+  if (!warnings.length) return null
+  return (
+    <div style={{ border: '1px solid #7a5210', backgroundColor: '#1c1406', padding: '10px 14px', marginBottom: 14 }}>
+      <div style={{ color: '#e0a030', fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.08em', marginBottom: 6 }}>
+        ⚠ FILLER GAP RISK — {warnings.length} suggestion{warnings.length > 1 ? 's' : ''}
+      </div>
+      {warnings.map((w, i) => (
+        <div key={i} style={{ color: '#d8b36a', fontSize: '0.68rem', marginBottom: 4, lineHeight: 1.45 }}>• {w}</div>
+      ))}
+    </div>
+  )
 }
 
 // Horizontal 24-hour coverage bar. Surfaces gaps (uncovered time that falls back

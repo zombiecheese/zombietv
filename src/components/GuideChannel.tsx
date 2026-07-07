@@ -2,7 +2,10 @@
 
 // GuideChannel
 // A Prevue-Guide-style scrolling programme listing channel.
-// Top half: promo area (configurable YouTube video, else station clock card).
+// Top half: promo area — auto-populated from /api/guide/promos (top YouTube
+// search result for each station's now-airing programme), cycling through
+// stations with a listing panel beside the video, always muted. Falls back to
+// the configured promo video, then a station clock card.
 // Bottom half: auto-scrolling grid of all stations' current + upcoming shows.
 // Station rules JSON: rules.guide.{promoVideoId,musicVideoId}.
 
@@ -34,7 +37,19 @@ interface GuideRow {
   entries: GuideEntry[]
 }
 
+interface PromoItem {
+  stationId: string
+  stationName: string
+  channelNumber: number
+  title: string
+  videoId: string | null
+  nextTitle: string | null
+  nextStartMs: number | null
+}
+
 const GUIDE_REFRESH_MS = 5 * 60_000
+const PROMO_REFRESH_MS = 5 * 60_000
+const PROMO_CYCLE_MS = 25_000
 const WINDOW_MINS = 90
 
 function halfHourFloor(ms: number): number {
@@ -47,24 +62,80 @@ function halfHourFloor(ms: number): number {
 export default function GuideChannel({ config }: Props) {
   const [rows, setRows] = useState<GuideRow[]>([])
   const [nowMs, setNowMs] = useState(() => Date.now())
-  const [audioOn, setAudioOn] = useState(false)
-  const audioOnRef = useRef(false)
+  const [promos, setPromos] = useState<PromoItem[]>([])
+  const [promoIndex, setPromoIndex] = useState(0)
+  const musicRef = useRef<HTMLIFrameElement | null>(null)
 
   useEffect(() => {
     const timer = setInterval(() => setNowMs(Date.now()), 1000)
     return () => clearInterval(timer)
   }, [])
 
+  // Background music: mounts muted (autoplay-policy safe) and is unmuted in
+  // place via the YouTube IFrame API — same pattern as the weather channel.
+  // Promo videos stay muted permanently; music is the only audio source.
   useEffect(() => {
-    if (audioOnRef.current) return
-    const unlock = () => { audioOnRef.current = true; setAudioOn(true) }
-    window.addEventListener('pointerdown', unlock, { once: true })
-    window.addEventListener('keydown', unlock, { once: true })
-    return () => {
-      window.removeEventListener('pointerdown', unlock)
-      window.removeEventListener('keydown', unlock)
+    if (!config?.musicVideoId) return
+
+    const post = (func: string, args: unknown[] = []) => {
+      musicRef.current?.contentWindow?.postMessage(
+        JSON.stringify({ event: 'command', func, args }),
+        'https://www.youtube.com',
+      )
     }
+    const nudge = () => {
+      musicRef.current?.contentWindow?.postMessage(
+        JSON.stringify({ event: 'listening', id: 'zombietv-guide' }),
+        'https://www.youtube.com',
+      )
+      post('playVideo')
+      post('unMute')
+      post('setVolume', [100])
+    }
+
+    const timers = [400, 1200, 2500, 5000].map((ms) => setTimeout(nudge, ms))
+    const retry = setInterval(nudge, 8_000)
+
+    window.addEventListener('pointerdown', nudge, true)
+    window.addEventListener('keydown', nudge, true)
+    window.addEventListener('touchstart', nudge, true)
+
+    return () => {
+      timers.forEach(clearTimeout)
+      clearInterval(retry)
+      window.removeEventListener('pointerdown', nudge, true)
+      window.removeEventListener('keydown', nudge, true)
+      window.removeEventListener('touchstart', nudge, true)
+    }
+  }, [config?.musicVideoId])
+
+  // Auto-populated promos: what's airing on each channel + a matching video.
+  useEffect(() => {
+    let alive = true
+
+    const load = async () => {
+      try {
+        const res = await fetch('/api/guide/promos')
+        if (!res.ok) return
+        const data: { promos?: PromoItem[] } = await res.json()
+        if (!alive || !Array.isArray(data.promos)) return
+        setPromos(data.promos.filter((p) => p.videoId))
+      } catch {
+        // keep last known promos
+      }
+    }
+
+    load()
+    const timer = setInterval(load, PROMO_REFRESH_MS)
+    return () => { alive = false; clearInterval(timer) }
   }, [])
+
+  // Cycle through the promo rotation.
+  useEffect(() => {
+    if (promos.length < 2) return
+    const timer = setInterval(() => setPromoIndex((i) => i + 1), PROMO_CYCLE_MS)
+    return () => clearInterval(timer)
+  }, [promos.length])
 
   // Load the aggregated guide payload (one request, server-side cached).
   useEffect(() => {
@@ -131,6 +202,9 @@ export default function GuideChannel({ config }: Props) {
   const fmtCol = (ms: number) =>
     new Date(ms).toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit', hour12: true })
 
+  const activePromo = promos.length > 0 ? promos[promoIndex % promos.length] : null
+  const promoVideoId = activePromo?.videoId ?? config?.promoVideoId ?? null
+
   return (
     <div
       style={{
@@ -144,34 +218,91 @@ export default function GuideChannel({ config }: Props) {
         overflow: 'hidden',
       }}
     >
-      {/* Promo area */}
-      <div style={{ height: '42%', position: 'relative', background: '#000', borderBottom: '3px solid #f2a33c' }}>
-        {config?.promoVideoId ? (
-          <iframe
-            title="guide-promo"
-            src={`https://www.youtube.com/embed/${encodeURIComponent(config.promoVideoId)}?autoplay=1&mute=${audioOn ? 0 : 1}&loop=1&playlist=${encodeURIComponent(config.promoVideoId)}&controls=0&modestbranding=1&rel=0`}
-            allow="autoplay; encrypted-media"
-            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none', pointerEvents: 'none' }}
-          />
-        ) : (
-          <div
-            style={{
-              position: 'absolute',
-              inset: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              background: 'linear-gradient(180deg, #171d5e 0%, #0a0d2e 100%)',
-              textShadow: '3px 3px 0 rgba(0,0,0,0.7)',
-            }}
-          >
-            <div style={{ fontSize: '2.4rem', fontWeight: 900, letterSpacing: '0.3em', color: '#f2c34c' }}>ZOMBIE TV</div>
-            <div style={{ fontSize: '1rem', letterSpacing: '0.4em', color: '#8f9bd8', marginTop: 6 }}>PROGRAMME GUIDE</div>
-            <div style={{ fontFamily: 'monospace', fontSize: '2rem', color: '#ffe27a', marginTop: 18 }}>{timeLabel}</div>
-            <div style={{ fontSize: '0.8rem', color: '#b9c2f0', letterSpacing: '0.2em', marginTop: 4 }}>{dateLabel.toUpperCase()}</div>
+      {/* Promo area: video box left, now/next listing panel right */}
+      <div
+        style={{
+          height: '42%',
+          position: 'relative',
+          display: 'flex',
+          background: 'linear-gradient(180deg, #2f34a8 0%, #232878 100%)',
+          borderBottom: '3px solid #f2a33c',
+        }}
+      >
+        {/* Video box */}
+        <div style={{ width: '52%', padding: '2.2% 1.6% 2.2% 2.4%', display: 'flex' }}>
+          <div style={{ position: 'relative', flex: 1, background: '#000', border: '3px solid #10123f', boxShadow: '0 4px 16px rgba(0,0,0,0.55)', overflow: 'hidden' }}>
+            {promoVideoId ? (
+              <iframe
+                key={promoVideoId}
+                title="guide-promo"
+                src={`https://www.youtube.com/embed/${encodeURIComponent(promoVideoId)}?autoplay=1&mute=1&loop=1&playlist=${encodeURIComponent(promoVideoId)}&controls=0&modestbranding=1&rel=0&iv_load_policy=3`}
+                allow="autoplay; encrypted-media"
+                style={{ position: 'absolute', inset: '-18% 0', width: '100%', height: '136%', border: 'none', pointerEvents: 'none' }}
+              />
+            ) : (
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: 'linear-gradient(180deg, #171d5e 0%, #0a0d2e 100%)',
+                  textShadow: '3px 3px 0 rgba(0,0,0,0.7)',
+                }}
+              >
+                <div style={{ fontSize: '1.6rem', fontWeight: 900, letterSpacing: '0.3em', color: '#f2c34c' }}>ZOMBIE TV</div>
+                <div style={{ fontSize: '0.75rem', letterSpacing: '0.4em', color: '#8f9bd8', marginTop: 6 }}>PROGRAMME GUIDE</div>
+                <div style={{ fontFamily: 'monospace', fontSize: '1.5rem', color: '#ffe27a', marginTop: 12 }}>{timeLabel}</div>
+              </div>
+            )}
           </div>
-        )}
+        </div>
+
+        {/* Now/next listing panel */}
+        <div
+          style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '2.6%',
+            padding: '2% 3%',
+            textAlign: 'center',
+            textShadow: '2px 2px 0 rgba(0,0,0,0.75)',
+          }}
+        >
+          {activePromo ? (
+            <>
+              <div style={{ color: '#ffe27a', fontSize: 'clamp(1rem, 2.6vmin, 1.7rem)', fontWeight: 900, letterSpacing: '0.14em' }}>
+                {activePromo.stationName.toUpperCase()}
+              </div>
+              <div style={{ color: '#f2c34c', fontSize: 'clamp(1.05rem, 3vmin, 1.9rem)', fontWeight: 900, letterSpacing: '0.1em' }}>
+                &ldquo;{activePromo.title.toUpperCase()}&rdquo;
+              </div>
+              <div style={{ color: '#fff', fontSize: 'clamp(0.85rem, 2.2vmin, 1.4rem)', fontWeight: 800, letterSpacing: '0.08em' }}>
+                Now showing
+              </div>
+              {activePromo.nextTitle && activePromo.nextStartMs && (
+                <div style={{ color: '#fff', fontSize: 'clamp(0.8rem, 2vmin, 1.25rem)', fontWeight: 800, letterSpacing: '0.06em' }}>
+                  Next showing&nbsp;&nbsp;{fmtCol(activePromo.nextStartMs)}
+                </div>
+              )}
+              <div style={{ color: '#ffe27a', fontSize: 'clamp(0.85rem, 2.2vmin, 1.4rem)', fontWeight: 900, letterSpacing: '0.1em' }}>
+                Channel {activePromo.channelNumber}
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ color: '#f2c34c', fontSize: 'clamp(1.2rem, 3.2vmin, 2rem)', fontWeight: 900, letterSpacing: '0.28em' }}>ZOMBIE TV</div>
+              <div style={{ color: '#8f9bd8', fontSize: 'clamp(0.7rem, 1.6vmin, 1rem)', letterSpacing: '0.4em' }}>PROGRAMME GUIDE</div>
+              <div style={{ fontFamily: 'monospace', fontSize: 'clamp(1.2rem, 3vmin, 1.9rem)', color: '#ffe27a' }}>{timeLabel}</div>
+              <div style={{ fontSize: 'clamp(0.65rem, 1.5vmin, 0.9rem)', color: '#b9c2f0', letterSpacing: '0.2em' }}>{dateLabel.toUpperCase()}</div>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Time header */}
@@ -251,11 +382,12 @@ export default function GuideChannel({ config }: Props) {
         <style>{`@keyframes guide-scroll { 0% { transform: translateY(0); } 100% { transform: translateY(-50%); } }`}</style>
       </div>
 
-      {/* Background music (unlocks after first interaction) */}
-      {config?.musicVideoId && audioOn && (
+      {/* Background music: mounts muted for autoplay, unmuted via IFrame API */}
+      {config?.musicVideoId && (
         <iframe
+          ref={musicRef}
           title="guide-music"
-          src={`https://www.youtube.com/embed/${encodeURIComponent(config.musicVideoId)}?autoplay=1&loop=1&playlist=${encodeURIComponent(config.musicVideoId)}&controls=0`}
+          src={`https://www.youtube.com/embed/${encodeURIComponent(config.musicVideoId)}?autoplay=1&mute=1&loop=1&playlist=${encodeURIComponent(config.musicVideoId)}&controls=0&enablejsapi=1${typeof window !== 'undefined' ? `&origin=${encodeURIComponent(window.location.origin)}` : ''}`}
           allow="autoplay"
           style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }}
         />

@@ -147,6 +147,8 @@ export default function VideoPlayer({
   const [streamUrl, setStreamUrl]       = useState('')
   const [hasUserInteraction, setHasUserInteraction] = useState(false)
   const [showRating, setShowRating]     = useState(false)
+  const [plexBuffering, setPlexBuffering] = useState(false)
+  const bufferTimerRef                  = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [currentRating, setRating]      = useState('PG')
   const [ratingCueKey, setRatingCueKey] = useState(0)
   const [debugAllowed, setDebugAllowed] = useState(DEFAULT_VHS_SETTINGS.debugOverlayEnabled)
@@ -723,7 +725,11 @@ export default function VideoPlayer({
   // ── Render ────────────────────────────────────────────────────────────────
 
   if (isLoading) {
-    return <OfflineScreen message="TUNING..." style="bluescreen" ident="" />
+    return (
+      <div style={{ position: 'relative', width: '100%', height: '100%', backgroundColor: '#000', overflow: 'hidden' }}>
+        <LoadingTestCard ident={state?.stationId ? state.stationId.toUpperCase() : 'ZOMBIE TV'} message="TUNING" />
+      </div>
+    )
   }
 
   if (layer === 'offline') {
@@ -827,6 +833,21 @@ export default function VideoPlayer({
               }
             }
             video.play().catch(() => {})
+            if (bufferTimerRef.current) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = null }
+            setPlexBuffering(false)
+          }}
+          onPlaying={() => {
+            if (bufferTimerRef.current) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = null }
+            setPlexBuffering(false)
+          }}
+          onWaiting={() => {
+            // Only surface the stand-by card for real stalls, not micro-buffers.
+            if (bufferTimerRef.current) clearTimeout(bufferTimerRef.current)
+            bufferTimerRef.current = setTimeout(() => setPlexBuffering(true), 400)
+          }}
+          onStalled={() => {
+            if (bufferTimerRef.current) clearTimeout(bufferTimerRef.current)
+            bufferTimerRef.current = setTimeout(() => setPlexBuffering(true), 400)
           }}
           onError={() => {
             // Keep player state intact; next poll/transition will refresh stream URL if needed.
@@ -858,22 +879,18 @@ export default function VideoPlayer({
 
       {/* Plex loading state while HLS URL is being fetched */}
       {!plexHlsUrl && layer === 'plex' && (
-        <div
-          style={{
-            position:   'absolute',
-            inset:      0,
-            width:      '100%',
-            height:     '100%',
-            display:    'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: '#000',
-            color:      '#fff',
-            fontSize:   '18px',
-          }}
-        >
-          LOADING PLEX STREAM...
-        </div>
+        <LoadingTestCard
+          ident={state?.stationId ? state.stationId.toUpperCase() : 'ZOMBIE TV'}
+          message="LOADING"
+        />
+      )}
+
+      {/* Buffering stand-by card while the stream stalls mid-playback */}
+      {plexHlsUrl && layer === 'plex' && plexBuffering && (
+        <LoadingTestCard
+          ident={state?.stationId ? state.stationId.toUpperCase() : 'ZOMBIE TV'}
+          message="PLEASE STAND BY"
+        />
       )}
 
       {/* YouTube layer (ads, filler, music) — only mounted when active to stop background audio */}
@@ -1189,6 +1206,37 @@ export default function VideoPlayer({
 }
 
 // ── Offline / test-card screen ────────────────────────────────────────────────
+
+// Loading / buffering: test card with a stand-by banner. Rendered inside the
+// player's positioned container so it covers whatever layer is stalling.
+function LoadingTestCard({ ident, message }: { ident: string; message: string }) {
+  return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 6, backgroundColor: '#000', overflow: 'hidden' }}>
+      <TestCardScreen ident={ident} />
+      <div
+        style={{
+          position: 'absolute',
+          left: '50%',
+          bottom: '7%',
+          transform: 'translateX(-50%)',
+          background: 'rgba(0,0,0,0.78)',
+          border: '2px solid rgba(255,255,255,0.75)',
+          padding: '8px 20px',
+          fontFamily: OSD_FONT_FAMILY,
+          color: '#fff',
+          fontWeight: 700,
+          letterSpacing: '0.3em',
+          whiteSpace: 'nowrap',
+          fontSize: 'clamp(0.8rem, 2.2vmin, 1.3rem)',
+          animation: 'standby-blink 1.6s steps(1) infinite',
+        }}
+      >
+        {message}
+      </div>
+      <style>{`@keyframes standby-blink { 0%, 74% { opacity: 1; } 75%, 100% { opacity: 0.35; } }`}</style>
+    </div>
+  )
+}
 
 function OfflineScreen({ message, graphicUrl, style = 'testcard', ident = '' }: {
   message: string

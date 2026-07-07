@@ -190,8 +190,7 @@ export default function WeatherChannel({ config }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [page, setPage] = useState(0)
   const [nowMs, setNowMs] = useState(() => Date.now())
-  const [audioOn, setAudioOn] = useState(false)
-  const audioOnRef = useRef(false)
+  const musicRef = useRef<HTMLIFrameElement | null>(null)
 
   const hasLocation = Boolean(
     config
@@ -228,17 +227,46 @@ export default function WeatherChannel({ config }: Props) {
     return () => clearInterval(timer)
   }, [])
 
-  // Background music unlocks after the first interaction (autoplay policy).
+  // Background music: the iframe mounts muted (autoplay-policy safe) and is
+  // unmuted in place via the YouTube IFrame API. If the viewer has already
+  // interacted with the page (e.g. changed channel), the unmute succeeds
+  // immediately; otherwise the gesture listeners below pick it up.
   useEffect(() => {
-    if (audioOnRef.current) return
-    const unlock = () => { audioOnRef.current = true; setAudioOn(true) }
-    window.addEventListener('pointerdown', unlock, { once: true })
-    window.addEventListener('keydown', unlock, { once: true })
-    return () => {
-      window.removeEventListener('pointerdown', unlock)
-      window.removeEventListener('keydown', unlock)
+    if (!config?.musicVideoId) return
+
+    const post = (func: string, args: unknown[] = []) => {
+      musicRef.current?.contentWindow?.postMessage(
+        JSON.stringify({ event: 'command', func, args }),
+        'https://www.youtube.com',
+      )
     }
-  }, [])
+    const nudge = () => {
+      musicRef.current?.contentWindow?.postMessage(
+        JSON.stringify({ event: 'listening', id: 'zombietv-weather' }),
+        'https://www.youtube.com',
+      )
+      post('playVideo')
+      post('unMute')
+      post('setVolume', [100])
+    }
+
+    // Re-assert a few times while the player boots, then keep trying at a
+    // slow cadence in case autoplay unmute was initially blocked.
+    const timers = [400, 1200, 2500, 5000].map((ms) => setTimeout(nudge, ms))
+    const retry = setInterval(nudge, 8_000)
+
+    window.addEventListener('pointerdown', nudge, true)
+    window.addEventListener('keydown', nudge, true)
+    window.addEventListener('touchstart', nudge, true)
+
+    return () => {
+      timers.forEach(clearTimeout)
+      clearInterval(retry)
+      window.removeEventListener('pointerdown', nudge, true)
+      window.removeEventListener('keydown', nudge, true)
+      window.removeEventListener('touchstart', nudge, true)
+    }
+  }, [config?.musicVideoId])
 
   const activeTimeZone = weather?.timezoneId
 
@@ -369,11 +397,12 @@ export default function WeatherChannel({ config }: Props) {
         <style>{`@keyframes weather-ticker { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }`}</style>
       </div>
 
-      {/* Background music (unlocks after first interaction) */}
-      {config?.musicVideoId && audioOn && (
+      {/* Background music: mounts muted for autoplay, unmuted via IFrame API */}
+      {config?.musicVideoId && (
         <iframe
+          ref={musicRef}
           title="weather-music"
-          src={`https://www.youtube.com/embed/${encodeURIComponent(config.musicVideoId)}?autoplay=1&loop=1&playlist=${encodeURIComponent(config.musicVideoId)}&controls=0&modestbranding=1`}
+          src={`https://www.youtube.com/embed/${encodeURIComponent(config.musicVideoId)}?autoplay=1&mute=1&loop=1&playlist=${encodeURIComponent(config.musicVideoId)}&controls=0&modestbranding=1&enablejsapi=1${typeof window !== 'undefined' ? `&origin=${encodeURIComponent(window.location.origin)}` : ''}`}
           allow="autoplay"
           style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }}
         />

@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import AdminShell from '@/components/admin/AdminShell'
 import { DEFAULT_VHS_SETTINGS, type VHSSettings } from '@/lib/vhs-defaults'
 
-type NumericVHSKey = Exclude<keyof VHSSettings, 'debugOverlayEnabled' | 'syncWobbleJumpsEnabled' | 'overscanSoftnessEnabled' | 'fourByThreeEnabled' | 'compositeArtifactsEnabled' | 'phosphorBloomEnabled' | 'tvSpeakerAudioEnabled' | 'channelChangeSoundEnabled' | 'offAirStyle'>
+type NumericVHSKey = Exclude<keyof VHSSettings, 'debugOverlayEnabled' | 'syncWobbleJumpsEnabled' | 'overscanSoftnessEnabled' | 'fourByThreeEnabled' | 'compositeArtifactsEnabled' | 'phosphorBloomEnabled' | 'shadowMaskEnabled' | 'tvSpeakerAudioEnabled' | 'channelChangeSoundEnabled' | 'offAirStyle'>
 
 const KNOBS: Array<{ key: NumericVHSKey; label: string; desc: string }> = [
   { key: 'scanlines',           label: 'Scanlines',            desc: 'Horizontal scan-line density and opacity.' },
@@ -275,6 +275,7 @@ export default function VHSPage() {
             { key: 'fourByThreeEnabled' as const, label: '4:3 Tube Mode', desc: 'Pillarboxes the picture into a centred 4:3 CRT bezel — films letterbox inside 4:3, exactly like broadcast.' },
             { key: 'compositeArtifactsEnabled' as const, label: 'Composite Video Artifacts', desc: 'NTSC/PAL dot crawl shimmer and chroma stripe bleed on the picture.' },
             { key: 'phosphorBloomEnabled' as const, label: 'Phosphor / Glass Sheen', desc: 'Faint bloom and a diagonal glass reflection that reads as a lit CRT face.' },
+            { key: 'shadowMaskEnabled' as const, label: 'Shadow Mask / Phosphor Triads', desc: 'Fine vertical RGB phosphor stripe structure over the picture — the classic aperture-grille look.' },
             { key: 'tvSpeakerAudioEnabled' as const, label: 'TV Speaker Audio', desc: 'Routes programme audio through a mono, band-passed "3-inch speaker" chain.' },
             { key: 'channelChangeSoundEnabled' as const, label: 'Tuning Sound Effects', desc: 'Click and static blip when changing channels.' },
           ]).map(({ key, label, desc }) => (

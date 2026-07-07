@@ -21,6 +21,7 @@ export const BOOLEAN_VHS_KEYS = [
   'fourByThreeEnabled',
   'compositeArtifactsEnabled',
   'phosphorBloomEnabled',
+  'shadowMaskEnabled',
   'tvSpeakerAudioEnabled',
   'channelChangeSoundEnabled',
 ] as const

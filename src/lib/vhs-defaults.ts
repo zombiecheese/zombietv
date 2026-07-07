@@ -20,6 +20,7 @@ export interface VHSSettings {
   fourByThreeEnabled:       boolean   // pillarbox the picture into a 4:3 tube
   compositeArtifactsEnabled: boolean  // dot crawl + chroma bleed
   phosphorBloomEnabled:     boolean   // bright-area glow
+  shadowMaskEnabled:        boolean   // RGB phosphor triad stripe pattern
   tvSpeakerAudioEnabled:    boolean   // mono band-passed "3-inch speaker" audio
   channelChangeSoundEnabled: boolean  // click + static blip when tuning
   offAirStyle:              OffAirStyle // dead-channel look
@@ -41,6 +42,7 @@ export const DEFAULT_VHS_SETTINGS: VHSSettings = {
   fourByThreeEnabled:       false,
   compositeArtifactsEnabled: true,
   phosphorBloomEnabled:     true,
+  shadowMaskEnabled:        true,
   tvSpeakerAudioEnabled:    false,
   channelChangeSoundEnabled: true,
   offAirStyle:              'testcard',
