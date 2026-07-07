@@ -180,7 +180,6 @@ export default function VideoPlayer({
   const streamVideoRef                  = useRef<HTMLVideoElement | null>(null)
   const streamHlsRef                    = useRef<Hls | null>(null)
   const clientSessionIdRef              = useRef(`zombietv-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`)
-  const isPageVisibleRef                = useRef(true)
   // Refs so applyState never needs to depend on derived state, avoiding reload loops
   const youtubeSrcRef                   = useRef<string>('')
   const hasUserInteractionRef           = useRef(false)
@@ -305,15 +304,6 @@ export default function VideoPlayer({
       setPlexHlsUrl('')
       if (playbackSegmentChanged || !streamUrl) setStreamUrl(s.contentId)
       setLayer('stream')
-      return
-    }
-
-    if (!isPageVisibleRef.current) {
-      if (s.contentSource !== 'plex') {
-        setYoutubeSrc('')
-        youtubeSrcRef.current = ''
-        setLayer('offline')
-      }
       return
     }
 
@@ -498,61 +488,68 @@ export default function VideoPlayer({
   }, [state, applyState, scheduleTransition])
 
   useEffect(() => {
-    const stopYoutubeIfNeeded = () => {
-      if (layer !== 'youtube') return
-      setYoutubeSrc('')
-      youtubeSrcRef.current = ''
-      setLayer('offline')
-    }
-
+    // Playback is deliberately NOT interrupted while the tab is hidden —
+    // audio keeps running like a real TV in another room. This handler only
+    // repairs playback on return for the cases where the browser throttled
+    // background media into a stall (common for muted tabs after ~5 min:
+    // hls.js timers drop to one tick per minute and buffering dies, and Plex
+    // may reap the idle transcode session, which no seek can recover).
     const handleVisibilityChange = () => {
-      const visible = document.visibilityState !== 'hidden'
-      isPageVisibleRef.current = visible
+      if (document.visibilityState === 'hidden') return
+      if (!state) return
 
-      if (!visible) {
-        stopYoutubeIfNeeded()
+      // Will applyState already rebuild the player? (segment changed while
+      // hidden). Check BEFORE calling it — applyState updates these refs.
+      const segmentChanged =
+        state.contentId !== prevContentIdRef.current ||
+        state.contentSource !== prevSourceRef.current ||
+        state.stationId !== prevStationIdRef.current ||
+        state.slotStartMs !== prevSlotStartMsRef.current
+
+      applyState(state)
+      if (segmentChanged) return
+
+      if (state.contentSource === 'plex' && state.contentId && layer === 'plex') {
+        const video = videoRef.current
+        const correctedNow = Date.now() + clockOffsetMs
+        const liveOffsetMs = Math.max(0, state.startOffsetMs + (correctedNow - state.serverTimeMs))
+        const driftMs = video ? Math.abs(video.currentTime * 1000 - liveOffsetMs) : Infinity
+        const stalled = !video || video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA
+
+        if (stalled || driftMs > 8_000) {
+          // Retune with a fresh stream URL at the live broadcast offset,
+          // exactly like a channel change.
+          setPlexOffsetMs(liveOffsetMs)
+          setPlexHlsUrl(buildPlexStreamUrl(state.contentId, liveOffsetMs, selectedAudio, selectedSub))
+        } else if (video && video.paused) {
+          video.play().catch(() => {})
+        }
         return
       }
 
-      if (state) applyState(state)
-
-      // Background tabs pause/throttle media playback. Snap the native video
-      // back to broadcast time and resume it (muted autoplay is always
-      // permitted, so play() is safe even before the first interaction).
-      if (state && state.contentSource === 'plex') {
-        const video = videoRef.current
-        if (video) {
-          const correctedNow = Date.now() + clockOffsetMs
-          const liveOffsetMs = Math.max(0, state.startOffsetMs + (correctedNow - state.serverTimeMs))
-          const driftMs = Math.abs(video.currentTime * 1000 - liveOffsetMs)
-          if (
-            driftMs > 5_000 &&
-            Number.isFinite(video.duration) &&
-            liveOffsetMs / 1000 < video.duration
-          ) {
-            video.currentTime = liveOffsetMs / 1000
+      // Live stream channels: kick the loader and rejoin the live edge only
+      // when the element actually stopped.
+      if (layer === 'stream') {
+        const streamVideo = streamVideoRef.current
+        const streamStalled = !streamVideo || streamVideo.paused || streamVideo.readyState < HTMLMediaElement.HAVE_FUTURE_DATA
+        if (!streamStalled) return
+        if (streamHlsRef.current) {
+          streamHlsRef.current.startLoad()
+          const livePos = streamHlsRef.current.liveSyncPosition
+          if (streamVideo && typeof livePos === 'number' && Number.isFinite(livePos)) {
+            streamVideo.currentTime = livePos
           }
-          if (video.paused) video.play().catch(() => {})
         }
+        if (streamVideo && streamVideo.paused) streamVideo.play().catch(() => {})
       }
-
-      const streamVideo = streamVideoRef.current
-      if (streamVideo && streamVideo.paused) streamVideo.play().catch(() => {})
-    }
-
-    const handlePageHide = () => {
-      isPageVisibleRef.current = false
-      stopYoutubeIfNeeded()
     }
 
     document.addEventListener('visibilitychange', handleVisibilityChange)
-    window.addEventListener('pagehide', handlePageHide)
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
-      window.removeEventListener('pagehide', handlePageHide)
     }
-  }, [layer, state, applyState, clockOffsetMs])
+  }, [layer, state, applyState, clockOffsetMs, buildPlexStreamUrl, selectedAudio, selectedSub])
 
   useEffect(() => {
     if (layer !== 'plex' || !plexHlsUrl) return

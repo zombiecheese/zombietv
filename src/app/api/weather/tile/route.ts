@@ -14,7 +14,8 @@ const BASE_TTL_MS = 24 * 60 * 60_000
 const RADAR_TTL_MS = 60 * 60_000
 const CACHE_MAX_ENTRIES = 600
 const MIN_ZOOM = 3
-const MAX_ZOOM = 11
+const MAX_ZOOM_BASE = 11
+const MAX_ZOOM_RADAR = 7 // RainViewer hard limit — higher zooms return an error tile
 
 const cache = new Map<string, { expiresAt: number; body: Buffer; contentType: string }>()
 
@@ -40,7 +41,8 @@ export async function GET(req: NextRequest) {
   if (kind !== 'base' && kind !== 'radar') {
     return NextResponse.json({ error: 'kind must be base or radar' }, { status: 400 })
   }
-  if (!Number.isInteger(z) || z < MIN_ZOOM || z > MAX_ZOOM) {
+  const maxZoom = kind === 'radar' ? MAX_ZOOM_RADAR : MAX_ZOOM_BASE
+  if (!Number.isInteger(z) || z < MIN_ZOOM || z > maxZoom) {
     return NextResponse.json({ error: 'Invalid zoom' }, { status: 400 })
   }
   const max = 2 ** z

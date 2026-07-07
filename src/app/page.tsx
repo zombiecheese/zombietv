@@ -386,6 +386,77 @@ export default function Home() {
   const mobileBottomOffset = isMobileViewport ? (epgMinimized ? 72 : 10) : 0
   const epgBottom: number | string = isMobileViewport ? mobileBottomOffset : nowBarHeight
 
+  const tubeMode = vhsSettings.fourByThreeEnabled && !isMobileViewport
+
+  // Everything drawn on the "screen": picture + EPG + NowBar + OSD + power/
+  // tuning effects. In 4:3 tube mode this whole stack renders inside the
+  // bezel container, whose transform makes it the containing block for the
+  // fixed-positioned chrome — so the entire view fits the tube.
+  const screenContent = (
+    <>
+      <VideoPlayer
+        state={state}
+        clockOffsetMs={clockOffsetMs}
+        isLoading={isLoading}
+        volume={volume}
+      />
+
+      {/* ── EPG panel overlay (on top of video) ── */}
+      <div style={{
+        position:   'fixed',
+        bottom:     epgBottom,
+        left:       0,
+        right:      0,
+        height:     epgHeight,
+        maxHeight:  isMobileViewport ? 'calc(100vh - env(safe-area-inset-top) - 12px)' : undefined,
+        zIndex:     100,
+        borderTop:  '1px solid #1e3a5f',
+      }}>
+        <EPG
+          activeStation={station}
+          onSelectStation={handleSelectStation}
+          clockOffsetMs={clockOffsetMs}
+          compact={epgMinimized}
+          onToggleCompact={() => setEpgMinimized((v) => !v)}
+        />
+      </div>
+
+      {/* ── Now Bar — OSD-style auto-hide (always visible while EPG is expanded) ── */}
+      {!isMobileViewport && (
+        <NowBar
+          state={state}
+          clockOffsetMs={clockOffsetMs}
+          isLoggedIn={session.isLoggedIn}
+          onLoginClick={handleLoginClick}
+          onLogoutClick={handleLogoutClick}
+          visible={!epgMinimized || osdActive}
+        />
+      )}
+
+      {/* ── 1990s TV on-screen display ── */}
+      <TvOsd
+        state={state}
+        channelNumber={Math.max(1, stationOrder.indexOf(station) + 1)}
+        stationLabel={stationNames[station] ?? station.toUpperCase()}
+        digitBuffer={digitBuffer}
+        osdVisible={osdActive && epgMinimized}
+        volume={volume}
+        volumeVisible={volumeVisible}
+        clockOffsetMs={clockOffsetMs}
+      />
+
+      {/* ── Channel change tuning transition ── */}
+      <ChannelChange
+        active={staticActive}
+        onComplete={handleStaticComplete}
+        mode="roll"
+      />
+
+      {/* ── CRT power-on/off ── */}
+      <CrtPower />
+    </>
+  )
+
   return (
     <div style={{
       position:   'fixed',
@@ -489,7 +560,7 @@ export default function Home() {
         </div>
       ) : (
         <>
-          {/* ── Video player — fills entire screen (EPG overlays on top) ── */}
+          {/* ── Screen area — picture + all viewer chrome ── */}
           <div style={{
             flex:     1,
             overflow: 'hidden',
@@ -500,8 +571,12 @@ export default function Home() {
             justifyContent: 'center',
             backgroundColor: '#000',
           }}>
-            {vhsSettings.fourByThreeEnabled && !isMobileViewport ? (
-              /* 4:3 tube mode: pillarboxed picture inside a CRT bezel */
+            {tubeMode ? (
+              /* 4:3 tube mode: the whole view (video, EPG, NowBar, OSD,
+                 tuning/power effects) lives inside the CRT bezel. The
+                 translateZ(0) transform makes this element the containing
+                 block for the fixed-positioned chrome, so everything anchors
+                 to the tube instead of the browser viewport. */
               <div style={{
                 position: 'relative',
                 height: '100%',
@@ -509,82 +584,19 @@ export default function Home() {
                 maxWidth: '100%',
                 borderRadius: '2.2% / 3%',
                 overflow: 'hidden',
+                transform: 'translateZ(0)',
                 boxShadow: 'inset 0 0 60px rgba(0,0,0,0.55), 0 0 0 2px #181818, 0 0 0 14px #0c0c0c, 0 0 40px rgba(0,0,0,0.9)',
               }}>
-                <VideoPlayer
-                  state={state}
-                  clockOffsetMs={clockOffsetMs}
-                  isLoading={isLoading}
-                  volume={volume}
-                />
+                {screenContent}
               </div>
             ) : (
               <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
-                <VideoPlayer
-                  state={state}
-                  clockOffsetMs={clockOffsetMs}
-                  isLoading={isLoading}
-                  volume={volume}
-                />
+                {screenContent}
               </div>
             )}
           </div>
-
-          {/* ── EPG panel overlay (on top of video) ── */}
-          <div style={{
-            position:   'fixed',
-            bottom:     epgBottom,
-            left:       0,
-            right:      0,
-            height:     epgHeight,
-            maxHeight:  isMobileViewport ? 'calc(100vh - env(safe-area-inset-top) - 12px)' : undefined,
-            zIndex:     100,
-            borderTop:  '1px solid #1e3a5f',
-          }}>
-            <EPG
-              activeStation={station}
-              onSelectStation={handleSelectStation}
-              clockOffsetMs={clockOffsetMs}
-              compact={epgMinimized}
-              onToggleCompact={() => setEpgMinimized((v) => !v)}
-            />
-          </div>
-
-          {/* ── Now Bar — OSD-style auto-hide (always visible while EPG is expanded) ── */}
-          {!isMobileViewport && (
-            <NowBar
-              state={state}
-              clockOffsetMs={clockOffsetMs}
-              isLoggedIn={session.isLoggedIn}
-              onLoginClick={handleLoginClick}
-              onLogoutClick={handleLogoutClick}
-              visible={!epgMinimized || osdActive}
-            />
-          )}
-
-          {/* ── 1990s TV on-screen display ── */}
-          <TvOsd
-            state={state}
-            channelNumber={Math.max(1, stationOrder.indexOf(station) + 1)}
-            stationLabel={stationNames[station] ?? station.toUpperCase()}
-            digitBuffer={digitBuffer}
-            osdVisible={osdActive && epgMinimized}
-            volume={volume}
-            volumeVisible={volumeVisible}
-            clockOffsetMs={clockOffsetMs}
-          />
-
-          {/* ── CRT power-on/off ── */}
-          <CrtPower />
         </>
       )}
-
-      {/* ── Channel change tuning transition ── */}
-      <ChannelChange
-        active={staticActive}
-        onComplete={handleStaticComplete}
-        mode="roll"
-      />
 
     </div>
   )

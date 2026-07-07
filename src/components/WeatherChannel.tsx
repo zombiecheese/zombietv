@@ -483,7 +483,8 @@ function Stat({ label, value }: { label: string; value: string }) {
 // ── Real radar map ──────────────────────────────────────────────────────────
 // Slippy-map math: fractional tile coordinates for a lat/lon at a zoom level.
 const TILE_SIZE = 256
-const RADAR_ZOOM = 8 // ~150km per tile at mid-latitudes: city + surrounds
+const BASEMAP_ZOOM = 8    // ~150km per tile at mid-latitudes: city + surrounds
+const RADAR_DATA_ZOOM = 7 // RainViewer's maximum tile zoom — overzoomed ×2 to match
 
 function tileCoords(lat: number, lon: number, zoom: number): { fx: number; fy: number } {
   const n = 2 ** zoom
@@ -495,16 +496,18 @@ function tileCoords(lat: number, lon: number, zoom: number): { fx: number; fy: n
 }
 
 // Tile layer centered on (lat, lon): a grid of tiles absolutely positioned so
-// the target point sits exactly at the container's center.
-function TileLayer({ lat, lon, zoom, cols, rows, radarTs, opacity }: {
+// the target point sits exactly at the container's center. `scale` upscales
+// tiles fetched at a coarser zoom onto a finer display zoom (overzoom).
+function TileLayer({ lat, lon, zoom, cols, rows, radarTs, opacity, scale = 1 }: {
   lat: number; lon: number; zoom: number; cols: number; rows: number
-  radarTs?: number; opacity?: number
+  radarTs?: number; opacity?: number; scale?: number
 }) {
   const { fx, fy } = tileCoords(lat, lon, zoom)
   const centerX = Math.floor(fx)
   const centerY = Math.floor(fy)
-  const offsetX = (fx - centerX) * TILE_SIZE
-  const offsetY = (fy - centerY) * TILE_SIZE
+  const size = TILE_SIZE * scale
+  const offsetX = (fx - centerX) * size
+  const offsetY = (fy - centerY) * size
   const max = 2 ** zoom
   const halfC = Math.floor(cols / 2)
   const halfR = Math.floor(rows / 2)
@@ -526,10 +529,10 @@ function TileLayer({ lat, lon, zoom, cols, rows, radarTs, opacity }: {
           draggable={false}
           style={{
             position: 'absolute',
-            left: `calc(50% + ${dx * TILE_SIZE - offsetX}px)`,
-            top: `calc(50% + ${dy * TILE_SIZE - offsetY}px)`,
-            width: TILE_SIZE,
-            height: TILE_SIZE,
+            left: `calc(50% + ${dx * size - offsetX}px)`,
+            top: `calc(50% + ${dy * size - offsetY}px)`,
+            width: size,
+            height: size,
             imageRendering: 'auto',
           }}
         />,
@@ -593,16 +596,19 @@ function RadarStylePage({ weather, config }: { weather: WeatherData; config: Wea
       <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: 16 }}>
         <div style={{ ...panelStyle, position: 'relative', height: 290, overflow: 'hidden', padding: 0 }}>
           {/* Basemap centered on the configured coordinates */}
-          <TileLayer lat={lat} lon={lon} zoom={RADAR_ZOOM} cols={5} rows={3} />
+          <TileLayer lat={lat} lon={lon} zoom={BASEMAP_ZOOM} cols={5} rows={3} />
 
-          {/* All radar frames stay mounted (preloaded); only the active one shows */}
+          {/* All radar frames stay mounted (preloaded); only the active one
+              shows. RainViewer tiles max out at zoom 7, so they are fetched
+              coarser and upscaled ×2 to line up with the zoom-8 basemap. */}
           {frames.map((ts, i) => (
             <TileLayer
               key={ts}
               lat={lat}
               lon={lon}
-              zoom={RADAR_ZOOM}
-              cols={5}
+              zoom={RADAR_DATA_ZOOM}
+              scale={2 ** (BASEMAP_ZOOM - RADAR_DATA_ZOOM)}
+              cols={3}
               rows={3}
               radarTs={ts}
               opacity={i === frameIndex ? 0.78 : 0}

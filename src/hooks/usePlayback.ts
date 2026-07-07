@@ -174,9 +174,9 @@ export function usePlayback(stationId: string, enabled = true): UsePlaybackResul
     const onVisibilityChange = () => {
       if (!active) return
       if (document.visibilityState === 'hidden') {
-        // Streaming to a hidden tab wastes a server loop — drop to nothing;
-        // we resync on the next visibility change.
-        stopSse()
+        // Keep SSE connected while hidden: playback continues in background
+        // tabs, and SSE pushes are the only transport that fires transitions
+        // on time there (background setTimeout chains are throttled).
         return
       }
       if (!sseFailed && !eventSource) {
