@@ -356,7 +356,9 @@ export default function VideoPlayer({
     if (ytQueue.length) {
       const desiredStartSecs = Math.floor(offsetMs / 1000)
 
-      if (playbackSegmentChanged || queueChanged) {
+      // Rebuild when the segment/queue changed, or when the embed was torn
+      // down while the tab was hidden (src cleared but refs left intact).
+      if (playbackSegmentChanged || queueChanged || !youtubeSrcRef.current) {
         const newSrc = youtubeEmbedUrl(ytQueue, desiredStartSecs)
         youtubeSrcRef.current = newSrc
         setYoutubeSrc(newSrc)
@@ -513,6 +515,29 @@ export default function VideoPlayer({
       }
 
       if (state) applyState(state)
+
+      // Background tabs pause/throttle media playback. Snap the native video
+      // back to broadcast time and resume it (muted autoplay is always
+      // permitted, so play() is safe even before the first interaction).
+      if (state && state.contentSource === 'plex') {
+        const video = videoRef.current
+        if (video) {
+          const correctedNow = Date.now() + clockOffsetMs
+          const liveOffsetMs = Math.max(0, state.startOffsetMs + (correctedNow - state.serverTimeMs))
+          const driftMs = Math.abs(video.currentTime * 1000 - liveOffsetMs)
+          if (
+            driftMs > 5_000 &&
+            Number.isFinite(video.duration) &&
+            liveOffsetMs / 1000 < video.duration
+          ) {
+            video.currentTime = liveOffsetMs / 1000
+          }
+          if (video.paused) video.play().catch(() => {})
+        }
+      }
+
+      const streamVideo = streamVideoRef.current
+      if (streamVideo && streamVideo.paused) streamVideo.play().catch(() => {})
     }
 
     const handlePageHide = () => {
@@ -527,7 +552,7 @@ export default function VideoPlayer({
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       window.removeEventListener('pagehide', handlePageHide)
     }
-  }, [layer, state, applyState])
+  }, [layer, state, applyState, clockOffsetMs])
 
   useEffect(() => {
     if (layer !== 'plex' || !plexHlsUrl) return
