@@ -2063,7 +2063,13 @@ export async function runScheduler(
                     adBreaks:      fallbackAdBreaks.length ? toJson(fallbackAdBreaks) : null,
                     fillerId:      fillerPools.music ?? fillerPools.ads ?? null,
                     fillerDuration: null,
-                    metadata:      toJson({ blockName: block.name, title: 'Filler', reason: 'placement_safety_fallback', showInEpg: false }),
+                    metadata:      toJson({
+                      blockName: block.name,
+                      title: 'Late Night Programming',
+                      reason: 'placement_safety_fallback',
+                      showInEpg: true,
+                      fillerCategories: ['infomercial', 'ads', 'music'],
+                    }),
                   },
                 })
                 slotStart = new Date(blockEnd)

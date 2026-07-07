@@ -91,7 +91,10 @@ export async function buildEpgSlots(stationId: string, from: Date, to: Date): Pr
     const adBreakMins = adBreaks.reduce((sum, ab) => sum + Number(ab?.durationMins ?? 0), 0)
     const explicitShowInEpg = typeof meta.showInEpg === 'boolean' ? meta.showInEpg : null
     const isAutoYoutubeFill = slot.contentSource === 'youtube' && !slot.isOverride
-    const showInEpg = explicitShowInEpg ?? !isAutoYoutubeFill
+    // Placement-safety fallback windows (usually overnight) are listed as their
+    // own programme instead of visually stretching the previous title.
+    const isSafetyFallback = String(meta.reason ?? '') === 'placement_safety_fallback'
+    const showInEpg = isSafetyFallback ? true : (explicitShowInEpg ?? !isAutoYoutubeFill)
 
     const slotStartMs = slot.startTime.getTime()
     const slotEndRawMs = slotStartMs + (slot.durationMins + adBreakMins + (slot.fillerDuration ?? 0)) * 60_000
@@ -119,6 +122,7 @@ export async function buildEpgSlots(stationId: string, from: Date, to: Date): Pr
 
     const isLiveNewsSlot = String(meta.reason ?? '') === 'news_live_window'
     const liveTitle = `LIVE: ${stationId.toUpperCase()} News`
+    const fallbackTitle = !meta.title || meta.title === 'Filler' ? 'Late Night Programming' : String(meta.title)
 
     // Main scheduled content segment.
     epgSlots.push({
@@ -126,7 +130,7 @@ export async function buildEpgSlots(stationId: string, from: Date, to: Date): Pr
       startTime:     slot.startTime.toISOString(),
       endTime:       new Date(slotEndMs).toISOString(),
       durationMins:  effectiveDurationMins,
-      title:         isLiveNewsSlot ? liveTitle : (meta.title ?? slot.showTitle ?? slot.contentSource ?? 'Programme'),
+      title:         isLiveNewsSlot ? liveTitle : isSafetyFallback ? fallbackTitle : (meta.title ?? slot.showTitle ?? slot.contentSource ?? 'Programme'),
       showTitle:     isLiveNewsSlot ? liveTitle : slot.showTitle,
       seasonNumber:  slot.seasonNumber,
       episodeNumber: slot.episodeNumber,

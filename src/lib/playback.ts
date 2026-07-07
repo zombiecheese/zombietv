@@ -439,6 +439,10 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
   const closeBumperId = (slotMetadata.closeBumperId as string | null) ?? null
   const isYoutubeSlot = activeSlot.contentSource === 'youtube'
   const hasWindowBumpers = isYoutubeSlot && !inAdBreak && Boolean(openBumperId || closeBumperId)
+  // YouTube slots with no pinned video (e.g. placement-safety fallback windows)
+  // queue from the shared filler pool across the whole slot, instead of dead
+  // air when the station has no fillerId configured.
+  const isPoolFillerSlot = isYoutubeSlot && !inAdBreak && !hasWindowBumpers && !activeSlot.contentId
 
   const youtubeSelection = await selectYoutubeSelection({
     stationId,
@@ -453,7 +457,9 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
     fallbackId: inAdBreak ? (fillerPools.ads ?? null) : (activeSlot.fillerId ?? fillerPools.music ?? null),
     // Between-show padding filler should use ad-like categories only.
     fillerCategories: inFiller ? ['ads', 'music', 'infomercial'] : fillerCategories,
-    windowSegment: hasWindowBumpers ? { startMs: slotStartMs, durationMins: activeSlot.durationMins } : null,
+    windowSegment: hasWindowBumpers || isPoolFillerSlot
+      ? { startMs: slotStartMs, durationMins: activeSlot.durationMins }
+      : null,
     openBumperId: hasWindowBumpers ? openBumperId : null,
     closeBumperId: hasWindowBumpers ? closeBumperId : null,
     hintCtx,
@@ -547,7 +553,7 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
       ? (youtubeSelection?.currentVideoId ?? activeSlot.fillerId ?? fillerPools.music ?? null)
       : inAdBreak
         ? (youtubeSelection?.currentVideoId ?? fillerPools.ads ?? null)
-        : hasWindowBumpers
+        : hasWindowBumpers || isPoolFillerSlot
           ? (youtubeSelection?.currentVideoId ?? activeSlot.fillerId ?? fillerPools.music ?? null)
           : activeSlot.contentId,
 
@@ -557,7 +563,7 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
     episodeNumber: activeSlot.episodeNumber,
     contentRating: inFiller || inAdBreak ? null : activeContentRating,
 
-    startOffsetMs: inAdBreak || inFiller || hasWindowBumpers ? youtubeStartOffsetMs : startOffsetMs,
+    startOffsetMs: inAdBreak || inFiller || hasWindowBumpers || isPoolFillerSlot ? youtubeStartOffsetMs : startOffsetMs,
     slotStartMs,
     slotEndMs,
 

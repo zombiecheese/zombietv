@@ -76,7 +76,9 @@ export default function Home() {
   // Restore persisted volume.
   useEffect(() => {
     try {
-      const stored = Number(window.localStorage.getItem('zombietv-volume'))
+      const raw = window.localStorage.getItem('zombietv-volume')
+      if (raw === null || raw === '') return // no stored value — keep default (100)
+      const stored = Number(raw)
       if (Number.isFinite(stored) && stored >= 0 && stored <= 100) setVolume(stored)
     } catch { /* ignore */ }
   }, [])

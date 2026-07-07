@@ -16,6 +16,7 @@
 // user's Plex credentials server-side to fetch metadata and media bytes.
 
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import dynamic from 'next/dynamic'
 import type { PlaybackState } from '@/lib/playback'
 import type { PlexTrack, TracksResponse } from '@/app/api/plex-stream/tracks/route'
@@ -1015,8 +1016,12 @@ export default function VideoPlayer({
         </div>
       )}
 
-      {/* Track menus only (buttons live in NowBar) */}
-      {showSubMenu && trackControlsEnabled && (
+      {/* Track menus only (buttons live in NowBar). Rendered through a portal:
+          the player root has a CSS filter, which turns it into the containing
+          block for position:fixed and traps the menus below the EPG overlay.
+          Portaling to <body> keeps them clickable with the EPG minimized or
+          expanded. */}
+      {showSubMenu && trackControlsEnabled && typeof document !== 'undefined' && createPortal(
         <div
           ref={subMenuRef}
           style={{
@@ -1056,10 +1061,11 @@ export default function VideoPlayer({
               {t.id === selectedSub ? '✓ Current: ' : ''}{getReadableTrackLabel(t, 'subtitle')}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
 
-      {showAudioMenu && trackControlsEnabled && (
+      {showAudioMenu && trackControlsEnabled && typeof document !== 'undefined' && createPortal(
         <div
           ref={audioMenuRef}
           style={{
@@ -1099,7 +1105,8 @@ export default function VideoPlayer({
               {t.id === selectedAudio ? '✓ Current: ' : ''}{getReadableTrackLabel(t, 'audio')}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
 
       {/* Debug HUD: technical details for current playback state */}
