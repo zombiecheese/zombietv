@@ -9,17 +9,13 @@ import { fromJsonObject, toJson } from '@/lib/json'
 import { encryptSecret } from '@/lib/secret-box'
 import { checkPlexPin, getPlexServerUrl } from '@/lib/plex-auth'
 import { getPlexAuthRedirectBaseUrl } from '@/lib/plex-auth-redirect'
-import { sessionOptions, SessionData } from '@/lib/session'
+import { sessionOptions, SessionData, resolveSessionPassword } from '@/lib/session'
 import { saveCatalogPlaybackServerUrl } from '@/lib/plex-catalog'
 
 export const dynamic = 'force-dynamic'
 
-function sessionSecret() {
-  return process.env.SESSION_SECRET ?? 'zombietv-dev-secret-change-before-production-deploy'
-}
-
 function signAdminState(userId: string) {
-  return createHmac('sha256', sessionSecret()).update(userId).digest('hex')
+  return createHmac('sha256', resolveSessionPassword()).update(userId).digest('hex')
 }
 
 function isValidAdminState(userId: string, state: string) {

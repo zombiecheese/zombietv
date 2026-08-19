@@ -45,6 +45,15 @@ function withPlexToken(url: string, plexToken: string): string {
   return next.toString()
 }
 
+// Strips the Plex token before a URL is embedded in a manifest/proxy link
+// that gets sent to the client. The token is re-attached server-side (via
+// withPlexToken) only when we ourselves dereference the proxy link.
+function withoutPlexToken(url: string): string {
+  const next = new URL(url)
+  next.searchParams.delete('X-Plex-Token')
+  return next.toString()
+}
+
 function normalizeClientSessionId(raw: string | null, fallbackUserId: string): string {
   if (raw && /^[A-Za-z0-9_-]{8,80}$/.test(raw)) return raw
   return `zombietv-${fallbackUserId}`
@@ -178,7 +187,7 @@ async function proxyBinary(url: string, req: NextRequest, plexToken: string): Pr
       .map((line) => {
         const trimmed = line.trim()
         if (!trimmed || trimmed.startsWith('#')) return line
-        const absolute = withPlexToken(new URL(trimmed, urlWithToken).toString(), plexToken)
+        const absolute = withoutPlexToken(new URL(trimmed, urlWithToken).toString())
         return `/api/plex-stream?proxyUrl=${encodeURIComponent(absolute)}`
       })
       .join('\n')
@@ -364,7 +373,7 @@ export async function GET(req: NextRequest) {
         .map((line) => {
           const trimmed = line.trim()
           if (!trimmed || trimmed.startsWith('#')) return line
-          const absolute = withPlexToken(new URL(trimmed, manifestBaseUrl).toString(), plexToken)
+          const absolute = withoutPlexToken(new URL(trimmed, manifestBaseUrl).toString())
           return `/api/plex-stream?proxyUrl=${encodeURIComponent(absolute)}`
         })
         .join('\n')
