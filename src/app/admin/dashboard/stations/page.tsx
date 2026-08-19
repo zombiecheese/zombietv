@@ -16,7 +16,10 @@ interface FillerWindow {
   plexShowTitle?: string
   fillMode?: 'fill' | 'single'
   strip?: boolean
+  sequenceStart?: number     // optional: restrict to a fraction of the series (0–1)
+  sequenceEnd?: number
 }
+interface MarathonConfig { chance: number; count: number; hint?: string }
 interface SlotConfig {
   key: string
   name: string
@@ -31,8 +34,17 @@ interface SlotConfig {
   libraryWeights: SlotLibraryWeights
   allowGenres: string[]      // empty = any
   strip: boolean             // weeknight strip: Mon–Fri, one series, daily episodes
+  breakStrategy: string      // '' = default interspersed | 'standard' | 'center' | 'end'
+  scheduleIncrement: string  // '' = classic | '0' continuous | '5'/'15'/'30'/'60'
+  preset: string             // named bundle in rules.slot_presets
+  marathon?: MarathonConfig  // probabilistic marathon takeover
 }
 type DayType = 'weekday' | 'weekend'
+interface DateOverrideEntry {
+  dates: string              // "December 25", "April 23 - April 25", "October", "Q4", "friday"
+  dayType?: string           // '' auto | 'weekday' | 'weekend'
+  allowGenres?: string[] | string
+}
 interface StationRules {
   ad_policy: { enabled: boolean; break_interval_tv: number; break_interval_movie: number }
   slot_config?: { weekday: SlotConfig[]; weekend: SlotConfig[] }
@@ -41,6 +53,15 @@ interface StationRules {
   overnight_closedown?: boolean
   closedown_content?: { type: 'graphic' | 'youtube_video' | 'youtube_playlist'; value: string }
   time_blocks?: unknown
+  channel_type?: string      // 'standard' | 'weather' | 'guide' | 'loop' | 'stream' | 'web'
+  weather?: { latitude?: number | string; longitude?: number | string; locationName?: string; musicVideoId?: string }
+  guide?: { promoVideoId?: string; musicVideoId?: string }
+  loop?: { contentId?: string; title?: string }
+  stream?: { url?: string; title?: string }
+  web?: { url?: string; title?: string }
+  schedule_offset?: number   // 0–29: shifts showtime boundaries (e.g. :05/:35)
+  date_overrides?: DateOverrideEntry[]
+  slot_presets?: Record<string, Partial<SlotConfig>>
 }
 interface StationData {
   id: string; name: string
@@ -48,6 +69,7 @@ interface StationData {
   fillerPools?: { ads: string | null; music: string | null; bumpers: string | null }
   holidayOverrides?: Record<string, unknown>
   branding: { colour_theme: string; logo: string }
+  updatedAt?: string
 }
 
 interface CatalogFilterOption {
@@ -60,10 +82,13 @@ interface CatalogOptionsResponse {
   genres: CatalogFilterOption[]
   languages: CatalogFilterOption[]
   libraries: CatalogFilterOption[]
+  collections: CatalogFilterOption[]
 }
 
 const SLOT_LIBS = ['tv_shows', 'movies', 'animation', 'fitness'] as const
 type SlotLibraryType = typeof SLOT_LIBS[number]
+
+type EditorTab = 'identity' | 'programming' | 'policies' | 'advanced' | 'branding'
 
 const SLOT_TEMPLATE: Array<{ key: string; name: string; start: string; end: string }> = [
   { key: 'overnight',    name: 'Overnight',        start: 'first', end: '07:00' },
@@ -89,6 +114,10 @@ function defaultSlot(t: { key: string; name: string; start: string; end: string 
     libraryWeights: { tv_shows: 1, movies: 1, animation: 0, fitness: 0 },
     allowGenres: [],
     strip: false,
+    breakStrategy: '',
+    scheduleIncrement: '',
+    preset: '',
+    marathon: undefined,
   }
 }
 
@@ -118,6 +147,10 @@ function mergeSlots(saved: unknown): SlotConfig[] {
     const found = arr.find((s) => s?.key === t.key)
     const base = defaultSlot(t)
     if (!found) return base
+    const marathonRaw = (found.marathon ?? null) as MarathonConfig | null
+    const marathon = marathonRaw && Number(marathonRaw.chance) > 0 && Number(marathonRaw.count) >= 1
+      ? { chance: Math.min(1, Number(marathonRaw.chance)), count: Math.round(Number(marathonRaw.count)), hint: String(marathonRaw.hint ?? '').trim() || undefined }
+      : undefined
     return {
       ...base,
       ...found,
@@ -130,6 +163,10 @@ function mergeSlots(saved: unknown): SlotConfig[] {
       disabledLibraries: normalizeDisabledLibraryTypes(found.disabledLibraries),
       allowGenres: Array.isArray(found.allowGenres) ? found.allowGenres : [],
       strip: Boolean(found.strip),
+      breakStrategy: typeof found.breakStrategy === 'string' ? found.breakStrategy : '',
+      scheduleIncrement: found.scheduleIncrement != null && found.scheduleIncrement !== '' ? String(found.scheduleIncrement) : '',
+      preset: typeof found.preset === 'string' ? found.preset : '',
+      marathon,
     }
   })
 }
@@ -276,13 +313,16 @@ export default function StationsPage() {
   const [selected, setSelected] = useState<StationData | null>(null)
   const [form,     setForm]     = useState<StationData | null>(null)
   const [dayType,  setDayType]  = useState<DayType>('weekday')
-  const [catalogOptions, setCatalogOptions] = useState<CatalogOptionsResponse>({ genres: [], languages: [], libraries: [] })
+  const [catalogOptions, setCatalogOptions] = useState<CatalogOptionsResponse>({ genres: [], languages: [], libraries: [], collections: [] })
   const [msg,      setMsg]      = useState('')
   const [newStationId, setNewStationId] = useState('')
   const [newStationName, setNewStationName] = useState('')
+  const [showAddChannel, setShowAddChannel] = useState(false)
   const [savedSnapshot, setSavedSnapshot] = useState('')
   const [renameId, setRenameId] = useState('')
   const [renameName, setRenameName] = useState('')
+  const [editorTab, setEditorTab] = useState<EditorTab>('programming')
+  const [openSlotKey, setOpenSlotKey] = useState<string | null>(null)
 
   const snapshotOf = (f: StationData) => JSON.stringify({ rules: f.rules, branding: f.branding })
   const dirty = !!form && snapshotOf(form) !== savedSnapshot
@@ -306,6 +346,7 @@ export default function StationsPage() {
           genres: Array.isArray(data.genres) ? data.genres : [],
           languages: Array.isArray(data.languages) ? data.languages : [],
           libraries: Array.isArray(data.libraries) ? data.libraries : [],
+          collections: Array.isArray(data.collections) ? data.collections : [],
         })
       })
       .catch(() => {})
@@ -336,6 +377,8 @@ export default function StationsPage() {
     setRenameId(s.id)
     setRenameName(s.name)
     setDayType('weekday')
+    setOpenSlotKey(null)
+    setEditorTab((String(clone.rules.channel_type ?? 'standard') || 'standard') === 'standard' ? 'programming' : 'identity')
     setMsg('')
   }
 
@@ -343,10 +386,18 @@ export default function StationsPage() {
     if (!form) return
     const r = await fetch(`/api/admin/stations/${form.id}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rules: form.rules, branding: form.branding }),
+      body: JSON.stringify({ rules: form.rules, branding: form.branding, expectedUpdatedAt: form.updatedAt ?? null }),
     })
-    setMsg(r.ok ? '✓ Saved successfully.' : '✗ Save failed.')
-    if (r.ok) { const updated = stations.map(s => s.id === form.id ? form : s); setStations(updated); setSavedSnapshot(snapshotOf(form)) }
+    const payload = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      setMsg(`✗ ${payload.error ?? 'Save failed.'}`)
+      return
+    }
+    setMsg('✓ Saved successfully.')
+    const saved: StationData = { ...form, updatedAt: payload.updatedAt ?? form.updatedAt }
+    setForm(saved)
+    setStations(stations.map(s => s.id === saved.id ? saved : s))
+    setSavedSnapshot(snapshotOf(saved))
   }
 
   const createStation = async () => {
@@ -476,32 +527,27 @@ export default function StationsPage() {
 
   const slots = form?.rules.slot_config?.[dayType] ?? []
 
+  const isStandard = (String(form?.rules.channel_type ?? 'standard') || 'standard') === 'standard'
+  const editorTabs: Array<{ key: EditorTab; label: string }> = [
+    { key: 'identity', label: 'Identity & Type' },
+    ...(isStandard ? ([
+      { key: 'programming' as EditorTab, label: 'Programming' },
+      { key: 'policies' as EditorTab, label: 'Policies' },
+      { key: 'advanced' as EditorTab, label: 'Advanced' },
+    ]) : []),
+    { key: 'branding', label: 'Branding' },
+  ]
+  const activeTab: EditorTab = editorTabs.some((t) => t.key === editorTab) ? editorTab : 'identity'
+
   return (
     <AdminShell>
       <h2 style={h2}>Station Rules</h2>
-      <p style={sub}>Configure each station&apos;s weekday and weekend programming slots, station-wide ad policy, and branding. Each slot is either <strong style={{ color: '#a8c4e0' }}>Programming</strong> (catalog content by library mix) or <strong style={{ color: '#a8c4e0' }}>Filler</strong> (curated YouTube windows). Filler content is managed in Filler Content; holiday behaviour in Holiday Overrides.</p>
-
-      <Section title="Add Channel">
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr auto', gap: 10, alignItems: 'end' }}>
-          <Field label="Channel ID (e.g. abc2)">
-            <input
-              value={newStationId}
-              onChange={e => setNewStationId(e.target.value.replace(/\s+/g, '').toLowerCase())}
-              style={inp}
-              placeholder="lowercase id"
-            />
-          </Field>
-          <Field label="Channel Name">
-            <input value={newStationName} onChange={e => setNewStationName(e.target.value)} style={inp} placeholder="Display name" />
-          </Field>
-          <button onClick={createStation} style={{ ...btn, height: 38, alignSelf: 'end', padding: '0 18px', whiteSpace: 'nowrap', marginBottom: 0 }}>Add Channel</button>
-        </div>
-      </Section>
+      <p style={sub}>Pick a channel, then work through the tabs — identity &amp; type, programming slots, station-wide policies, and advanced scheduling. Filler videos live in Filler Content; holiday behaviour in Holiday Overrides.</p>
 
       <div style={{ display: 'flex', gap: 20, marginTop: 20, minHeight: 0 }}>
         {/* Station list */}
-        <div style={{ width: 188, flexShrink: 0 }}>
-          <div style={{ color: '#4a7fb5', fontSize: '0.6rem', letterSpacing: '0.06em', marginBottom: 6 }}>CHANNEL ORDER (drag-free ▲▼ — reflected in the viewer EPG)</div>
+        <div style={{ width: 200, flexShrink: 0 }}>
+          <div style={{ color: '#4a7fb5', fontSize: '0.6rem', letterSpacing: '0.06em', marginBottom: 6 }}>CHANNELS (▲▼ order — reflected in the viewer EPG)</div>
           {stations.map((s, i) => (
             <div key={s.id} style={{ display: 'flex', gap: 4, marginBottom: 6, alignItems: 'stretch' }}>
               <button onClick={() => select(s)} style={{
@@ -521,13 +567,73 @@ export default function StationsPage() {
               </div>
             </div>
           ))}
+
+          {/* Compact add-channel form */}
+          <button
+            type="button"
+            onClick={() => setShowAddChannel((v) => !v)}
+            style={{ ...ghostBtn, width: '100%', padding: '9px 0', marginTop: 4 }}
+          >
+            {showAddChannel ? '− Cancel' : '+ Add Channel'}
+          </button>
+          {showAddChannel && (
+            <div style={{ border: '1px solid #1e3a5f', backgroundColor: '#07111f', padding: 10, marginTop: 6 }}>
+              <Field label="Channel ID">
+                <input
+                  value={newStationId}
+                  onChange={e => setNewStationId(e.target.value.replace(/\s+/g, '').toLowerCase())}
+                  style={inp}
+                  placeholder="e.g. abc2"
+                />
+              </Field>
+              <Field label="Channel Name">
+                <input value={newStationName} onChange={e => setNewStationName(e.target.value)} style={inp} placeholder="Display name" />
+              </Field>
+              <button onClick={createStation} style={{ ...btn, width: '100%', padding: '8px 0' }}>Create</button>
+              {!form && msg && <p style={{ color: msg.startsWith('✗') ? '#e05050' : '#4CAF50', fontSize: '0.68rem', margin: '8px 0 0' }}>{msg}</p>}
+            </div>
+          )}
         </div>
 
         {/* Editor */}
         {form && (
-          <div style={{ flex: 1, overflowY: 'auto' }}>
-            {msg && <p style={{ color: '#4CAF50', fontSize: '0.78rem', margin: '0 0 12px' }}>{msg}</p>}
+          <div style={{ flex: 1, overflowY: 'auto', minWidth: 0 }}>
+            {/* Sticky action bar */}
+            <div style={stickyBarS}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, minWidth: 0, flexWrap: 'wrap' }}>
+                <span style={{ color: '#e8f0fe', fontWeight: 800, fontSize: '0.9rem', letterSpacing: '0.06em' }}>{form.id.toUpperCase()}</span>
+                <span style={{ color: '#4a7fb5', fontSize: '0.7rem' }}>{form.name}</span>
+                {!isStandard && (
+                  <span style={{ fontSize: '0.58rem', fontWeight: 700, letterSpacing: '0.05em', padding: '2px 7px', borderRadius: 3, backgroundColor: '#33415a', color: '#cfe0f5', border: '1px solid #1e3a5f' }}>
+                    {String(form.rules.channel_type).toUpperCase()}
+                  </span>
+                )}
+                {dirty && <span style={{ color: '#e0a030', fontSize: '0.68rem' }}>● Unsaved changes</span>}
+                {msg && <span style={{ color: msg.startsWith('✗') ? '#e05050' : '#4CAF50', fontSize: '0.7rem' }}>{msg}</span>}
+              </div>
+              <button onClick={save} style={{ ...btn, opacity: dirty ? 1 : 0.55, whiteSpace: 'nowrap' }}>Save Changes</button>
+            </div>
 
+            {/* Editor tabs */}
+            <div style={tabsRowS}>
+              {editorTabs.map((t) => (
+                <button
+                  key={t.key}
+                  type="button"
+                  onClick={() => setEditorTab(t.key)}
+                  style={{
+                    ...tabBtnS,
+                    color: activeTab === t.key ? '#fff' : '#4a7fb5',
+                    borderBottom: activeTab === t.key ? '2px solid #ff6600' : '2px solid transparent',
+                    fontWeight: activeTab === t.key ? 700 : 400,
+                  }}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            {activeTab === 'identity' && (<>
             <Section title="Channel Identity">
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr auto', gap: 10, alignItems: 'end' }}>
                 <Field label="Channel ID">
@@ -543,6 +649,17 @@ export default function StationsPage() {
               </p>
             </Section>
 
+            <ChannelTypeSection form={form} setForm={setForm} />
+
+            <Section title="Danger Zone">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+                <button onClick={removeStation} style={{ ...btn, backgroundColor: '#8b1c1c' }}>Delete Channel</button>
+                <span style={{ color: '#4a7fb5', fontSize: '0.68rem' }}>Removes this channel and all of its schedules, episode progress, events and content links.</span>
+              </div>
+            </Section>
+            </>)}
+
+            {activeTab === 'programming' && isStandard && (<>
             <Section title="Network Presets">
               <p style={{ color: '#4a7fb5', fontSize: '0.72rem', margin: '0 0 10px' }}>
                 Apply a 1990s network archetype as a starting point, then fine-tune the slots below.
@@ -587,11 +704,23 @@ export default function StationsPage() {
 
               <SlotTimeline slots={slots} />
 
-              {slots.map((slot, index) => (
-                <div key={slot.key} style={{ backgroundColor: '#060f1e', border: '1px solid #1e3a5f', padding: '12px 16px', marginBottom: 12 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: slot.enabled ? 12 : 0 }}>
+              <FillerRiskPanel warnings={fillerGapWarnings(slots, form.rules)} />
+
+              <p style={{ color: '#4a7fb5', fontSize: '0.66rem', margin: '0 0 10px' }}>
+                Click a slot to expand and edit it. Each slot is either <strong style={{ color: '#a8c4e0' }}>Programming</strong> (catalog content by library mix) or <strong style={{ color: '#a8c4e0' }}>Filler</strong> (curated YouTube windows).
+              </p>
+
+              {slots.map((slot, index) => {
+                const isOpen = openSlotKey === slot.key
+                return (
+                <div key={slot.key} style={{ backgroundColor: '#060f1e', border: '1px solid #1e3a5f', marginBottom: 8 }}>
+                  <div
+                    onClick={() => setOpenSlotKey(isOpen ? null : slot.key)}
+                    style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '10px 14px', cursor: 'pointer', userSelect: 'none' }}
+                  >
                     <div>
                       <div>
+                        <span style={{ color: '#4a7fb5', fontSize: '0.72rem', marginRight: 8 }}>{isOpen ? '▾' : '▸'}</span>
                         <span style={{ color: '#e8f0fe', fontWeight: 700, fontSize: '0.82rem' }}>{slot.name}</span>
                         <span style={{ color: '#4a7fb5', fontSize: '0.68rem', marginLeft: 10 }}>
                           {slot.start === 'first' ? 'First available' : slot.start} – {slot.end === 'until_finished' ? 'Until content finished' : slot.end}
@@ -609,14 +738,14 @@ export default function StationsPage() {
                       </div>
                       <div style={{ color: '#88a8cc', fontSize: '0.66rem', marginTop: 4 }}>{slotSummary(slot)}</div>
                     </div>
-                    <label style={checkLabel}>
+                    <label style={checkLabel} onClick={(e) => e.stopPropagation()}>
                       <input type="checkbox" checked={slot.enabled} onChange={e => updateSlot(index, { enabled: e.target.checked })} />
                       Enabled
                     </label>
                   </div>
 
-                  {slot.enabled && (
-                    <>
+                  {slot.enabled && isOpen && (
+                    <div style={{ padding: '0 14px 14px' }}>
                       <SlotModeToggle slot={slot} index={index} updateSlot={updateSlot} />
 
                       {slotMode(slot) === 'filler' ? (
@@ -680,20 +809,48 @@ export default function StationsPage() {
                           </label>
 
                           <TokenPicker
-                            label="Allow genres"
-                            anyLabel="Any genre"
-                            options={catalogOptions.genres}
+                            label="Allow genres / collections / studios / countries"
+                            anyLabel="Any content"
+                            options={[...catalogOptions.genres, ...catalogOptions.collections]}
                             value={slot.allowGenres}
                             onChange={(next) => updateSlot(index, { allowGenres: next })}
                           />
+
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12, marginTop: 12 }}>
+                            <Field label="Break strategy">
+                              <select value={slot.breakStrategy} onChange={e => updateSlot(index, { breakStrategy: e.target.value })} style={sel}>
+                                <option value="">Standard (chapter-aware)</option>
+                                <option value="center">Center (one mid break)</option>
+                                <option value="end">End (no mid-roll breaks)</option>
+                              </select>
+                            </Field>
+                            <Field label="Schedule increment">
+                              <select value={slot.scheduleIncrement} onChange={e => updateSlot(index, { scheduleIncrement: e.target.value })} style={sel}>
+                                <option value="">Classic (no padding)</option>
+                                <option value="0">Continuous (back-to-back)</option>
+                                <option value="5">5 min (tight movie timing)</option>
+                                <option value="15">15 min</option>
+                                <option value="30">30 min (broadcast blocks)</option>
+                                <option value="60">60 min</option>
+                              </select>
+                            </Field>
+                            <Field label="Slot preset (optional)">
+                              <input value={slot.preset} onChange={e => updateSlot(index, { preset: e.target.value })} style={inp} placeholder="named preset" />
+                            </Field>
+                          </div>
+
+                          <MarathonEditor slot={slot} index={index} updateSlot={updateSlot} />
                         </>
                       )}
-                    </>
+                    </div>
                   )}
                 </div>
-              ))}
+                )
+              })}
             </Section>
+            </>)}
 
+            {activeTab === 'policies' && isStandard && (<>
             <Section title="Language Filters (station-wide)">
               <p style={{ color: '#4a7fb5', fontSize: '0.72rem', margin: '0 0 10px' }}>
                 These language filters apply across all slots and windows for this station.
@@ -776,7 +933,45 @@ export default function StationsPage() {
                 </div>
               )}
             </Section>
+            </>)}
 
+            {activeTab === 'advanced' && isStandard && (<>
+            <Section title="Broadcast Timing (station-wide)">
+              <Field label="Showtime offset (minutes past the hour/half-hour)">
+                <input
+                  type="number"
+                  min={0}
+                  max={29}
+                  value={Number(form.rules.schedule_offset ?? 0)}
+                  onChange={e => setForm(f => f ? { ...f, rules: { ...f.rules, schedule_offset: Math.max(0, Math.min(29, Math.round(Number(e.target.value) || 0))) } } : f)}
+                  style={{ ...inp, width: 120 }}
+                />
+              </Field>
+              <p style={{ color: '#4a7fb5', fontSize: '0.68rem', margin: '4px 0 0' }}>
+                Shifts padded showtime boundaries — e.g. offset 5 gives that classic superstation feel with shows starting at :05 and :35. Applies wherever slots pad to an increment.
+              </p>
+            </Section>
+
+            <Section title="Date Overrides">
+              <DateOverridesEditor
+                value={Array.isArray(form.rules.date_overrides) ? form.rules.date_overrides : []}
+                onChange={(next) => setForm(f => f ? { ...f, rules: { ...f.rules, date_overrides: next } } : f)}
+              />
+            </Section>
+
+            <Section title="Reusable Slot Presets (advanced)">
+              <SlotPresetsEditor
+                value={form.rules.slot_presets ?? {}}
+                onChange={(next) => setForm(f => f ? { ...f, rules: { ...f.rules, slot_presets: next } } : f)}
+              />
+            </Section>
+
+            <Section title="Day Preview (dry run)">
+              <DayPreview stationId={form.id} dirty={dirty} />
+            </Section>
+            </>)}
+
+            {activeTab === 'branding' && (
             <Section title="Branding">
               <Field label="Colour theme (hex)">
                 <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
@@ -787,17 +982,10 @@ export default function StationsPage() {
                 </div>
               </Field>
             </Section>
-
-            <button onClick={save} style={{ ...btn, marginTop: 4 }}>Save Station Config</button>
-            {dirty && (
-              <span style={{ color: '#e0a030', fontSize: '0.72rem', marginLeft: 12 }}>● Unsaved changes</span>
             )}
-            <button onClick={removeStation} style={{ ...btn, marginTop: 10, backgroundColor: '#8b1c1c' }}>
-              Delete Channel
-            </button>
           </div>
         )}
-        {!form && <p style={{ color: '#4a7fb5', fontSize: '0.78rem' }}>Select a station to edit.</p>}
+        {!form && <p style={{ color: '#4a7fb5', fontSize: '0.78rem' }}>Select a channel to edit, or add a new one from the list.</p>}
       </div>
     </AdminShell>
   )
@@ -947,6 +1135,28 @@ function FillerWindowsBuilder({ slot, index, updateSlot }: { slot: SlotConfig; i
                 <label style={checkLabel}>
                   <input type="checkbox" checked={Boolean(window.strip)} onChange={e => updateWindow(windowIndex, { strip: e.target.checked })} />
                   Weeknight strip (daily)
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#a8c4e0', fontSize: '0.68rem' }} title="Restrict this window to a fraction of the series — e.g. 0–75% daytime, 75–100% primetime. The window loops within its range.">
+                  Series range %
+                  <input
+                    type="number" min={0} max={100}
+                    value={window.sequenceStart != null ? Math.round(window.sequenceStart * 100) : 0}
+                    onChange={e => {
+                      const v = Math.max(0, Math.min(100, Math.round(Number(e.target.value) || 0)))
+                      updateWindow(windowIndex, { sequenceStart: v > 0 ? v / 100 : undefined })
+                    }}
+                    style={{ ...inp, width: 64 }}
+                  />
+                  –
+                  <input
+                    type="number" min={0} max={100}
+                    value={window.sequenceEnd != null ? Math.round(window.sequenceEnd * 100) : 100}
+                    onChange={e => {
+                      const v = Math.max(0, Math.min(100, Math.round(Number(e.target.value) || 0)))
+                      updateWindow(windowIndex, { sequenceEnd: v < 100 ? v / 100 : undefined })
+                    }}
+                    style={{ ...inp, width: 64 }}
+                  />
                 </label>
               </div>
             )}
@@ -1119,6 +1329,90 @@ function isNewsSlot(slot: SlotConfig): boolean {
   return key.includes('news') || name.includes('news')
 }
 
+// Advisory heuristics: flag slot configurations that tend to produce long
+// stretches of filler at generation time — zero/excluded library weights,
+// movie-heavy long slots (drained by the 7-day cross-channel movie
+// exclusivity), narrow genre pools, and uncovered day coverage.
+function fillerGapWarnings(slots: SlotConfig[], rules: StationRules): string[] {
+  const warnings: string[] = []
+  const DAY = 24 * 60
+  const fmtH = (mins: number) => `${(mins / 60).toFixed(1)}h`
+
+  // Uncovered coverage → generic filler
+  const segs = slots
+    .filter((s) => s.enabled)
+    .map((s) => slotBounds(s))
+    .filter((s) => s.endMins > s.startMins)
+    .sort((a, b) => a.startMins - b.startMins)
+  let prevEnd = 0
+  let gapMins = 0
+  for (const seg of segs) {
+    gapMins += Math.max(0, seg.startMins - prevEnd)
+    prevEnd = Math.max(prevEnd, seg.endMins)
+  }
+  gapMins += Math.max(0, DAY - prevEnd)
+  if (gapMins >= 60) {
+    warnings.push(`${fmtH(gapMins)} of the day has no enabled slot — that time falls back to generic filler.`)
+  }
+
+  for (const slot of slots) {
+    const { startMins, endMins } = slotBounds(slot)
+    const lenMins = Math.max(0, endMins - startMins)
+
+    if (!slot.enabled) {
+      if (lenMins >= 120) {
+        warnings.push(`${slot.name}: disabled — this ${fmtH(lenMins)} window plays filler. Enable the slot or accept the gap.`)
+      }
+      continue
+    }
+    if (slotMode(slot) === 'filler') continue
+
+    const usable = weightBreakdown(slot).filter((b) => b.weight > 0 && !slot.disabledLibraries.includes(b.lib))
+    const usableTotal = usable.reduce((sum, b) => sum + b.weight, 0)
+    if (usableTotal <= 0) {
+      warnings.push(`${slot.name}: no usable library weight (all zero or excluded) — the whole ${fmtH(lenMins)} slot becomes filler. Add library weight or switch it to curated filler windows.`)
+      continue
+    }
+
+    const movieShare = (usable.find((b) => b.lib === 'movies')?.weight ?? 0) / usableTotal
+    if (lenMins >= 180 && movieShare >= 0.8) {
+      warnings.push(`${slot.name}: ${fmtH(lenMins)} at ${Math.round(movieShare * 100)}% movies — the 7-day cross-channel movie exclusivity can drain the pool and drop to filler. Mix in tv_shows/animation weight or shorten the slot.`)
+    }
+
+    if (lenMins >= 180 && slot.allowGenres.length > 0 && slot.allowGenres.length <= 2) {
+      warnings.push(`${slot.name}: ${fmtH(lenMins)} restricted to ${slot.allowGenres.join(', ')} — a narrow genre pool can run dry mid-slot and fall back to filler.`)
+    }
+  }
+
+  // Overnight movie programming without closedown is the most common source
+  // of large late-night filler stretches in practice.
+  const overnight = slots.find((s) => s.key === 'overnight')
+  if (overnight?.enabled && slotMode(overnight) === 'programming' && !rules.overnight_closedown) {
+    const usable = weightBreakdown(overnight).filter((b) => b.weight > 0 && !overnight.disabledLibraries.includes(b.lib))
+    const total = usable.reduce((sum, b) => sum + b.weight, 0)
+    const movieShare = total > 0 ? (usable.find((b) => b.lib === 'movies')?.weight ?? 0) / total : 0
+    if (movieShare >= 0.5) {
+      warnings.push('Overnight: movie-heavy overnight programming without Overnight Close-down often ends in long filler runs — consider enabling close-down (Policies) or weighting episodic content overnight.')
+    }
+  }
+
+  return warnings
+}
+
+function FillerRiskPanel({ warnings }: { warnings: string[] }) {
+  if (!warnings.length) return null
+  return (
+    <div style={{ border: '1px solid #7a5210', backgroundColor: '#1c1406', padding: '10px 14px', marginBottom: 14 }}>
+      <div style={{ color: '#e0a030', fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.08em', marginBottom: 6 }}>
+        ⚠ FILLER GAP RISK — {warnings.length} suggestion{warnings.length > 1 ? 's' : ''}
+      </div>
+      {warnings.map((w, i) => (
+        <div key={i} style={{ color: '#d8b36a', fontSize: '0.68rem', marginBottom: 4, lineHeight: 1.45 }}>• {w}</div>
+      ))}
+    </div>
+  )
+}
+
 // Horizontal 24-hour coverage bar. Surfaces gaps (uncovered time that falls back
 // to filler) and overlapping windows at a glance.
 function SlotTimeline({ slots }: { slots: SlotConfig[] }) {
@@ -1224,6 +1518,462 @@ function normalizeRuleToken(value: string): string {
   return value.trim().toLowerCase()
 }
 
+// ─── Channel type editor ──────────────────────────────────────────────────────
+// Non-standard channel types bypass the scheduler entirely: the viewer renders
+// a dedicated surface (weather / guide) or plays the configured source directly
+// (loop / stream / web).
+
+const CHANNEL_TYPES: Array<{ value: string; label: string; note: string }> = [
+  { value: 'standard', label: 'Standard (scheduled broadcast)', note: 'Normal Plex-programmed station using the slots below.' },
+  { value: 'weather', label: 'Weather Centre', note: '90s local-on-the-8s style continuous weather channel (Open-Meteo, no API key).' },
+  { value: 'guide', label: 'Programme Guide', note: 'Prevue-style scrolling listings channel with an optional promo video.' },
+  { value: 'loop', label: 'Loop', note: 'Continuously loops a YouTube video or playlist.' },
+  { value: 'stream', label: 'Live Stream', note: 'Plays an external HLS (.m3u8) or direct video stream URL.' },
+  { value: 'web', label: 'Web Page', note: 'Embeds a web page as the channel (diagnostics, dashboards, novelty pages).' },
+]
+
+function ChannelTypeSection({ form, setForm }: {
+  form: StationData
+  setForm: React.Dispatch<React.SetStateAction<StationData | null>>
+}) {
+  const type = String(form.rules.channel_type ?? 'standard') || 'standard'
+  const setType = (val: string) => setForm(f => f ? { ...f, rules: { ...f.rules, channel_type: val } } : f)
+  const setCfg = (key: 'weather' | 'guide' | 'loop' | 'stream' | 'web', patch: Record<string, unknown>) =>
+    setForm(f => f ? { ...f, rules: { ...f.rules, [key]: { ...((f.rules[key] as Record<string, unknown>) ?? {}), ...patch } } } : f)
+
+  const active = CHANNEL_TYPES.find((t) => t.value === type) ?? CHANNEL_TYPES[0]
+
+  return (
+    <Section title="Channel Type">
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 12, alignItems: 'start' }}>
+        <Field label="Type">
+          <select value={type} onChange={e => setType(e.target.value)} style={sel}>
+            {CHANNEL_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+          </select>
+        </Field>
+        <p style={{ color: '#4a7fb5', fontSize: '0.7rem', margin: '18px 0 0' }}>{active.note}</p>
+      </div>
+
+      {type === 'weather' && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.5fr 1.5fr', gap: 10 }}>
+          <Field label="Latitude">
+            <input value={String(form.rules.weather?.latitude ?? '')} onChange={e => setCfg('weather', { latitude: e.target.value })} style={inp} placeholder="-33.87" />
+          </Field>
+          <Field label="Longitude">
+            <input value={String(form.rules.weather?.longitude ?? '')} onChange={e => setCfg('weather', { longitude: e.target.value })} style={inp} placeholder="151.21" />
+          </Field>
+          <Field label="Location name (on-screen)">
+            <input value={String(form.rules.weather?.locationName ?? '')} onChange={e => setCfg('weather', { locationName: e.target.value })} style={inp} placeholder="Sydney" />
+          </Field>
+          <Field label="Background music (YouTube ID, optional)">
+            <input value={String(form.rules.weather?.musicVideoId ?? '')} onChange={e => setCfg('weather', { musicVideoId: e.target.value })} style={inp} placeholder="smooth jazz loop" />
+          </Field>
+        </div>
+      )}
+
+      {type === 'guide' && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <Field label="Promo video (YouTube ID, optional — top half of the screen)">
+            <input value={String(form.rules.guide?.promoVideoId ?? '')} onChange={e => setCfg('guide', { promoVideoId: e.target.value })} style={inp} />
+          </Field>
+          <Field label="Background music (YouTube ID, optional)">
+            <input value={String(form.rules.guide?.musicVideoId ?? '')} onChange={e => setCfg('guide', { musicVideoId: e.target.value })} style={inp} />
+          </Field>
+        </div>
+      )}
+
+      {type === 'loop' && (
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 10 }}>
+          <Field label="YouTube video or playlist ID (loops continuously)">
+            <input value={String(form.rules.loop?.contentId ?? '')} onChange={e => setCfg('loop', { contentId: e.target.value })} style={inp} placeholder="PLxxxx or video ID" />
+          </Field>
+          <Field label="EPG title">
+            <input value={String(form.rules.loop?.title ?? '')} onChange={e => setCfg('loop', { title: e.target.value })} style={inp} placeholder="Continuous Programming" />
+          </Field>
+        </div>
+      )}
+
+      {type === 'stream' && (
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 10 }}>
+          <Field label="Stream URL (HLS .m3u8 or direct media URL)">
+            <input value={String(form.rules.stream?.url ?? '')} onChange={e => setCfg('stream', { url: e.target.value })} style={inp} placeholder="https://…/stream.m3u8" />
+          </Field>
+          <Field label="EPG title">
+            <input value={String(form.rules.stream?.title ?? '')} onChange={e => setCfg('stream', { title: e.target.value })} style={inp} placeholder="Live Stream" />
+          </Field>
+        </div>
+      )}
+
+      {type === 'web' && (
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 10 }}>
+          <Field label="Page URL">
+            <input value={String(form.rules.web?.url ?? '')} onChange={e => setCfg('web', { url: e.target.value })} style={inp} placeholder="https://example.com/page" />
+          </Field>
+          <Field label="EPG title">
+            <input value={String(form.rules.web?.title ?? '')} onChange={e => setCfg('web', { title: e.target.value })} style={inp} placeholder="Web Channel" />
+          </Field>
+        </div>
+      )}
+
+      {type !== 'standard' && (
+        <p style={{ color: '#e0a030', fontSize: '0.68rem', margin: '8px 0 0' }}>
+          Programming slots, ad policy and schedule generation are disabled for this channel type.
+        </p>
+      )}
+    </Section>
+  )
+}
+
+// ─── Marathon editor ──────────────────────────────────────────────────────────
+
+function MarathonEditor({ slot, index, updateSlot }: {
+  slot: SlotConfig
+  index: number
+  updateSlot: (idx: number, patch: Partial<SlotConfig>) => void
+}) {
+  const m = slot.marathon
+  return (
+    <div style={{ border: '1px solid #1e3a5f', padding: 10, marginBottom: 12 }}>
+      <label style={checkLabel}>
+        <input
+          type="checkbox"
+          checked={Boolean(m)}
+          onChange={e => updateSlot(index, { marathon: e.target.checked ? { chance: 0.2, count: 4 } : undefined })}
+        />
+        Random marathon — this window can be taken over by back-to-back episodes of one series
+      </label>
+      {m && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 2fr', gap: 10, marginTop: 10 }}>
+          <Field label="Chance (%)">
+            <input
+              type="number" min={1} max={100}
+              value={Math.round(m.chance * 100)}
+              onChange={e => {
+                const pct = Math.max(1, Math.min(100, Math.round(Number(e.target.value) || 0)))
+                updateSlot(index, { marathon: { ...m, chance: pct / 100 } })
+              }}
+              style={inp}
+            />
+          </Field>
+          <Field label="Length (hours)">
+            <input
+              type="number" min={1} max={12}
+              value={m.count}
+              onChange={e => updateSlot(index, { marathon: { ...m, count: Math.max(1, Math.min(12, Math.round(Number(e.target.value) || 1))) } })}
+              style={inp}
+            />
+          </Field>
+          <Field label={'Season hint (optional: "October", "Q4", "October 15 - October 31", "friday")'}>
+            <input
+              value={m.hint ?? ''}
+              onChange={e => updateSlot(index, { marathon: { ...m, hint: e.target.value || undefined } })}
+              style={inp}
+              placeholder="always eligible"
+            />
+          </Field>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Date overrides editor ────────────────────────────────────────────────────
+
+function DateOverridesEditor({ value, onChange }: {
+  value: DateOverrideEntry[]
+  onChange: (next: DateOverrideEntry[]) => void
+}) {
+  const update = (i: number, patch: Partial<DateOverrideEntry>) =>
+    onChange(value.map((entry, idx) => idx === i ? { ...entry, ...patch } : entry))
+  const remove = (i: number) => onChange(value.filter((_, idx) => idx !== i))
+  const add = () => onChange([...value, { dates: '', dayType: '', allowGenres: [] }])
+
+  const genresOf = (entry: DateOverrideEntry): string =>
+    Array.isArray(entry.allowGenres) ? entry.allowGenres.join(', ') : String(entry.allowGenres ?? '')
+
+  return (
+    <div>
+      <p style={{ color: '#4a7fb5', fontSize: '0.72rem', margin: '0 0 10px' }}>
+        Take over the schedule on specific calendar dates — holiday marathons, one-off events, seasonal takeovers.
+        Dates accept <code>December 25</code>, <code>April 23 - April 25</code> (ranges may wrap the year), a month name, <code>Q1</code>–<code>Q4</code>, or a weekday.
+        The genre filter re-points every programming slot for that date (e.g. <code>christmas, family</code>).
+      </p>
+      {value.map((entry, i) => (
+        <div key={i} style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1.6fr auto', gap: 10, alignItems: 'end', marginBottom: 8, border: '1px solid #1e3a5f', padding: 10 }}>
+          <Field label="Date(s)">
+            <input value={entry.dates} onChange={e => update(i, { dates: e.target.value })} style={inp} placeholder="December 25" />
+          </Field>
+          <Field label="Slot lineup">
+            <select value={entry.dayType ?? ''} onChange={e => update(i, { dayType: e.target.value })} style={sel}>
+              <option value="">Automatic (normal day)</option>
+              <option value="weekday">Use weekday lineup</option>
+              <option value="weekend">Use weekend lineup</option>
+            </select>
+          </Field>
+          <Field label="Genre takeover (comma list, optional)">
+            <input
+              value={genresOf(entry)}
+              onChange={e => update(i, { allowGenres: e.target.value.split(',').map(g => g.trim().toLowerCase()).filter(Boolean) })}
+              style={inp}
+              placeholder="christmas, family"
+            />
+          </Field>
+          <button type="button" onClick={() => remove(i)} style={{ ...btn, backgroundColor: '#3d0000', height: 38 }}>Remove</button>
+        </div>
+      ))}
+      <button type="button" onClick={add} style={{ ...ghostBtn, padding: '8px 14px', height: 'auto' }}>+ Add date override</button>
+    </div>
+  )
+}
+
+// ─── Slot presets editor ─────────────────────────────────────────────────────
+// Structured form for the common preset fields, with an advanced JSON mode for
+// anything else (bump videos, marathon bundles, filler windows…).
+
+function SlotPresetsEditor({ value, onChange }: {
+  value: Record<string, Partial<SlotConfig>>
+  onChange: (next: Record<string, Partial<SlotConfig>>) => void
+}) {
+  const [jsonMode, setJsonMode] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [text, setText] = useState(() => JSON.stringify(value ?? {}, null, 2))
+  const [error, setError] = useState('')
+  const [appliedMsg, setAppliedMsg] = useState('')
+
+  useEffect(() => {
+    setText(JSON.stringify(value ?? {}, null, 2))
+    setError('')
+    setAppliedMsg('')
+  }, [value])
+
+  const entries = Object.entries(value ?? {})
+
+  const updatePreset = (name: string, patch: Partial<SlotConfig>) =>
+    onChange({ ...value, [name]: { ...(value[name] ?? {}), ...patch } })
+
+  const removePreset = (name: string) => {
+    const next = { ...value }
+    delete next[name]
+    onChange(next)
+  }
+
+  const addPreset = () => {
+    const name = newName.trim().toLowerCase().replace(/\s+/g, '_')
+    if (!name || value[name]) return
+    onChange({ ...value, [name]: {} })
+    setNewName('')
+  }
+
+  const applyJson = () => {
+    try {
+      const parsed = JSON.parse(text)
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        setError('Presets must be a JSON object mapping preset names to slot settings.')
+        return
+      }
+      setError('')
+      setAppliedMsg('✓ Presets applied — Save Station Config to keep them.')
+      onChange(parsed as Record<string, Partial<SlotConfig>>)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Invalid JSON')
+    }
+  }
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+        <p style={{ color: '#4a7fb5', fontSize: '0.72rem', margin: 0 }}>
+          Define named setting bundles once, then reference them from any slot&apos;s <em>Slot preset</em> field. Preset values win over the slot&apos;s own settings.
+        </p>
+        <button type="button" onClick={() => setJsonMode((v) => !v)} style={{ ...ghostBtn, padding: '5px 10px', fontSize: '0.66rem' }}>
+          {jsonMode ? 'Form editor' : 'Advanced JSON'}
+        </button>
+      </div>
+
+      {!jsonMode && (
+        <>
+          {entries.length === 0 && (
+            <p style={{ color: '#4a7fb5', fontSize: '0.7rem', fontStyle: 'italic' }}>No presets defined yet.</p>
+          )}
+          {entries.map(([name, preset]) => (
+            <div key={name} style={{ border: '1px solid #1e3a5f', backgroundColor: '#07111f', padding: 10, marginBottom: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <span style={{ color: '#e8f0fe', fontWeight: 700, fontSize: '0.78rem', fontFamily: 'monospace' }}>{name}</span>
+                <button type="button" onClick={() => removePreset(name)} style={{ ...btn, padding: '3px 10px', fontSize: '0.62rem', backgroundColor: '#3d0000' }}>Remove</button>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.5fr auto', gap: 10, alignItems: 'end' }}>
+                <Field label="Break strategy">
+                  <select
+                    value={String(preset.breakStrategy ?? '')}
+                    onChange={e => updatePreset(name, { breakStrategy: e.target.value })}
+                    style={sel}
+                  >
+                    <option value="">(unset)</option>
+                    <option value="standard">Standard (chapter-aware)</option>
+                    <option value="center">Center</option>
+                    <option value="end">End</option>
+                  </select>
+                </Field>
+                <Field label="Schedule increment">
+                  <select
+                    value={preset.scheduleIncrement != null ? String(preset.scheduleIncrement) : ''}
+                    onChange={e => updatePreset(name, { scheduleIncrement: e.target.value })}
+                    style={sel}
+                  >
+                    <option value="">(unset)</option>
+                    <option value="0">Continuous</option>
+                    <option value="5">5 min</option>
+                    <option value="15">15 min</option>
+                    <option value="30">30 min</option>
+                    <option value="60">60 min</option>
+                  </select>
+                </Field>
+                <Field label="Allow genres (comma list)">
+                  <input
+                    value={Array.isArray(preset.allowGenres) ? preset.allowGenres.join(', ') : ''}
+                    onChange={e => updatePreset(name, { allowGenres: e.target.value.split(',').map(g => g.trim().toLowerCase()).filter(Boolean) })}
+                    style={inp}
+                    placeholder="(unset)"
+                  />
+                </Field>
+                <label style={{ ...checkLabel, marginBottom: 10, whiteSpace: 'nowrap' }}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(preset.strip)}
+                    onChange={e => updatePreset(name, { strip: e.target.checked })}
+                  />
+                  Strip
+                </label>
+              </div>
+            </div>
+          ))}
+          <div style={{ display: 'flex', gap: 10, alignItems: 'end' }}>
+            <Field label="New preset name">
+              <input value={newName} onChange={e => setNewName(e.target.value)} style={{ ...inp, width: 220 }} placeholder="kids_block" onKeyDown={e => { if (e.key === 'Enter') addPreset() }} />
+            </Field>
+            <button type="button" onClick={addPreset} style={{ ...ghostBtn, padding: '9px 14px' }}>+ Add preset</button>
+          </div>
+        </>
+      )}
+
+      {jsonMode && (
+        <>
+          <p style={{ color: '#4a7fb5', fontSize: '0.68rem', margin: '0 0 8px' }}>
+            Full preset power: any slot property is allowed (e.g. <code>openVideo</code>, <code>marathon</code>, <code>fillerWindows</code>).
+          </p>
+          <textarea
+            value={text}
+            onChange={e => { setText(e.target.value); setAppliedMsg('') }}
+            spellCheck={false}
+            style={{ ...inp, fontFamily: 'monospace', fontSize: '0.72rem', minHeight: 120, resize: 'vertical', width: '100%' }}
+          />
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 8 }}>
+            <button type="button" onClick={applyJson} style={{ ...ghostBtn, padding: '8px 14px', height: 'auto' }}>Apply presets</button>
+            {error && <span style={{ color: '#e05050', fontSize: '0.7rem' }}>✗ {error}</span>}
+            {appliedMsg && <span style={{ color: '#4CAF50', fontSize: '0.7rem' }}>{appliedMsg}</span>}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ─── Day preview (dry run) ────────────────────────────────────────────────
+
+interface DayPreviewPayload {
+  date: string
+  dayName: string
+  isWeekend: boolean
+  holiday: string | null
+  channelType: string
+  dateOverrideApplied: boolean
+  scheduleOffsetMins: number
+  blocks: Array<{
+    name: string
+    start: string
+    end: string
+    contentType: string
+    allowGenres: string[]
+    breakStrategy: string | null
+    scheduleIncrement: number | null
+    strip: boolean
+    fillerWindows: number
+    marathon: { chance: number; count: number; hint?: string; wouldTrigger: boolean } | null
+  }>
+}
+
+function DayPreview({ stationId, dirty }: { stationId: string; dirty: boolean }) {
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [preview, setPreview] = useState<DayPreviewPayload | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const run = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const r = await fetch(`/api/admin/stations/${encodeURIComponent(stationId)}/preview?date=${encodeURIComponent(date)}`)
+      const data = await r.json().catch(() => ({}))
+      if (!r.ok) { setError(data?.error ?? 'Preview failed.'); setPreview(null); return }
+      setPreview(data as DayPreviewPayload)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div>
+      <p style={{ color: '#4a7fb5', fontSize: '0.72rem', margin: '0 0 10px' }}>
+        Resolve what this channel&apos;s lineup would look like on a chosen date — including date overrides, holiday detection and marathon outcomes — without generating anything. Marathon rolls are deterministic, so this matches what real generation would produce.
+        {dirty && <span style={{ color: '#e0a030' }}> Save first — the preview reads the last saved configuration.</span>}
+      </p>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'end', marginBottom: 12 }}>
+        <Field label="Broadcast date">
+          <input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ ...inp, width: 180 }} />
+        </Field>
+        <button type="button" onClick={run} disabled={loading} style={{ ...btn, height: 38, opacity: loading ? 0.6 : 1 }}>
+          {loading ? 'Resolving…' : 'Preview Day'}
+        </button>
+      </div>
+      {error && <p style={{ color: '#e05050', fontSize: '0.72rem' }}>✗ {error}</p>}
+      {preview && (
+        <div style={{ border: '1px solid #1e3a5f', backgroundColor: '#07111f', padding: 12 }}>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 10, color: '#a8c4e0', fontSize: '0.72rem' }}>
+            <span><strong style={{ color: '#e8f0fe' }}>{preview.dayName.toUpperCase()}</strong> ({preview.isWeekend ? 'weekend lineup' : 'weekday lineup'})</span>
+            {preview.holiday && <span style={{ color: '#f2c34c' }}>🎄 Holiday: {preview.holiday}</span>}
+            {preview.dateOverrideApplied && <span style={{ color: '#f2c34c' }}>📅 Date override applies</span>}
+            {preview.scheduleOffsetMins > 0 && <span>Showtime offset: :{String(preview.scheduleOffsetMins).padStart(2, '0')}</span>}
+            {preview.channelType !== 'standard' && <span style={{ color: '#e0a030' }}>Non-standard channel ({preview.channelType}) — no scheduled lineup</span>}
+          </div>
+          {preview.blocks.map((b, i) => (
+            <div key={i} style={{ display: 'flex', gap: 12, alignItems: 'baseline', padding: '5px 0', borderTop: i > 0 ? '1px solid #0d1f3c' : 'none', fontSize: '0.72rem', flexWrap: 'wrap' }}>
+              <span style={{ color: '#4a7fb5', fontFamily: 'monospace', minWidth: 96 }}>{b.start}–{b.end}</span>
+              <span style={{ color: '#e8f0fe', fontWeight: 700, minWidth: 130 }}>{b.name}</span>
+              <span style={{ color: '#88a8cc' }}>{b.contentType}</span>
+              {b.marathon?.wouldTrigger && (
+                <span style={{ color: '#0a1628', backgroundColor: '#f2a33c', fontWeight: 800, padding: '1px 8px', borderRadius: 3, fontSize: '0.62rem' }}>
+                  MARATHON ×{b.marathon.count}h
+                </span>
+              )}
+              {b.marathon && !b.marathon.wouldTrigger && (
+                <span style={{ color: '#4a7fb5', fontSize: '0.62rem' }}>marathon roll: no ({Math.round(b.marathon.chance * 100)}%)</span>
+              )}
+              {b.strip && <span style={{ color: '#88a8cc', fontSize: '0.62rem' }}>strip</span>}
+              {b.breakStrategy && <span style={{ color: '#88a8cc', fontSize: '0.62rem' }}>breaks: {b.breakStrategy}</span>}
+              {b.scheduleIncrement != null && <span style={{ color: '#88a8cc', fontSize: '0.62rem' }}>inc: {b.scheduleIncrement === 0 ? 'continuous' : `${b.scheduleIncrement}m`}</span>}
+              {b.fillerWindows > 0 && <span style={{ color: '#88a8cc', fontSize: '0.62rem' }}>{b.fillerWindows} filler window{b.fillerWindows > 1 ? 's' : ''}</span>}
+              {b.allowGenres.length > 0 && <span style={{ color: '#6a86a8', fontSize: '0.62rem' }}>{b.allowGenres.join(', ')}</span>}
+            </div>
+          ))}
+          {preview.blocks.length === 0 && preview.channelType === 'standard' && (
+            <p style={{ color: '#e0a030', fontSize: '0.72rem', margin: 0 }}>No slot configuration — the engine day-part template will be used as-is.</p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function TokenPicker({
   label,
   anyLabel,
@@ -1319,3 +2069,19 @@ const suggestionsWrap: React.CSSProperties = { display: 'grid', gridTemplateColu
 const suggestionBtn: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, backgroundColor: '#0a1628', border: '1px solid #1e3a5f', color: '#e8f0fe', padding: '8px 10px', fontSize: '0.72rem', cursor: 'pointer', textAlign: 'left' as const }
 const suggestionCount: React.CSSProperties = { color: '#4a7fb5', fontSize: '0.68rem' }
 const pickerEmpty: React.CSSProperties = { color: '#4a7fb5', fontSize: '0.72rem' }
+const stickyBarS: React.CSSProperties = {
+  position: 'sticky', top: 0, zIndex: 20,
+  display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 14,
+  backgroundColor: '#0a1628', border: '1px solid #1e3a5f',
+  padding: '10px 14px', marginBottom: 0,
+}
+const tabsRowS: React.CSSProperties = {
+  position: 'sticky', top: 57, zIndex: 19,
+  display: 'flex', gap: 2, flexWrap: 'wrap',
+  backgroundColor: '#060f1e', borderBottom: '1px solid #1e3a5f',
+  padding: '6px 4px 0', marginBottom: 18,
+}
+const tabBtnS: React.CSSProperties = {
+  background: 'transparent', border: 'none', cursor: 'pointer',
+  padding: '8px 14px', fontSize: '0.74rem', letterSpacing: '0.06em',
+}

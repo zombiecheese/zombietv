@@ -45,6 +45,15 @@ function withPlexToken(url: string, plexToken: string): string {
   return next.toString()
 }
 
+// Strips the Plex token before a URL is embedded in a manifest/proxy link
+// that gets sent to the client. The token is re-attached server-side (via
+// withPlexToken) only when we ourselves dereference the proxy link.
+function withoutPlexToken(url: string): string {
+  const next = new URL(url)
+  next.searchParams.delete('X-Plex-Token')
+  return next.toString()
+}
+
 function normalizeClientSessionId(raw: string | null, fallbackUserId: string): string {
   if (raw && /^[A-Za-z0-9_-]{8,80}$/.test(raw)) return raw
   return `zombietv-${fallbackUserId}`
@@ -128,8 +137,9 @@ function buildHlsStartUrl(
     partIndex: '0',
     protocol: 'hls',
     container: 'mpegts',
-    // Let Plex decide direct play vs transcode based on device/network conditions.
-    directPlay: '1',
+    // Direct-stream (remux) the video track, but never direct play the raw
+    // file: browsers need the HLS pipeline, and audio may need transcoding.
+    directPlay: '0',
     directStream: '1',
     location,
     fastSeek: '1',
@@ -140,7 +150,10 @@ function buildHlsStartUrl(
     'X-Plex-Device-Name': 'ZombieTV Web',
     'X-Plex-Device': 'Web Browser',
     'X-Plex-Model': 'ZombieTV',
-    'X-Plex-Platform': 'Web',
+    // Declaring the Chrome platform makes Plex apply its built-in browser
+    // client profile: h264 video direct-streams, while AC3/EAC3/DTS audio is
+    // transcoded to AAC/MP3 (browsers cannot decode those codecs).
+    'X-Plex-Platform': 'Chrome',
     'X-Plex-Client-Identifier': clientSessionId,
     'X-Plex-Session-Identifier': clientSessionId,
     'X-Plex-Token': plexToken,
@@ -174,7 +187,7 @@ async function proxyBinary(url: string, req: NextRequest, plexToken: string): Pr
       .map((line) => {
         const trimmed = line.trim()
         if (!trimmed || trimmed.startsWith('#')) return line
-        const absolute = withPlexToken(new URL(trimmed, urlWithToken).toString(), plexToken)
+        const absolute = withoutPlexToken(new URL(trimmed, urlWithToken).toString())
         return `/api/plex-stream?proxyUrl=${encodeURIComponent(absolute)}`
       })
       .join('\n')
@@ -360,7 +373,7 @@ export async function GET(req: NextRequest) {
         .map((line) => {
           const trimmed = line.trim()
           if (!trimmed || trimmed.startsWith('#')) return line
-          const absolute = withPlexToken(new URL(trimmed, manifestBaseUrl).toString(), plexToken)
+          const absolute = withoutPlexToken(new URL(trimmed, manifestBaseUrl).toString())
           return `/api/plex-stream?proxyUrl=${encodeURIComponent(absolute)}`
         })
         .join('\n')

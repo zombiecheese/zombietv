@@ -8,6 +8,7 @@ import { getIronSession }            from 'iron-session'
 import bcrypt                        from 'bcryptjs'
 import { prisma }                    from '@/lib/db'
 import { sessionOptions, SessionData, defaultSession } from '@/lib/session'
+import { decryptSecret }             from '@/lib/secret-box'
 
 export const dynamic = 'force-dynamic'
 
@@ -112,7 +113,7 @@ export async function POST(req: NextRequest) {
     ...defaultSession,
     isLoggedIn:    true,
     userId:        user.id,
-    plexToken:     prefs.plexToken     ?? '',
+    plexToken:     decryptSecret(prefs.plexToken ?? ''),
     plexServerUrl: prefs.plexServerUrl ?? '',
     plexId:        user.plexId         ?? '',
     username:      user.username       ?? user.email,

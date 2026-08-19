@@ -13,7 +13,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (!guard.ok) return guard.response
 
   const body = await req.json().catch(() => ({}))
-  const { title, category, station, durationMins } = body
+  const { title, category, station, durationMins, dayParts, dateRange, exclusive } = body
 
   const updated = await prisma.youtubeContent.update({
     where: { id },
@@ -22,6 +22,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       ...(category     !== undefined ? { category }     : {}),
       ...(station      !== undefined ? { station }      : {}),
       ...(durationMins !== undefined ? { durationMins } : {}),
+      ...(dayParts     !== undefined ? { dayParts: String(dayParts || '').trim() || null } : {}),
+      ...(dateRange    !== undefined ? { dateRange: String(dateRange || '').trim() || null } : {}),
+      ...(exclusive    !== undefined ? { exclusive: Boolean(exclusive) } : {}),
     },
   })
 

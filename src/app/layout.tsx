@@ -35,6 +35,12 @@ export const viewport = {
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const vhsSettings = await getVHSSettings()
   const curvature   = vhsSettings.crtCurvature
+  const chroma      = vhsSettings.chromaticAberration
+  // RGB convergence error (px) and chroma bandwidth smear driven by the
+  // chromatic aberration knob; luma softness by the overscan toggle.
+  const convergencePx = (chroma * 1.1).toFixed(2)
+  const chromaBlur    = (chroma * 1.3).toFixed(2)
+  const lumaBlur      = vhsSettings.overscanSoftnessEnabled ? '0.42 0.12' : '0 0'
 
   return (
     <html lang="en">
@@ -49,19 +55,40 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         backgroundColor: '#000',
       }}>
 
-        {/* SVG filter for CRT barrel distortion — referenced by body filter */}
+        {/* Composite CRT filter chain — referenced by the viewport wrapper.
+            Stages: RGB convergence split + chroma smear (colour bleed),
+            luma bandwidth softness, then barrel displacement. */}
         <svg width="0" height="0" style={{ position: 'absolute', pointerEvents: 'none' }} aria-hidden="true">
           <defs>
-            <filter id="crt-barrel">
+            <filter id="crt-composite" colorInterpolationFilters="sRGB">
+              {/* Split the picture into R / G / B planes */}
+              <feColorMatrix in="SourceGraphic" type="matrix"
+                values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" result="red" />
+              <feColorMatrix in="SourceGraphic" type="matrix"
+                values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0" result="green" />
+              <feColorMatrix in="SourceGraphic" type="matrix"
+                values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0" result="blue" />
+              {/* Misconverge red right / blue left, smear chroma horizontally
+                  (NTSC chroma bandwidth is far below luma bandwidth) */}
+              <feOffset in="red" dx={convergencePx} dy="0" result="redShift" />
+              <feGaussianBlur in="redShift" stdDeviation={`${chromaBlur} 0`} result="redSmear" />
+              <feOffset in="blue" dx={`-${convergencePx}`} dy="0" result="blueShift" />
+              <feGaussianBlur in="blueShift" stdDeviation={`${chromaBlur} 0`} result="blueSmear" />
+              {/* Recombine planes additively */}
+              <feComposite in="redSmear" in2="green" operator="arithmetic" k1="0" k2="1" k3="1" k4="0" result="rg" />
+              <feComposite in="rg" in2="blueSmear" operator="arithmetic" k1="0" k2="1" k3="1" k4="0" result="recombined" />
+              {/* Analog bandwidth: soften horizontally more than vertically */}
+              <feGaussianBlur in="recombined" stdDeviation={lumaBlur} result="soft" />
+              {/* Tube geometry: smooth low-frequency displacement */}
               <feTurbulence
                 type="fractalNoise"
                 baseFrequency={`${0.0007 * curvature}`}
                 numOctaves="1"
-                result="noise"
+                result="warpNoise"
               />
               <feDisplacementMap
-                in="SourceGraphic"
-                in2="noise"
+                in="soft"
+                in2="warpNoise"
                 scale={`${curvature * 12}`}
                 xChannelSelector="R"
                 yChannelSelector="G"

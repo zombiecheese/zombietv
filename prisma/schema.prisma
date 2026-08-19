@@ -121,7 +121,22 @@ model MediaItem {
   episodeNumber  Int?
 
   chapters       String?  // JSON: Plex chapter markers [{title,startOffsetMs}]
+  markers        String?  // JSON: Plex intro/credits markers [{type,startMs,endMs}]
   youtubeId      String?  // Fallback YouTube ID if Plex stream unavailable
+
+  // Extended Plex metadata used by the scheduler (all optional; populated on sync)
+  originallyAvailableAt DateTime? // original air/release date
+  audienceRating Float?  // 0–10 audience score
+  criticRating   Float?  // 0–10 critic score
+  studio         String?
+  countries      String? // comma-separated, lower-cased
+  collections    String? // comma-separated Plex collection tags, lower-cased
+  labels         String? // comma-separated Plex labels, lower-cased
+  addedAtPlex    DateTime? // when the item was added to the Plex library
+  viewCount      Int?    // Plex watch count (admin account)
+  lastViewedAt   DateTime? // last watched on Plex (admin account)
+  thumbPath      String? // Plex poster path (/library/metadata/../thumb/..)
+  artPath        String? // Plex background art path
 
   scheduledCount Int      @default(0)
   lastScheduled  DateTime?
@@ -162,6 +177,12 @@ model YoutubeContent {
 
   category      String   // "ads" | "music" | "bumpers" | "filler" | "special"
   station       String?  // null = global; "zbc" = station-specific
+
+  // Availability hints (FieldStation42-style): restrict when this item is
+  // eligible for ad/filler selection. Empty = always eligible.
+  dayParts      String?  // comma list: "morning,daytime,prime,late,overnight"
+  dateRange     String?  // "October 15 - October 31" (may wrap the year)
+  exclusive     Boolean  @default(false) // when matching, exclude non-hinted pool items
 
   durationMins  Int?     // Known duration (videos only; null for playlists)
   scheduledCount Int     @default(0)

@@ -11,19 +11,44 @@ import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 
-const NAV = [
-  { href: '/admin/dashboard',          label: 'Overview',        icon: '📊' },
-  { href: '/admin/dashboard/youtube',  label: 'Filler Content',  icon: '▶️'  },
-  { href: '/admin/dashboard/holidays', label: 'Holiday Overrides', icon: '🎄' },
-  { href: '/admin/dashboard/events',   label: 'Special Events',  icon: '⚡' },
-  { href: '/admin/dashboard/catalog',  label: 'Plex Catalog',    icon: '🎞️' },
-  { href: '/admin/dashboard/shows',    label: 'Show Progress',   icon: '🎬' },
-  { href: '/admin/dashboard/stations', label: 'Station Rules',   icon: '📡' },
-  { href: '/admin/dashboard/schedule', label: 'Schedule Editor', icon: '📅' },
-  { href: '/admin/dashboard/vhs',      label: 'VHS / CRT Effects', icon: '📼' },
-  { href: '/admin/dashboard/security', label: 'Admin Security',  icon: '🔑' },
-  { href: '/admin/dashboard/audit',    label: 'Audit Log',       icon: '📋' },
+interface NavItem { href: string; label: string; icon: string }
+interface NavGroup { title: string; items: NavItem[] }
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    title: 'Programming',
+    items: [
+      { href: '/admin/dashboard',          label: 'Overview',         icon: '📊' },
+      { href: '/admin/dashboard/schedule', label: 'Schedule Editor',  icon: '📅' },
+      { href: '/admin/dashboard/stations', label: 'Station Rules',    icon: '📡' },
+      { href: '/admin/dashboard/shows',    label: 'Show Progress',    icon: '🎬' },
+    ],
+  },
+  {
+    title: 'Content',
+    items: [
+      { href: '/admin/dashboard/catalog',  label: 'Plex Catalog',      icon: '🎞️' },
+      { href: '/admin/dashboard/youtube',  label: 'Filler Content',    icon: '▶️'  },
+      { href: '/admin/dashboard/holidays', label: 'Holiday Overrides', icon: '🎄' },
+      { href: '/admin/dashboard/events',   label: 'Special Events',    icon: '⚡' },
+    ],
+  },
+  {
+    title: 'Presentation',
+    items: [
+      { href: '/admin/dashboard/vhs',      label: 'VHS / CRT Effects', icon: '📼' },
+    ],
+  },
+  {
+    title: 'System',
+    items: [
+      { href: '/admin/dashboard/security', label: 'Admin Security',   icon: '🔑' },
+      { href: '/admin/dashboard/audit',    label: 'Audit Log',        icon: '📋' },
+    ],
+  },
 ]
+
+const NAV: NavItem[] = NAV_GROUPS.flatMap((g) => g.items)
 
 interface Props { children: React.ReactNode }
 
@@ -103,25 +128,30 @@ export default function AdminShell({ children }: Props) {
           </span>
         </div>
 
-        <nav style={{ flex: 1, overflowY: 'auto' }}>
-          {NAV.map((item) => {
-            const active = path === item.href || (item.href !== '/admin/dashboard' && path.startsWith(item.href))
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                style={{
-                  ...shell.navItem,
-                  backgroundColor: active ? '#1a3a6e' : 'transparent',
-                  borderLeft:      active ? '3px solid #ff6600' : '3px solid transparent',
-                  color:           active ? '#fff' : '#4a7fb5',
-                }}
-              >
-                <span style={{ fontSize: '0.9rem', width: 20, textAlign: 'center' }}>{item.icon}</span>
-                <span>{item.label}</span>
-              </Link>
-            )
-          })}
+        <nav style={{ flex: 1, overflowY: 'auto', paddingTop: 6 }}>
+          {NAV_GROUPS.map((group) => (
+            <div key={group.title} style={{ marginBottom: 10 }}>
+              <div style={shell.navGroupTitle}>{group.title.toUpperCase()}</div>
+              {group.items.map((item) => {
+                const active = path === item.href || (item.href !== '/admin/dashboard' && path.startsWith(item.href))
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    style={{
+                      ...shell.navItem,
+                      backgroundColor: active ? '#1a3a6e' : 'transparent',
+                      borderLeft:      active ? '3px solid #ff6600' : '3px solid transparent',
+                      color:           active ? '#fff' : '#7c9cc4',
+                    }}
+                  >
+                    <span style={{ fontSize: '0.85rem', width: 20, textAlign: 'center', opacity: active ? 1 : 0.75 }}>{item.icon}</span>
+                    <span>{item.label}</span>
+                  </Link>
+                )
+              })}
+            </div>
+          ))}
         </nav>
 
         <div style={shell.sidebarFooter}>
@@ -136,7 +166,7 @@ export default function AdminShell({ children }: Props) {
         {/* Top bar */}
         <header style={shell.topbar}>
           <span style={{ color: '#a8c4e0', fontSize: '0.75rem' }}>
-            {NAV.find((n) => path.startsWith(n.href))?.label ?? 'Admin'}
+            {[...NAV].sort((a, b) => b.href.length - a.href.length).find((n) => path.startsWith(n.href))?.label ?? 'Admin'}
           </span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
             {user && (
@@ -194,11 +224,19 @@ const shell = {
     display:         'flex',
     alignItems:      'center',
     gap:             10,
-    padding:         '10px 16px',
+    padding:         '9px 16px',
     textDecoration:  'none',
     fontSize:        '0.75rem',
     transition:      'background-color 0.1s',
     cursor:          'pointer',
+  } as React.CSSProperties,
+
+  navGroupTitle: {
+    padding:       '10px 16px 4px',
+    color:         '#3a5a85',
+    fontSize:      '0.56rem',
+    fontWeight:    700,
+    letterSpacing: '0.2em',
   } as React.CSSProperties,
 
   sidebarFooter: {

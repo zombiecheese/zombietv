@@ -22,9 +22,10 @@ interface Props {
   isLoggedIn:    boolean
   onLoginClick:  () => void
   onLogoutClick: () => void
+  visible?:      boolean   // OSD-style auto-hide — slides away when false
 }
 
-export default function NowBar({ state, clockOffsetMs, isLoggedIn, onLoginClick, onLogoutClick }: Props) {
+export default function NowBar({ state, clockOffsetMs, isLoggedIn, onLoginClick, onLogoutClick, visible = true }: Props) {
   const [clockStr, setClockStr] = useState('')
   const [stations, setStations] = useState<Record<string, { name: string; colour: string }>>(DEFAULT_STATIONS)
 
@@ -87,6 +88,9 @@ export default function NowBar({ state, clockOffsetMs, isLoggedIn, onLoginClick,
       fontSize:        '0.72rem',
       color:           '#a8c4e0',
       gap:             0,
+      transform:       visible ? 'translateY(0)' : 'translateY(110%)',
+      transition:      'transform 0.25s ease',
+      pointerEvents:   visible ? 'auto' : 'none',
     }}>
 
       {/* Station badge */}

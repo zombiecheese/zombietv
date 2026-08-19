@@ -62,8 +62,12 @@ export async function POST(req: NextRequest) {
   const guard = await requireAdmin(req)
   if (!guard.ok) return guard.response
 
-  const { title, videoId, playlistId, isPlaylist, category, station, durationMins } =
+  const { title, videoId, playlistId, isPlaylist, category, station, durationMins, dayParts, dateRange, exclusive } =
     await req.json().catch(() => ({}))
+
+  const cleanDayParts = String(dayParts ?? '').trim() || null
+  const cleanDateRange = String(dateRange ?? '').trim() || null
+  const cleanExclusive = Boolean(exclusive)
 
   const cleanVideoId = normalizeYouTubeVideoId(videoId)
   const cleanPlaylistId = typeof playlistId === 'string' ? normalizePlaylistId(playlistId) : ''
@@ -99,6 +103,9 @@ export async function POST(req: NextRequest) {
               category,
               station: station || null,
               durationMins: item.durationMins ?? fallbackDuration,
+              dayParts: cleanDayParts,
+              dateRange: cleanDateRange,
+              exclusive: cleanExclusive,
             },
           })
           createdCount += 1
@@ -137,6 +144,9 @@ export async function POST(req: NextRequest) {
       category,
       station:     station    || null,
       durationMins: resolvedDurationMins,
+      dayParts:    cleanDayParts,
+      dateRange:   cleanDateRange,
+      exclusive:   cleanExclusive,
     },
   })
 

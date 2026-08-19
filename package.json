@@ -9,6 +9,8 @@
     "dev": "next dev",
     "build": "next build --webpack",
     "start": "next start",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "db:init": "node scripts/init-db.js",
     "db:migrate": "prisma migrate dev",
     "admin": "next dev -p 3001"
@@ -19,7 +21,7 @@
     "date-fns": "^3.0.0",
     "hls.js": "^1.6.16",
     "iron-session": "^8.0.1",
-    "next": "^16.2.9",
+    "next": "^16.2.11",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },
@@ -27,7 +29,14 @@
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20.19.43",
     "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
     "prisma": "^5.7.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "vitest": "^4.1.10"
+  },
+  "overrides": {
+    "postcss": "^8.5.23",
+    "nanoid": "^3.3.18",
+    "sharp": "^0.35.0"
   }
 }

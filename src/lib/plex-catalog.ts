@@ -337,13 +337,37 @@ function normalizePlexItem(item: PlexMediaItem): PlexMediaItem {
     ...item,
     genres: (item.genres ?? []).map((g) => String(g).toLowerCase()).filter(Boolean),
     languages: (item.languages ?? []).map((l) => String(l).toLowerCase()).filter(Boolean),
+    countries: (item.countries ?? []).map((c) => String(c).toLowerCase()).filter(Boolean),
+    collections: (item.collections ?? []).map((c) => String(c).toLowerCase()).filter(Boolean),
+    labels: (item.labels ?? []).map((l) => String(l).toLowerCase()).filter(Boolean),
     contentRating: item.contentRating || 'PG',
     durationMins: Math.max(0, Number(item.durationMins ?? 0)),
   }
 }
 
+function parseDateOnly(value: string | undefined): Date | null {
+  if (!value || !/^\d{4}-\d{2}-\d{2}/.test(value)) return null
+  const d = new Date(`${value.slice(0, 10)}T00:00:00.000Z`)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
 async function upsertCatalogItem(item: PlexMediaItem): Promise<void> {
   const normalized = normalizePlexItem(item)
+  const extended = {
+    markers: normalized.markers?.length ? toJson(normalized.markers) : null,
+    originallyAvailableAt: parseDateOnly(normalized.originallyAvailableAt),
+    audienceRating: normalized.audienceRating ?? null,
+    criticRating: normalized.criticRating ?? null,
+    studio: normalized.studio ?? null,
+    countries: normalized.countries?.length ? normalized.countries.join(',') : null,
+    collections: normalized.collections?.length ? normalized.collections.join(',') : null,
+    labels: normalized.labels?.length ? normalized.labels.join(',') : null,
+    addedAtPlex: normalized.addedAtMs ? new Date(normalized.addedAtMs) : null,
+    viewCount: normalized.viewCount ?? null,
+    lastViewedAt: normalized.lastViewedAtMs ? new Date(normalized.lastViewedAtMs) : null,
+    thumbPath: normalized.thumbPath ?? null,
+    artPath: normalized.artPath ?? null,
+  }
   await prisma.mediaItem.upsert({
     where: { plexKey: normalized.ratingKey },
     update: {
@@ -358,6 +382,7 @@ async function upsertCatalogItem(item: PlexMediaItem): Promise<void> {
       seasonNumber: normalized.seasonNumber,
       episodeNumber: normalized.episodeNumber,
       chapters: normalized.chapters ? toJson(normalized.chapters) : null,
+      ...extended,
       // Only overwrite library metadata when the item carries it (episodes do
       // not), so we never clear a show/movie's library on a partial upsert.
       librarySectionKey: normalized.sourceSectionKey ?? undefined,
@@ -376,6 +401,7 @@ async function upsertCatalogItem(item: PlexMediaItem): Promise<void> {
       seasonNumber: normalized.seasonNumber,
       episodeNumber: normalized.episodeNumber,
       chapters: normalized.chapters ? toJson(normalized.chapters) : undefined,
+      ...extended,
       librarySectionKey: normalized.sourceSectionKey ?? undefined,
       librarySectionTitle: normalized.sourceSectionTitle ?? undefined,
     },
@@ -414,7 +440,13 @@ export async function syncPlexCatalog(
 
   const movieItems = await plex.searchMovies({ sectionKeys: selectedLibraryKeys }).catch(() => [])
   for (const movie of movieItems) {
-    await upsertCatalogItem(movie)
+    // Enrich with a per-item detail fetch so movies carry chapters and
+    // intro/credits markers (the section listing does not include them).
+    const detailed = await plex.getItemByKey(movie.ratingKey).catch(() => null)
+    const merged: PlexMediaItem = detailed
+      ? { ...movie, ...detailed, sourceSectionKey: movie.sourceSectionKey, sourceSectionTitle: movie.sourceSectionTitle }
+      : movie
+    await upsertCatalogItem(merged)
     activePlexKeys.add(movie.ratingKey)
     if (movie.sourceSectionKey) {
       activeClassByPlexKey[movie.ratingKey] = libraryClassifications[movie.sourceSectionKey] ?? 'movies'
@@ -599,6 +631,19 @@ interface CatalogMediaRow {
   seasonNumber: number | null
   episodeNumber: number | null
   chapters: string | null
+  markers: string | null
+  originallyAvailableAt: Date | null
+  audienceRating: number | null
+  criticRating: number | null
+  studio: string | null
+  countries: string | null
+  collections: string | null
+  labels: string | null
+  addedAtPlex: Date | null
+  viewCount: number | null
+  lastViewedAt: Date | null
+  thumbPath: string | null
+  artPath: string | null
   scheduledCount: number
   lastScheduled: Date | null
 }
@@ -649,9 +694,36 @@ function mapCatalogRow(row: CatalogMediaRow): PlexMediaItem {
     seasonNumber: row.seasonNumber ?? undefined,
     episodeNumber: row.episodeNumber ?? undefined,
     chapters: row.chapters ? (JSON.parse(row.chapters) as Array<{ title: string; startOffsetMs: number }>) : undefined,
+    markers: row.markers ? (JSON.parse(row.markers) as Array<{ type: string; startMs: number; endMs: number }>) : undefined,
+    originallyAvailableAt: row.originallyAvailableAt ? row.originallyAvailableAt.toISOString().slice(0, 10) : undefined,
+    audienceRating: row.audienceRating ?? undefined,
+    criticRating: row.criticRating ?? undefined,
+    studio: row.studio ?? undefined,
+    countries: parseCsvList(row.countries),
+    collections: parseCsvList(row.collections),
+    labels: parseCsvList(row.labels),
+    addedAtMs: row.addedAtPlex ? row.addedAtPlex.getTime() : undefined,
+    viewCount: row.viewCount ?? undefined,
+    lastViewedAtMs: row.lastViewedAt ? row.lastViewedAt.getTime() : undefined,
+    thumbPath: row.thumbPath ?? undefined,
+    artPath: row.artPath ?? undefined,
     sourceSectionKey: row.librarySectionKey ?? undefined,
     sourceSectionTitle: row.librarySectionTitle ?? undefined,
   }
+}
+
+// Every taggable token on an item: genres plus Plex collections, labels,
+// countries and studio. Slot allow-lists and holiday genre priorities match
+// against this combined set, so a Plex "Halloween" collection works exactly
+// like a genre without re-tagging anything.
+export function itemMatchTokens(item: PlexMediaItem): Set<string> {
+  const tokens = new Set<string>()
+  for (const g of item.genres ?? []) tokens.add(g)
+  for (const c of item.collections ?? []) tokens.add(c)
+  for (const l of item.labels ?? []) tokens.add(l)
+  for (const c of item.countries ?? []) tokens.add(c)
+  if (item.studio) tokens.add(item.studio.toLowerCase())
+  return tokens
 }
 
 function ratingToRank(rating: string): number {
@@ -732,6 +804,19 @@ export async function getCatalogCandidates(filters: CatalogPickFilters): Promise
       "seasonNumber",
       "episodeNumber",
       "chapters",
+      "markers",
+      "originallyAvailableAt",
+      "audienceRating",
+      "criticRating",
+      "studio",
+      "countries",
+      "collections",
+      "labels",
+      "addedAtPlex",
+      "viewCount",
+      "lastViewedAt",
+      "thumbPath",
+      "artPath",
       "scheduledCount",
       "lastScheduled"
     FROM "MediaItem"
@@ -747,11 +832,19 @@ export async function getCatalogCandidates(filters: CatalogPickFilters): Promise
   return rows
     .filter((row) => !activeKeys.size || activeKeys.has(row.plexKey))
     .filter((row) => {
-      const genres = parseCsvList(row.genres)
+      // Allow/deny lists match any taggable token: genres, collections,
+      // labels, countries and studio (all lower-cased at sync time).
+      const tokens = new Set<string>([
+        ...parseCsvList(row.genres),
+        ...parseCsvList(row.collections),
+        ...parseCsvList(row.labels),
+        ...parseCsvList(row.countries),
+        ...(row.studio ? [row.studio.toLowerCase()] : []),
+      ])
       const languages = parseCsvList(row.languages)
       if (!yearIsWithinRange(row.year, yearMin, yearMax)) return false
-      if (allow.length && !allow.some((g) => genres.includes(g))) return false
-      if (deny.some((g) => genres.includes(g))) return false
+      if (allow.length && !allow.some((g) => tokens.has(g))) return false
+      if (deny.some((g) => tokens.has(g))) return false
       if (allowLanguages.length && !allowLanguages.some((language) => languages.includes(language))) return false
       if (denyLanguages.some((language) => languages.includes(language))) return false
       return true
@@ -798,6 +891,19 @@ export async function getCatalogEpisodeList(
       "seasonNumber",
       "episodeNumber",
       "chapters",
+      "markers",
+      "originallyAvailableAt",
+      "audienceRating",
+      "criticRating",
+      "studio",
+      "countries",
+      "collections",
+      "labels",
+      "addedAtPlex",
+      "viewCount",
+      "lastViewedAt",
+      "thumbPath",
+      "artPath",
       "scheduledCount",
       "lastScheduled"
     FROM "MediaItem"
@@ -865,6 +971,19 @@ export async function getCatalogEpisode(
       "seasonNumber",
       "episodeNumber",
       "chapters",
+      "markers",
+      "originallyAvailableAt",
+      "audienceRating",
+      "criticRating",
+      "studio",
+      "countries",
+      "collections",
+      "labels",
+      "addedAtPlex",
+      "viewCount",
+      "lastViewedAt",
+      "thumbPath",
+      "artPath",
       "scheduledCount",
       "lastScheduled"
     FROM "MediaItem"
@@ -898,14 +1017,16 @@ export async function getCatalogEpisode(
 export async function getCatalogFilterOptions(): Promise<{
   genres: CatalogFilterOption[]
   languages: CatalogFilterOption[]
+  collections: CatalogFilterOption[]
 }> {
-  const rows = await prisma.$queryRaw<Array<{ genres: string | null; languages: string | null }>>`
-    SELECT "genres", "languages"
+  const rows = await prisma.$queryRaw<Array<{ genres: string | null; languages: string | null; collections: string | null; labels: string | null; studio: string | null; countries: string | null }>>`
+    SELECT "genres", "languages", "collections", "labels", "studio", "countries"
     FROM "MediaItem"
   `
 
   const genreCounts = new Map<string, number>()
   const languageCounts = new Map<string, number>()
+  const collectionCounts = new Map<string, number>()
 
   for (const row of rows) {
     for (const genre of parseCsvList(row.genres)) {
@@ -914,6 +1035,18 @@ export async function getCatalogFilterOptions(): Promise<{
     for (const language of parseCsvList(row.languages)) {
       languageCounts.set(language, (languageCounts.get(language) ?? 0) + 1)
     }
+    // Collections, labels, studios and countries are all matchable tokens.
+    for (const token of parseCsvList(row.collections)) {
+      collectionCounts.set(token, (collectionCounts.get(token) ?? 0) + 1)
+    }
+    for (const token of parseCsvList(row.labels)) {
+      collectionCounts.set(token, (collectionCounts.get(token) ?? 0) + 1)
+    }
+    for (const token of parseCsvList(row.countries)) {
+      collectionCounts.set(token, (collectionCounts.get(token) ?? 0) + 1)
+    }
+    const studio = String(row.studio ?? '').trim().toLowerCase()
+    if (studio) collectionCounts.set(studio, (collectionCounts.get(studio) ?? 0) + 1)
   }
 
   const toSortedList = (counts: Map<string, number>) =>
@@ -924,6 +1057,7 @@ export async function getCatalogFilterOptions(): Promise<{
   return {
     genres: toSortedList(genreCounts),
     languages: toSortedList(languageCounts),
+    collections: toSortedList(collectionCounts),
   }
 }
 
