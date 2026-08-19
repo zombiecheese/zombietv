@@ -12,7 +12,23 @@ const CATEGORIES: Array<{ value: string; label: string }> = [
   { value: 'infomercial', label: 'Infomercial' },
 ]
 
-interface YTEntry { id: string; title: string; videoId: string | null; playlistId: string | null; isPlaylist: boolean; category: string; station: string | null; durationMins: number | null; scheduledCount: number; createdAt: string }
+interface YTEntry { id: string; title: string; videoId: string | null; playlistId: string | null; isPlaylist: boolean; category: string; station: string | null; durationMins: number | null; scheduledCount: number; createdAt: string; dayParts: string | null; dateRange: string | null; exclusive: boolean }
+
+const DAY_PARTS = ['morning', 'daytime', 'prime', 'late', 'overnight'] as const
+
+function toggleDayPart(list: string, part: string): string {
+  const parts = list.split(',').map((p) => p.trim()).filter(Boolean)
+  const next = parts.includes(part) ? parts.filter((p) => p !== part) : [...parts, part]
+  return next.join(',')
+}
+
+function hintSummary(item: YTEntry): string {
+  const bits: string[] = []
+  if (item.dayParts?.trim()) bits.push(item.dayParts)
+  if (item.dateRange?.trim()) bits.push(item.dateRange)
+  if (item.exclusive) bits.push('exclusive')
+  return bits.length ? bits.join(' · ') : '—'
+}
 
 function extractVideoId(input: string): string | null {
   const raw = input.trim()
@@ -51,11 +67,13 @@ export default function YouTubePage() {
   const [items, setItems]       = useState<YTEntry[]>([])
   const [stations, setStations] = useState<StationOption[]>([{ id: 'stn', name: 'STN' }, { id: 'zbc', name: 'ZBC' }, { id: 'nnwk', name: 'NNWK' }, { id: 'seven', name: '7' }, { id: 'nine', name: '9' }, { id: 'ten', name: '10' }])
   const [filter, setFilter]     = useState({ category: '', station: '' })
-  const [form, setForm]         = useState({ title: '', videoId: '', playlistId: '', isPlaylist: false, category: 'music', station: '', durationMins: '' })
+  const [form, setForm]         = useState({ title: '', videoId: '', playlistId: '', isPlaylist: false, category: 'music', station: '', durationMins: '', dayParts: '', dateRange: '', exclusive: false })
   const [msg, setMsg]           = useState('')
   const [editId, setEditId]     = useState<string | null>(null)
-  const [editForm, setEditForm] = useState({ title: '', category: '', station: '', durationMins: '' })
+  const [editForm, setEditForm] = useState({ title: '', category: '', station: '', durationMins: '', dayParts: '', dateRange: '', exclusive: false })
   const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [brokenIds, setBrokenIds] = useState<Set<string>>(new Set())
+  const [validating, setValidating] = useState(false)
 
   const load = useCallback(async () => {
     const params = new URLSearchParams()
@@ -91,7 +109,7 @@ export default function YouTubePage() {
     } else {
       setMsg(r.ok ? '✓ Added.' : `✗ ${data?.error ?? 'Failed.'}`)
     }
-    if (r.ok) { setForm({ title: '', videoId: '', playlistId: '', isPlaylist: false, category: 'music', station: '', durationMins: '' }); load() }
+    if (r.ok) { setForm({ title: '', videoId: '', playlistId: '', isPlaylist: false, category: 'music', station: '', durationMins: '', dayParts: '', dateRange: '', exclusive: false }); load() }
   }
 
   const remove = async (id: string) => {
@@ -150,6 +168,23 @@ export default function YouTubePage() {
     load()
   }
 
+  const validatePool = async () => {
+    setValidating(true)
+    setMsg('Checking video availability… this can take a minute for large pools.')
+    try {
+      const r = await fetch('/api/admin/youtube/validate', { method: 'POST' })
+      const data = await r.json().catch(() => ({}))
+      if (!r.ok) { setMsg(`✗ ${data?.error ?? 'Availability check failed.'}`); return }
+      const failed: Array<{ id: string }> = Array.isArray(data.failed) ? data.failed : []
+      setBrokenIds(new Set(failed.map((f) => f.id)))
+      setMsg(failed.length
+        ? `⚠ ${failed.length} of ${data.checked} videos are unavailable or not embeddable — rows highlighted below.`
+        : `✓ All ${data.checked} videos are available and embeddable.`)
+    } finally {
+      setValidating(false)
+    }
+  }
+
   return (
     <AdminShell>
       <h2 style={h2}>Filler Content</h2>
@@ -181,6 +216,35 @@ export default function YouTubePage() {
           <input type="checkbox" checked={form.isPlaylist} onChange={e => setForm({...form, isPlaylist: e.target.checked})} />
           Import playlist items
         </label>
+
+        {/* Availability hints (FieldStation42-style) */}
+        <div style={{ marginTop: 14, border: '1px solid #1e3a5f', padding: 12 }}>
+          <div style={{ color: '#4a7fb5', fontSize: '0.62rem', letterSpacing: '0.06em', marginBottom: 8 }}>
+            AVAILABILITY (optional — restrict when this plays; blank = always eligible)
+          </div>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+            {DAY_PARTS.map((part) => (
+              <label key={part} style={checkLabel}>
+                <input
+                  type="checkbox"
+                  checked={form.dayParts.split(',').map(p => p.trim()).includes(part)}
+                  onChange={() => setForm({ ...form, dayParts: toggleDayPart(form.dayParts, part) })}
+                />
+                {part}
+              </label>
+            ))}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 12, marginTop: 10, alignItems: 'center' }}>
+            <Fld label="Date range (e.g. October 15 - October 31; may wrap the year)">
+              <input value={form.dateRange} onChange={e => setForm({...form, dateRange: e.target.value})} style={inp} placeholder="December 1 - December 26" />
+            </Fld>
+            <label style={{ ...checkLabel, whiteSpace: 'nowrap' }} title="When this item's window matches, non-hinted pool items are excluded (themed takeover)">
+              <input type="checkbox" checked={form.exclusive} onChange={e => setForm({...form, exclusive: e.target.checked})} />
+              Exclusive in window
+            </label>
+          </div>
+        </div>
+
         <button onClick={add} style={{ ...btn, marginTop: 14 }}>Add to Pool</button>
       </div>
 
@@ -197,6 +261,9 @@ export default function YouTubePage() {
         <button onClick={backfillDurations} style={{ ...btn, backgroundColor: '#1a3a6e' }} title="Fetch missing runtimes for better filler fitting">
           Backfill Runtimes
         </button>
+        <button onClick={validatePool} disabled={validating} style={{ ...btn, backgroundColor: '#1a3a6e', opacity: validating ? 0.6 : 1 }} title="Check every video against YouTube — flags deleted, private or embed-disabled entries">
+          {validating ? 'Checking…' : 'Check Availability'}
+        </button>
         <button onClick={selectAllVisible} style={{ ...btn, backgroundColor: '#2d5a24' }} disabled={!items.length}>Select All</button>
         <button onClick={unselectAllVisible} style={{ ...btn, backgroundColor: '#333' }} disabled={!selectedIds.length}>Unselect All</button>
         <button onClick={bulkRemoveSelected} style={{ ...btn, backgroundColor: '#3d0000' }} disabled={!selectedIds.length}>Remove Selected ({selectedIds.length})</button>
@@ -207,7 +274,7 @@ export default function YouTubePage() {
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid #1e3a5f', color: '#4a7fb5' }}>
-              {['', 'Title','ID','Type','Category','Station','Duration','Used','Actions'].map(h => (
+              {['', 'Title','ID','Type','Category','Station','Duration','Availability','Used','Actions'].map(h => (
                 <th key={h} style={{ padding: '7px 10px', textAlign: 'left', fontWeight: 600, whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
@@ -215,7 +282,9 @@ export default function YouTubePage() {
           <tbody>
             {items.map(item => (
               <Fragment key={item.id}>
-                <tr style={{ borderBottom: '1px solid #0d1f3c' }}>
+                <tr style={{ borderBottom: '1px solid #0d1f3c', backgroundColor: brokenIds.has(item.id) ? 'rgba(139,28,28,0.25)' : undefined }}
+                  title={brokenIds.has(item.id) ? 'This video failed the availability check — it may be deleted, private, or embed-disabled.' : undefined}
+                >
                   <td style={tdc}>
                     <input
                       type="checkbox"
@@ -230,6 +299,7 @@ export default function YouTubePage() {
                   <td style={tdc}><span style={{ backgroundColor: '#1a3a6e', padding: '2px 6px', fontSize: '0.65rem' }}>{item.category}</span></td>
                   <td style={tdc}>{item.station ?? 'global'}</td>
                   <td style={tdc}>{item.durationMins != null ? `${item.durationMins}m` : '—'}</td>
+                  <td style={{ ...tdc, fontSize: '0.66rem', maxWidth: 160, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={hintSummary(item)}>{hintSummary(item)}</td>
                   <td style={tdc}>{item.scheduledCount}</td>
                   <td style={tdc}>
                     <div style={{ display: 'flex', gap: 6 }}>
@@ -241,14 +311,14 @@ export default function YouTubePage() {
                           ▶ Preview
                         </button>
                       )}
-                      <button onClick={() => { setEditId(item.id); setEditForm({ title: item.title, category: item.category, station: item.station ?? '', durationMins: item.durationMins?.toString() ?? '' }) }} style={{ ...btn, padding: '3px 8px', fontSize: '0.65rem' }}>Edit</button>
+                      <button onClick={() => { setEditId(item.id); setEditForm({ title: item.title, category: item.category, station: item.station ?? '', durationMins: item.durationMins?.toString() ?? '', dayParts: item.dayParts ?? '', dateRange: item.dateRange ?? '', exclusive: Boolean(item.exclusive) }) }} style={{ ...btn, padding: '3px 8px', fontSize: '0.65rem' }}>Edit</button>
                       <button onClick={() => remove(item.id)} style={{ ...btn, padding: '3px 8px', fontSize: '0.65rem', backgroundColor: '#3d0000' }}>Del</button>
                     </div>
                   </td>
                 </tr>
               </Fragment>
             ))}
-            {items.length === 0 && <tr><td colSpan={9} style={{ ...tdc, color: '#4a7fb5', fontStyle: 'italic' }}>No entries yet.</td></tr>}
+            {items.length === 0 && <tr><td colSpan={10} style={{ ...tdc, color: '#4a7fb5', fontStyle: 'italic' }}>No entries yet.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -262,6 +332,16 @@ export default function YouTubePage() {
             <Fld label="Category"><select value={editForm.category} onChange={e => setEditForm({...editForm, category: e.target.value})} style={sel}>{CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}</select></Fld>
             <Fld label="Station"><select value={editForm.station} onChange={e => setEditForm({...editForm, station: e.target.value})} style={sel}><option value="">(global)</option>{stations.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></Fld>
             <Fld label="Duration (mins)"><input type="number" value={editForm.durationMins} onChange={e => setEditForm({...editForm, durationMins: e.target.value})} style={inp} /></Fld>
+            <Fld label="Day parts (comma list: morning,daytime,prime,late,overnight)">
+              <input value={editForm.dayParts} onChange={e => setEditForm({...editForm, dayParts: e.target.value})} style={inp} placeholder="(always)" />
+            </Fld>
+            <Fld label="Date range">
+              <input value={editForm.dateRange} onChange={e => setEditForm({...editForm, dateRange: e.target.value})} style={inp} placeholder="October 15 - October 31" />
+            </Fld>
+            <label style={checkLabel}>
+              <input type="checkbox" checked={editForm.exclusive} onChange={e => setEditForm({...editForm, exclusive: e.target.checked})} />
+              Exclusive in window
+            </label>
             <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
               <button onClick={saveEdit} style={{ ...btn, flex: 1 }}>Save</button>
               <button onClick={() => setEditId(null)} style={{ ...btn, flex: 1, backgroundColor: '#333' }}>Cancel</button>

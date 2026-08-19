@@ -22,15 +22,20 @@ export default function VHSOverlay({ settings }: Props) {
     noise,
     chromaticAberration,
     vignette,
+    crtCurvature,
     flicker,
     ghosting,
     trackingNoise,
     horizontalJitter,
     syncWobbleJumpsEnabled,
     overscanSoftnessEnabled,
+    compositeArtifactsEnabled,
+    phosphorBloomEnabled,
+    shadowMaskEnabled,
   } = settings
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const burstRef = useRef(1)
   const [jitterPx, setJitterPx] = useState(0)
   const [syncX, setSyncX] = useState(0)
   const [syncY, setSyncY] = useState(0)
@@ -101,7 +106,7 @@ export default function VHSOverlay({ settings }: Props) {
       const h = canvasEl.height
       const imageData = ctx.createImageData(w, h)
       const d = imageData.data
-      const alpha = Math.floor(noise * 24)
+      const alpha = Math.floor(noise * 24 * burstRef.current)
 
       for (let i = 0; i < d.length; i += 4) {
         const v = Math.floor(80 + Math.random() * 100)
@@ -111,8 +116,37 @@ export default function VHSOverlay({ settings }: Props) {
         d[i + 3] = Math.floor(Math.random() * alpha)
       }
 
+      // During an RF burst, draw a bright horizontal interference band.
+      if (burstRef.current > 1) {
+        const bandY = Math.floor(Math.random() * h)
+        const bandH = 1 + Math.floor(Math.random() * 3)
+        for (let y = bandY; y < Math.min(h, bandY + bandH); y++) {
+          for (let x = 0; x < w; x++) {
+            const i = (y * w + x) * 4
+            const v = Math.floor(140 + Math.random() * 115)
+            d[i] = v
+            d[i + 1] = v
+            d[i + 2] = v
+            d[i + 3] = Math.floor(120 + Math.random() * 100)
+          }
+        }
+      }
+
       ctx.putImageData(imageData, 0, 0)
     }
+
+    // Occasional RF interference bursts: brief snow spikes every 15-45s.
+    const burstTimers = new Set<ReturnType<typeof setTimeout>>()
+    function scheduleBurst() {
+      const t = setTimeout(() => {
+        burstRef.current = 2.5 + Math.random() * 2.5
+        const reset = setTimeout(() => { burstRef.current = 1 }, 120 + Math.random() * 300)
+        burstTimers.add(reset)
+        scheduleBurst()
+      }, 15_000 + Math.random() * 30_000)
+      burstTimers.add(t)
+    }
+    scheduleBurst()
 
     resize()
     drawNoise()
@@ -121,6 +155,8 @@ export default function VHSOverlay({ settings }: Props) {
 
     return () => {
       clearInterval(timer)
+      for (const t of burstTimers) clearTimeout(t)
+      burstRef.current = 1
       window.removeEventListener('resize', resize)
       ctx.clearRect(0, 0, canvasEl.width, canvasEl.height)
     }
@@ -137,18 +173,41 @@ export default function VHSOverlay({ settings }: Props) {
         transform: (horizontalJitter > 0 || syncWobbleJumpsEnabled)
           ? `translate(${(jitterPx + syncX).toFixed(2)}px, ${syncY.toFixed(2)}px)`
           : 'none',
-        animation: flicker > 0 ? `vhs-flicker ${0.15 + (1 - flicker) * 0.15}s infinite` : 'none',
       }}
     >
       <style>{`
-        @keyframes vhs-flicker {
-          0%, 8%, 12%, 20%, 56%, 100% { opacity: 1; }
-          9%, 21%, 57% { opacity: ${Math.max(0.78, 1 - flicker * 0.55)}; }
+        @keyframes vhs-lum-flicker {
+          0%, 34%, 42%, 68%, 100% { opacity: 0; }
+          36% { opacity: ${(flicker * 0.10).toFixed(3)}; }
+          38% { opacity: ${(flicker * 0.05).toFixed(3)}; }
+          70% { opacity: ${(flicker * 0.16).toFixed(3)}; }
+          72% { opacity: ${(flicker * 0.04).toFixed(3)}; }
+        }
+
+        @keyframes vhs-phosphor-shimmer {
+          0% { opacity: 0; }
+          50% { opacity: ${(flicker * 0.035).toFixed(3)}; }
+          100% { opacity: 0; }
+        }
+
+        @keyframes vhs-interlace {
+          0%, 49.9% { transform: translateY(0); }
+          50%, 100% { transform: translateY(2px); }
         }
 
         @keyframes vhs-tracking-roll {
           0% { transform: translateY(-130%); }
           100% { transform: translateY(130%); }
+        }
+
+        @keyframes vhs-dot-crawl {
+          0% { background-position: 0 0, 1px 0; }
+          100% { background-position: 0 -8px, 1px -8px; }
+        }
+
+        @keyframes vhs-chroma-stripe {
+          0% { background-position: 0 0; }
+          100% { background-position: 4px 0; }
         }
       `}</style>
 
@@ -156,18 +215,59 @@ export default function VHSOverlay({ settings }: Props) {
         <div
           style={{
             position: 'absolute',
-            inset: 0,
+            inset: '-2px 0',
             background: [
               'repeating-linear-gradient(',
               'to bottom,',
               `rgba(0,0,0,${(scanlines * 0.45).toFixed(3)}) 0px,`,
               `rgba(0,0,0,${(scanlines * 0.45).toFixed(3)}) 1px,`,
-              'transparent 1px,',
+              `rgba(0,0,0,${(scanlines * 0.12).toFixed(3)}) 1.5px,`,
+              'transparent 2px,',
               'transparent 4px',
               ')',
             ].join(''),
+            // Interlaced field alternation: the line structure hops half a
+            // period at ~15 Hz, reading as CRT line twitter.
+            animation: 'vhs-interlace 0.134s steps(1) infinite',
           }}
         />
+      )}
+
+      {/* Shadow mask: vertical RGB phosphor triad stripes */}
+      {shadowMaskEnabled && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            backgroundImage: 'repeating-linear-gradient(to right, rgba(255,40,40,0.6) 0px 1px, rgba(40,255,40,0.6) 1px 2px, rgba(40,90,255,0.6) 2px 3px)',
+            opacity: 0.05,
+            mixBlendMode: 'overlay',
+          }}
+        />
+      )}
+
+      {/* Luminance flicker: dims the picture itself (phosphor fade + mains hum) */}
+      {flicker > 0 && (
+        <>
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              backgroundColor: '#000',
+              opacity: 0,
+              animation: `vhs-lum-flicker ${(1.1 + (1 - flicker) * 1.3).toFixed(2)}s infinite`,
+            }}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              backgroundColor: '#000',
+              opacity: 0,
+              animation: 'vhs-phosphor-shimmer 0.084s infinite',
+            }}
+          />
+        </>
       )}
 
       {noise > 0 && (
@@ -193,6 +293,70 @@ export default function VHSOverlay({ settings }: Props) {
             background: `radial-gradient(ellipse at center, transparent ${Math.round((1 - vignette) * 60)}%, rgba(0,0,0,${(vignette * 0.85).toFixed(2)}) 100%)`,
           }}
         />
+      )}
+
+      {/* Tube geometry: rounded glass corners + edge fall-off matching the
+          border-radius clip applied to the picture wrapper */}
+      {crtCurvature > 0 && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            borderRadius: `${(crtCurvature * 2.2).toFixed(1)}vmin / ${(crtCurvature * 2.8).toFixed(1)}vmin`,
+            boxShadow: `inset 0 0 ${(crtCurvature * 5).toFixed(1)}vmin rgba(0,0,0,${(crtCurvature * 0.3).toFixed(2)}), 0 0 0 20vmax #000`,
+          }}
+        />
+      )}
+
+      {/* Composite video artifacts: NTSC/PAL dot crawl + chroma stripe shimmer */}
+      {compositeArtifactsEnabled && (
+        <>
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              backgroundImage: [
+                'repeating-conic-gradient(rgba(255,255,255,0.5) 0% 25%, rgba(0,0,0,0.5) 25% 50%)',
+              ].join(','),
+              backgroundSize: '2px 2px',
+              opacity: 0.028,
+              mixBlendMode: 'overlay',
+              animation: 'vhs-dot-crawl 0.9s steps(4) infinite',
+            }}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              backgroundImage: 'repeating-linear-gradient(to right, rgba(255,60,60,0.5) 0 1px, transparent 1px 3px, rgba(60,220,255,0.35) 3px 4px, transparent 4px 6px)',
+              opacity: 0.025,
+              mixBlendMode: 'screen',
+              animation: 'vhs-chroma-stripe 0.6s steps(3) infinite',
+            }}
+          />
+        </>
+      )}
+
+      {/* Phosphor / glass sheen: faint bloom that reads as a lit CRT face */}
+      {phosphorBloomEnabled && (
+        <>
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              background: 'radial-gradient(ellipse 90% 70% at 50% 38%, rgba(210,225,255,0.05) 0%, transparent 65%)',
+              mixBlendMode: 'screen',
+            }}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              background: 'linear-gradient(115deg, transparent 42%, rgba(255,255,255,0.028) 47%, rgba(255,255,255,0.045) 50%, rgba(255,255,255,0.028) 53%, transparent 58%)',
+              mixBlendMode: 'screen',
+            }}
+          />
+        </>
       )}
 
       {overscanSoftnessEnabled && (

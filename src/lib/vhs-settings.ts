@@ -1,6 +1,6 @@
 import { prisma } from './db'
 import { toJson, fromJson } from './json'
-import { DEFAULT_VHS_SETTINGS, type VHSSettings } from './vhs-defaults'
+import { DEFAULT_VHS_SETTINGS, type VHSSettings, type OffAirStyle } from './vhs-defaults'
 
 export const NUMBER_VHS_KEYS = [
   'scanlines',
@@ -14,8 +14,21 @@ export const NUMBER_VHS_KEYS = [
   'horizontalJitter',
 ] as const
 
-export const BOOLEAN_VHS_KEYS = ['debugOverlayEnabled', 'syncWobbleJumpsEnabled', 'overscanSoftnessEnabled'] as const
-const VHS_KEYS = [...NUMBER_VHS_KEYS, ...BOOLEAN_VHS_KEYS] as const
+export const BOOLEAN_VHS_KEYS = [
+  'debugOverlayEnabled',
+  'syncWobbleJumpsEnabled',
+  'overscanSoftnessEnabled',
+  'fourByThreeEnabled',
+  'compositeArtifactsEnabled',
+  'phosphorBloomEnabled',
+  'shadowMaskEnabled',
+  'tvSpeakerAudioEnabled',
+  'channelChangeSoundEnabled',
+] as const
+
+const OFF_AIR_STYLES: OffAirStyle[] = ['testcard', 'bluescreen', 'static']
+const OFF_AIR_STYLE_KEY = 'offAirStyle'
+const VHS_KEYS = [...NUMBER_VHS_KEYS, ...BOOLEAN_VHS_KEYS, OFF_AIR_STYLE_KEY] as const
 
 export async function getGlobalVHSSettings(): Promise<VHSSettings> {
   const rows = await prisma.adminPreference.findMany({
@@ -39,6 +52,10 @@ export async function getGlobalVHSSettings(): Promise<VHSSettings> {
     if (BOOLEAN_VHS_KEYS.includes(row.settingKey as typeof BOOLEAN_VHS_KEYS[number])) {
       const booleanKey = row.settingKey as typeof BOOLEAN_VHS_KEYS[number]
       settings[booleanKey] = fromJson<boolean>(row.settingValue, DEFAULT_VHS_SETTINGS[booleanKey])
+    }
+    if (row.settingKey === OFF_AIR_STYLE_KEY) {
+      const value = fromJson<string>(row.settingValue, DEFAULT_VHS_SETTINGS.offAirStyle)
+      if (OFF_AIR_STYLES.includes(value as OffAirStyle)) settings.offAirStyle = value as OffAirStyle
     }
   }
 
@@ -79,6 +96,22 @@ export async function saveGlobalVHSSettings(patch: Partial<Record<(typeof VHS_KE
         },
         update: { settingValue: toJson(raw) },
         create: { stationId: '__global__', settingKey: key, settingValue: toJson(raw) },
+      }),
+    )
+  }
+
+  const offAirRaw = (patch as Record<string, unknown>)[OFF_AIR_STYLE_KEY]
+  if (typeof offAirRaw === 'string' && OFF_AIR_STYLES.includes(offAirRaw as OffAirStyle)) {
+    writes.push(
+      prisma.adminPreference.upsert({
+        where: {
+          stationId_settingKey: {
+            stationId: '__global__',
+            settingKey: OFF_AIR_STYLE_KEY,
+          },
+        },
+        update: { settingValue: toJson(offAirRaw) },
+        create: { stationId: '__global__', settingKey: OFF_AIR_STYLE_KEY, settingValue: toJson(offAirRaw) },
       }),
     )
   }

@@ -6,6 +6,8 @@ import { createHmac } from 'crypto'
 import { requireAdmin } from '@/lib/admin-guard'
 import { ensureDatabaseReady, prisma } from '@/lib/db'
 import { fromJsonObject } from '@/lib/json'
+import { decryptSecret } from '@/lib/secret-box'
+import { resolveSessionPassword } from '@/lib/session'
 import {
   getCatalogAutoSyncMaxAgeHours,
   getCatalogLibraryClassifications,
@@ -22,11 +24,7 @@ import { getPlexAuthRedirectBaseUrl } from '@/lib/plex-auth-redirect'
 export const dynamic = 'force-dynamic'
 
 function signAdminState(userId: string) {
-  return createHmac('sha256', sessionSecret()).update(userId).digest('hex')
-}
-
-function sessionSecret() {
-  return process.env.SESSION_SECRET ?? 'zombietv-dev-secret-change-before-production-deploy'
+  return createHmac('sha256', resolveSessionPassword()).update(userId).digest('hex')
 }
 
 export async function GET(req: NextRequest) {
@@ -40,7 +38,7 @@ export async function GET(req: NextRequest) {
   })
 
   const prefs = fromJsonObject<Record<string, unknown>>(admin?.preferences)
-  const plexToken = String(prefs.plexToken ?? '')
+  const plexToken = decryptSecret(String(prefs.plexToken ?? ''))
   const plexServerUrl = String(prefs.plexServerUrl ?? '')
   const catalogStatus = await getCatalogStatus()
   const autoSyncMaxAgeHours = await getCatalogAutoSyncMaxAgeHours()

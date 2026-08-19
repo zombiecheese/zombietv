@@ -14,6 +14,11 @@ export default function RouteVisualEffects({ settings, children }: Props) {
   const pathname = usePathname() ?? ''
   const isAdminRoute = pathname.startsWith('/admin')
   const curvature = isAdminRoute ? 0 : settings.crtCurvature
+  const filterActive = !isAdminRoute && (
+    settings.crtCurvature > 0
+    || settings.chromaticAberration > 0
+    || settings.overscanSoftnessEnabled
+  )
 
   return (
     <>
@@ -25,7 +30,9 @@ export default function RouteVisualEffects({ settings, children }: Props) {
           width: '100vw',
           height: '100vh',
           overflow: 'hidden',
-          filter: curvature > 0 ? 'url(#crt-barrel)' : undefined,
+          filter: filterActive ? 'url(#crt-composite)' : undefined,
+          // Tube geometry: rounded glass corners on the picture itself
+          borderRadius: curvature > 0 ? `${(curvature * 2.2).toFixed(1)}vmin / ${(curvature * 2.8).toFixed(1)}vmin` : undefined,
         }}
       >
         {children}

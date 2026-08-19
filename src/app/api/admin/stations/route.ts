@@ -22,6 +22,7 @@ export async function GET(req: NextRequest) {
       rules:            fromJsonObject(s.rules),
       holidayOverrides: fromJsonObject(s.holidayOverrides),
       fillerPools:      fromJsonObject(s.fillerPools),
+      updatedAt:        s.updatedAt.toISOString(),
     })),
   )
 }

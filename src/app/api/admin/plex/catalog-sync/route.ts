@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAdmin } from '@/lib/admin-guard'
 import { ensureDatabaseReady, prisma } from '@/lib/db'
 import { fromJsonObject } from '@/lib/json'
+import { decryptSecret } from '@/lib/secret-box'
 import { getCatalogStatus, isCatalogSyncRunning, triggerCatalogSync, saveCatalogPlaybackServerUrl } from '@/lib/plex-catalog'
 import { PlexClient } from '@/lib/plex-client'
 
@@ -30,7 +31,7 @@ export async function POST(req: NextRequest) {
   })
 
   const prefs = fromJsonObject<Record<string, unknown>>(admin?.preferences)
-  const plexToken = String(prefs.plexToken ?? '')
+  const plexToken = decryptSecret(String(prefs.plexToken ?? ''))
   const plexServerUrl = String(prefs.plexServerUrl ?? '')
 
   if (!plexToken || !plexServerUrl) {

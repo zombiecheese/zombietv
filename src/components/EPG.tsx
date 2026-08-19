@@ -73,6 +73,17 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
   const [viewportWidth, setViewportWidth] = useState(() => (typeof window === 'undefined' ? 0 : window.innerWidth))
   const [devicePixelRatio, setDevicePixelRatio] = useState(() => (typeof window === 'undefined' ? 1 : (window.devicePixelRatio || 1)))
   const [tz, setTz] = useState<string | undefined>(undefined)
+
+  // Channel-change polish: hovering/focusing a station row warms the server's
+  // playback cache (and the browser HTTP cache) so tuning feels instant.
+  const prefetchedAtRef = useRef<Map<string, number>>(new Map())
+  const prefetchStation = useCallback((stationId: string) => {
+    if (!stationId || stationId === activeStation) return
+    const last = prefetchedAtRef.current.get(stationId) ?? 0
+    if (Date.now() - last < 4_000) return
+    prefetchedAtRef.current.set(stationId, Date.now())
+    fetch(`/api/now/${stationId}`).catch(() => {})
+  }, [activeStation])
   // Vertical scroller + one representative viewport width for horizontal math
   const bodyScrollRef             = useRef<HTMLDivElement | null>(null)
   const timelineViewportRef       = useRef<HTMLDivElement | null>(null)
@@ -571,6 +582,8 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
                 key={station.id}
                 type="button"
                 onClick={() => onSelectStation(station.id)}
+                onMouseEnter={() => prefetchStation(station.id)}
+                onFocus={() => prefetchStation(station.id)}
                 style={{
                   textAlign: 'left',
                   border: `1px solid ${isActive ? station.colour : '#1e3a5f'}`,
@@ -636,17 +649,17 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
       display:         'flex',
       flexDirection:   'column',
       height:          '100%',
-      backgroundColor: '#0a1628',
+      backgroundColor: '#000',
       color:           '#fff',
-      fontFamily:      'Arial, sans-serif',
+      fontFamily:      '"VCR OSD Mono", "Lucida Console", "Courier New", monospace',
       fontSize:        scaleFontSize(0.75, scale),
       overflow:        'hidden',
       userSelect:      'none',
     }}>
 
       {/* ── Header row: time axis ── */}
-      <div style={{ height: 28, borderBottom: '1px solid #1e3a5f', flexShrink: 0, position: 'relative', backgroundColor: '#060f1e' }}>
-        {/* Station label column corner */}
+      <div style={{ height: 28, borderBottom: '1px solid #1e3a5f', flexShrink: 0, position: 'relative', backgroundColor: '#000' }}>
+        {/* Station label column corner — teletext page number */}
         <div style={{
           position:        'absolute',
           left:            0,
@@ -654,14 +667,17 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
           bottom:          0,
           width:           STATION_COL_PX,
           padding:         '6px 8px',
-          backgroundColor: '#060f1e',
+          backgroundColor: '#000',
           borderRight:     '1px solid #1e3a5f',
-          color:           '#4a7fb5',
-          fontSize:        scaleFontSize(0.6, scale),
+          fontSize:        scaleFontSize(0.62, scale),
           letterSpacing:   '0.1em',
           boxSizing:       'border-box',
+          fontWeight:      700,
+          whiteSpace:      'nowrap',
+          overflow:        'hidden',
         }}>
-          STATION
+          <span style={{ color: '#ffff00' }}>P501</span>
+          <span style={{ color: '#00ffff', marginLeft: 8 }}>GUIDE</span>
         </div>
 
         {/* Time labels — width explicitly matches body viewport minus scrollbar and button */}
@@ -688,10 +704,11 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
                   display:     'flex',
                   alignItems:  'center',
                   paddingLeft: '6px',
-                  color:       '#4a7fb5',
+                  color:       '#00ffff',
                   borderLeft:  '1px solid #1e3a5f',
                   fontSize:    scaleFontSize(0.65, scale),
                   letterSpacing: '0.05em',
+                  fontWeight:  700,
                 }}
               >
                 {label}
@@ -718,8 +735,8 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
             right: 0,
             bottom: 0,
             width: MINIMIZE_BUTTON_PX,
-            backgroundColor: '#060f1e',
-            color: '#4a7fb5',
+            backgroundColor: '#000',
+            color: '#ffff00',
             border: 'none',
             borderLeft: '1px solid #1e3a5f',
             padding: '0 10px',
@@ -727,6 +744,7 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
             letterSpacing: '0.08em',
             cursor: 'pointer',
             zIndex: 20,
+            fontWeight: 700,
           }}
           title="Minimize guide"
         >
@@ -768,6 +786,7 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
                   {/* Station badge */}
                   <div
                     onClick={() => allowClickAfterDrag() && onSelectStation(station.id)}
+                    onMouseEnter={() => prefetchStation(station.id)}
                     style={{
                       width:           STATION_COL_PX,
                       flexShrink:      0,
@@ -871,6 +890,7 @@ export default function EPG({ activeStation, onSelectStation, clockOffsetMs, com
                       <div
                         key={slot.id}
                         onClick={() => allowClickAfterDrag() && onSelectStation(station.id)}
+                        onMouseEnter={() => prefetchStation(station.id)}
                         title={[
                           slot.title,
                           slot.showTitle && `${slot.showTitle}`,

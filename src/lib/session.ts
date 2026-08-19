@@ -40,7 +40,10 @@ export const defaultSession: SessionData = {
   isAdmin: false,
 }
 
-function resolveSessionPassword(): string {
+// Exported so other server-side code that needs to derive keys/HMACs from the
+// session secret (e.g. signing the admin Plex-link CSRF state) shares this
+// same production guard instead of hardcoding its own fallback.
+export function resolveSessionPassword(): string {
   const secret = process.env.SESSION_SECRET?.trim() ?? ''
   if (secret.length >= 32) return secret
 

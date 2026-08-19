@@ -8,9 +8,10 @@
 
 import { prisma }                         from './db'
 import { fromJsonArray, fromJsonObject }  from './json'
-import { createHash }                    from 'crypto'
 import { getBroadcastTimezone }          from './app-settings'
 import { getZonedParts, zonedTimeToUtc } from './time'
+import { filterPoolByHints }             from './date-hints'
+import { seededShuffle }                 from './seeded-random'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -19,12 +20,23 @@ export interface AdBreakDef {
   durationMins: number
 }
 
+export interface UpNextInfo {
+  title:         string
+  showTitle:     string | null
+  seasonNumber:  number | null
+  episodeNumber: number | null
+  startsAtMs:    number
+  thumbPath:     string | null   // Plex poster path — render via /api/plex-art
+  premiere:      boolean         // first airing of a fresh library addition
+  anniversaryYears: number | null // "first aired N years ago tonight"
+}
+
 export interface PlaybackState {
   stationId:       string
   serverTimeMs:    number          // Server's current UTC epoch ms — clients use this to sync
 
   // What is on air right now
-  contentSource:   'plex' | 'youtube' | 'filler' | 'ad' | 'offline'
+  contentSource:   'plex' | 'youtube' | 'filler' | 'ad' | 'offline' | 'weather' | 'guide' | 'web' | 'stream'
   contentId:       string | null   // Plex ratingKey or YouTube video/playlist ID
   title:           string | null
   showTitle:       string | null
@@ -61,6 +73,17 @@ export interface PlaybackState {
   // Overnight close-down: a static graphic to display full-screen (looped
   // YouTube video/playlist close-downs come through the normal filler path).
   offlineGraphicUrl: string | null
+
+  // Non-standard channel types (weather / guide / web / stream / loop).
+  // 'standard' for scheduled broadcast stations.
+  channelType:     string
+  channelConfig:   Record<string, unknown> | null
+
+  // The next scheduled programme (for dynamic "Up Next" cards during breaks).
+  upNext:          UpNextInfo | null
+
+  // True while a live news window airs (viewer shows a corner clock bug).
+  newsLive:        boolean
 }
 
 interface YoutubePoolItem {
@@ -152,13 +175,26 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
     openBumperId:     null,
     closeBumperId:    null,
     offlineGraphicUrl: null,
+    channelType:      'standard',
+    channelConfig:    null,
+    upNext:           null,
+    newsLive:         false,
   }
 
   const station = await prisma.station.findUnique({
     where: { id: stationId },
-    select: { fillerPools: true },
+    select: { fillerPools: true, rules: true },
   })
   const fillerPools = fromJsonObject<Record<string, string | null>>(station?.fillerPools)
+  const stationRules = fromJsonObject<Record<string, unknown>>(station?.rules)
+
+  // ── Non-standard channel types short-circuit the schedule entirely ──────
+  const channelType = String(stationRules.channel_type ?? 'standard').trim().toLowerCase()
+  if (channelType !== 'standard' && channelType !== '') {
+    const typeState = buildChannelTypeState({ offline, channelType, stationRules, now })
+    if (typeState) return typeState
+    return offline
+  }
 
   const buildGapFillerState = (nextTransitionMs: number): PlaybackState => {
     const fallbackId = fillerPools.music ?? fillerPools.ads ?? null
@@ -194,6 +230,10 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
       openBumperId: null,
       closeBumperId: null,
       offlineGraphicUrl: null,
+      channelType: 'standard',
+      channelConfig: null,
+      upNext: null,
+      newsLive: false,
     }
   }
 
@@ -276,17 +316,24 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
   // Pre-fetch the ad-eligible pool once so each ad break can extend its end to
   // the completion of the last ad video — ads always play to the end before the
   // main programme resumes.
-  const adPoolRaw: AdPoolCandidate[] = adBreakDefs.length
+  // Availability-hint context (day part + calendar date) in the broadcast zone.
+  const hintCtx = {
+    minutesOfDay: nowParts.hour * 60 + nowParts.minute,
+    month: nowParts.month,
+    day: nowParts.day,
+  }
+
+  const adPoolRaw: Array<AdPoolCandidate & { dayParts: string | null; dateRange: string | null; exclusive: boolean }> = adBreakDefs.length
     ? await prisma.youtubeContent.findMany({
         where: {
           category: { in: preferInfomercialAds ? ['infomercial', 'ads', 'music'] : ['ads', 'filler', 'music'] },
           OR: [{ station: null }, { station: stationId }],
         },
-        select: { videoId: true, durationMins: true, station: true, category: true },
+        select: { videoId: true, durationMins: true, station: true, category: true, dayParts: true, dateRange: true, exclusive: true },
       })
     : []
   const adPool: AdPoolItem[] = preferStationScopedItems(
-    adPoolRaw
+    filterPoolByHints(adPoolRaw, hintCtx)
       .filter(hasVideoId)
       .sort((left, right) => {
         if (!preferInfomercialAds) return 0
@@ -392,6 +439,10 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
   const closeBumperId = (slotMetadata.closeBumperId as string | null) ?? null
   const isYoutubeSlot = activeSlot.contentSource === 'youtube'
   const hasWindowBumpers = isYoutubeSlot && !inAdBreak && Boolean(openBumperId || closeBumperId)
+  // YouTube slots with no pinned video (e.g. placement-safety fallback windows)
+  // queue from the shared filler pool across the whole slot, instead of dead
+  // air when the station has no fillerId configured.
+  const isPoolFillerSlot = isYoutubeSlot && !inAdBreak && !hasWindowBumpers && !activeSlot.contentId
 
   const youtubeSelection = await selectYoutubeSelection({
     stationId,
@@ -406,10 +457,42 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
     fallbackId: inAdBreak ? (fillerPools.ads ?? null) : (activeSlot.fillerId ?? fillerPools.music ?? null),
     // Between-show padding filler should use ad-like categories only.
     fillerCategories: inFiller ? ['ads', 'music', 'infomercial'] : fillerCategories,
-    windowSegment: hasWindowBumpers ? { startMs: slotStartMs, durationMins: activeSlot.durationMins } : null,
+    windowSegment: hasWindowBumpers || isPoolFillerSlot
+      ? { startMs: slotStartMs, durationMins: activeSlot.durationMins }
+      : null,
     openBumperId: hasWindowBumpers ? openBumperId : null,
     closeBumperId: hasWindowBumpers ? closeBumperId : null,
+    hintCtx,
   })
+
+  // ── Up Next: the next scheduled programme after the current instant ──────
+  const upNextSlot = allSlots.find((slot) => {
+    if (slot.startTime.getTime() <= now) return false
+    if (slot.contentSource !== 'plex') return false
+    return true
+  }) ?? null
+  const upNext: UpNextInfo | null = upNextSlot
+    ? await (async () => {
+        const meta = fromJsonObject<Record<string, unknown>>(upNextSlot.metadata) ?? {}
+        const media = upNextSlot.contentId
+          ? await prisma.mediaItem.findUnique({
+              where: { plexKey: upNextSlot.contentId },
+              select: { thumbPath: true },
+            }).catch(() => null)
+          : null
+        const anniversary = Number(meta.anniversaryYears)
+        return {
+          title: String(meta.title ?? upNextSlot.showTitle ?? 'Programme'),
+          showTitle: upNextSlot.showTitle,
+          seasonNumber: upNextSlot.seasonNumber,
+          episodeNumber: upNextSlot.episodeNumber,
+          startsAtMs: upNextSlot.startTime.getTime(),
+          thumbPath: media?.thumbPath ?? null,
+          premiere: Boolean(meta.premiere),
+          anniversaryYears: Number.isFinite(anniversary) && anniversary > 0 ? anniversary : null,
+        }
+      })()
+    : null
 
   // ── Start offset into the content ────────────────────────────────────────
   // Subtract total ad-break time that has already elapsed
@@ -470,7 +553,7 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
       ? (youtubeSelection?.currentVideoId ?? activeSlot.fillerId ?? fillerPools.music ?? null)
       : inAdBreak
         ? (youtubeSelection?.currentVideoId ?? fillerPools.ads ?? null)
-        : hasWindowBumpers
+        : hasWindowBumpers || isPoolFillerSlot
           ? (youtubeSelection?.currentVideoId ?? activeSlot.fillerId ?? fillerPools.music ?? null)
           : activeSlot.contentId,
 
@@ -480,7 +563,7 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
     episodeNumber: activeSlot.episodeNumber,
     contentRating: inFiller || inAdBreak ? null : activeContentRating,
 
-    startOffsetMs: inAdBreak || inFiller || hasWindowBumpers ? youtubeStartOffsetMs : startOffsetMs,
+    startOffsetMs: inAdBreak || inFiller || hasWindowBumpers || isPoolFillerSlot ? youtubeStartOffsetMs : startOffsetMs,
     slotStartMs,
     slotEndMs,
 
@@ -499,7 +582,105 @@ export async function getPlaybackState(stationId: string, nowMs?: number): Promi
     openBumperId,
     closeBumperId,
     offlineGraphicUrl: null,
+    channelType: 'standard',
+    channelConfig: null,
+    upNext,
+    newsLive: String(slotMetadata.reason ?? '') === 'news_live_window' && !inFiller,
   }
+}
+
+// ─── Non-standard channel types ──────────────────────────────────────────────
+// Weather / guide / web / stream / loop channels do not use the schedule at
+// all — they derive their entire state from the station's rules JSON.
+
+function buildChannelTypeState(params: {
+  offline: PlaybackState
+  channelType: string
+  stationRules: Record<string, unknown>
+  now: number
+}): PlaybackState | null {
+  const { offline, channelType, stationRules, now } = params
+  // These channels have no slot boundaries; poll again in a minute.
+  const base: PlaybackState = {
+    ...offline,
+    slotStartMs: now,
+    slotEndMs: now + 60 * 60_000,
+    nextTransitionMs: now + 60_000,
+    channelType,
+  }
+
+  if (channelType === 'weather') {
+    const cfg = (stationRules.weather ?? {}) as Record<string, unknown>
+    return {
+      ...base,
+      contentSource: 'weather',
+      title: 'Weather',
+      channelConfig: {
+        latitude: Number(cfg.latitude ?? NaN),
+        longitude: Number(cfg.longitude ?? NaN),
+        locationName: String(cfg.locationName ?? ''),
+        musicVideoId: String(cfg.musicVideoId ?? '').trim() || null,
+      },
+    }
+  }
+
+  if (channelType === 'guide') {
+    const cfg = (stationRules.guide ?? {}) as Record<string, unknown>
+    return {
+      ...base,
+      contentSource: 'guide',
+      title: 'Programme Guide',
+      channelConfig: {
+        promoVideoId: String(cfg.promoVideoId ?? '').trim() || null,
+        musicVideoId: String(cfg.musicVideoId ?? '').trim() || null,
+      },
+    }
+  }
+
+  if (channelType === 'web') {
+    const cfg = (stationRules.web ?? {}) as Record<string, unknown>
+    const url = String(cfg.url ?? '').trim()
+    if (!url || !/^https?:\/\//i.test(url)) return null
+    return {
+      ...base,
+      contentSource: 'web',
+      title: String(cfg.title ?? 'Web Channel'),
+      channelConfig: { url },
+    }
+  }
+
+  if (channelType === 'stream') {
+    const cfg = (stationRules.stream ?? {}) as Record<string, unknown>
+    const url = String(cfg.url ?? '').trim()
+    if (!url || !/^https?:\/\//i.test(url)) return null
+    return {
+      ...base,
+      contentSource: 'stream',
+      contentId: url,
+      title: String(cfg.title ?? 'Live Stream'),
+      channelConfig: { url },
+    }
+  }
+
+  if (channelType === 'loop') {
+    const cfg = (stationRules.loop ?? {}) as Record<string, unknown>
+    const contentId = String(cfg.contentId ?? '').trim()
+    if (!contentId) return null
+    return {
+      ...base,
+      contentSource: 'filler',
+      contentId,
+      fillerId: contentId,
+      inFiller: true,
+      fillerStartMs: now,
+      youtubeQueue: [contentId],
+      title: String(cfg.title ?? 'Loop'),
+      nextTransitionMs: now + 30 * 60_000,
+      channelConfig: { contentId },
+    }
+  }
+
+  return null
 }
 
 async function selectYoutubeSelection(params: {
@@ -517,8 +698,9 @@ async function selectYoutubeSelection(params: {
   windowSegment?: { startMs: number; durationMins: number } | null
   openBumperId?: string | null
   closeBumperId?: string | null
+  hintCtx?: { minutesOfDay: number; month: number; day: number } | null
 }): Promise<YoutubeSelection | null> {
-  const { stationId, now, preferInfomercialAds, slotStartMs, contentEndMs, fillerDurationMins, inAdBreak, currentAdBreak, inFiller, fallbackId, fillerCategories = ['ads', 'music', 'infomercial'], windowSegment = null, openBumperId = null, closeBumperId = null } = params
+  const { stationId, now, preferInfomercialAds, slotStartMs, contentEndMs, fillerDurationMins, inAdBreak, currentAdBreak, inFiller, fallbackId, fillerCategories = ['ads', 'music', 'infomercial'], windowSegment = null, openBumperId = null, closeBumperId = null, hintCtx = null } = params
   if (windowSegment) {
     const windowEndMs = windowSegment.startMs + windowSegment.durationMins * 60_000
     // Bumpers and window queues are strictly scoped to the window itself.
@@ -546,7 +728,7 @@ async function selectYoutubeSelection(params: {
     ? (preferInfomercialAds ? ['infomercial', 'ads'] : ['ads'])
     : fillerCategories
 
-  const candidates = await prisma.youtubeContent.findMany({
+  const candidatesRaw = await prisma.youtubeContent.findMany({
     where: {
       category: { in: selectorCategories },
       OR: [
@@ -560,12 +742,18 @@ async function selectYoutubeSelection(params: {
       durationMins: true,
       category: true,
       station: true,
+      dayParts: true,
+      dateRange: true,
+      exclusive: true,
     },
     orderBy: [
       { station: 'asc' },
       { createdAt: 'asc' },
     ],
   })
+
+  // Apply day-part / date-range availability hints (exclusive-wins semantics).
+  const candidates = hintCtx ? filterPoolByHints(candidatesRaw, hintCtx) : candidatesRaw
 
   const inBreakCandidates = inAdBreak && preferInfomercialAds
     ? (() => {
@@ -630,31 +818,5 @@ async function selectYoutubeSelection(params: {
     currentVideoId: current.videoId,
     queue,
     startOffsetMs: currentOffsetMs,
-  }
-}
-
-function seededShuffle<T>(items: T[], seed: string): T[] {
-  const result = [...items]
-  const rand = mulberry32(seedToUInt32(seed))
-
-  for (let i = result.length - 1; i > 0; i--) {
-    const j = Math.floor(rand() * (i + 1))
-    ;[result[i], result[j]] = [result[j], result[i]]
-  }
-
-  return result
-}
-
-function seedToUInt32(seed: string): number {
-  const hash = createHash('sha256').update(seed).digest()
-  return hash.readUInt32LE(0)
-}
-
-function mulberry32(a: number): () => number {
-  return () => {
-    let t = a += 0x6D2B79F5
-    t = Math.imul(t ^ (t >>> 15), t | 1)
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
   }
 }

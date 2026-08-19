@@ -16,6 +16,7 @@ import { checkPlexPin, getPlexUser, getPlexServerUrlWithOptions } from '@/lib/pl
 import { getPlexAuthRedirectBaseUrl } from '@/lib/plex-auth-redirect'
 import { prisma }   from '@/lib/db'
 import { toJson }   from '@/lib/json'
+import { encryptSecret } from '@/lib/secret-box'
 
 function getRequestOrigin(req: NextRequest): string {
   const xfHost = req.headers.get('x-forwarded-host')?.trim()
@@ -78,8 +79,9 @@ export async function GET(req: NextRequest) {
       email:    plexUser.email,
       username: plexUser.username,
       // Store Plex credentials in preferences so the scheduler can use them
+      // (token encrypted at rest — see secret-box.ts).
       preferences: toJson({
-        plexToken:     authToken,
+        plexToken:     encryptSecret(authToken),
         plexServerUrl: plexServerUrl,
       }),
       },
@@ -89,7 +91,7 @@ export async function GET(req: NextRequest) {
       username: plexUser.username,
       isAdmin:  false,
       preferences: toJson({
-        plexToken:     authToken,
+        plexToken:     encryptSecret(authToken),
         plexServerUrl: plexServerUrl,
       }),
       },
