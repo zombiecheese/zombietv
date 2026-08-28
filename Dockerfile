@@ -1,5 +1,4 @@
 FROM node:24-bookworm-slim AS build
-
 WORKDIR /app
 
 ENV NEXT_TELEMETRY_DISABLED=1
